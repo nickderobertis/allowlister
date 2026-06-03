@@ -1,0 +1,16 @@
+{
+  "rules": [
+    { "name": "gh api scoped to myorg",
+      "argv": ["gh", "api", "repos/myorg/**"],
+      "action": "allow" },
+
+    { "name": "npm/yarn/pnpm read-only + safe scripts",
+      "match": "@(npm|yarn|pnpm) @(list|ls|view|info|outdated|test|lint|typecheck|build|run @(test|lint|typecheck|build))*",
+      "action": "allow" },
+
+    { "name": "echo|printf may redirect to /tmp or ./build",
+      "match": "@(echo|printf) *",
+      "action": "allow",
+      "redirections": { "write_glob": ["/tmp/*", "./build/*", "build/*"] } }
+  ]
+}

@@ -1,0 +1,62 @@
+[package]
+name = "allowlister"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "Structural allow/deny/defer engine for AI coding-agent shell commands. Parses the bash AST, decomposes it into role-tagged fragments, and gates each fragment with glob/regex/argv rules."
+repository = "https://github.com/nickderobertis/allowlister"
+homepage = "https://github.com/nickderobertis/allowlister"
+documentation = "https://docs.rs/allowlister"
+readme = "README.md"
+keywords = ["cli", "security", "claude-code", "permissions", "shell"]
+categories = ["command-line-utilities", "development-tools"]
+# Package only what a crates.io consumer needs: the sources, manifest, readme,
+# and license. This keeps the published crate small and avoids packaging the
+# CLAUDE.md symlinks, CI config, tests, and examples.
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
+
+[[bin]]
+name = "allowlister"
+path = "src/main.rs"
+
+[lib]
+name = "allowlister"
+path = "src/lib.rs"
+
+[dependencies]
+brush-parser = "0.4.0"
+clap = { version = "4.5", features = ["derive"] }
+fancy-regex = "0.18.0"
+regex = "1.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.10"
+
+# A CLI binary that spawns once per agent tool call: optimize for a small,
+# fast-to-start artifact. `thin` LTO and a single codegen unit shrink the
+# binary and improve runtime without the long link times of fat LTO; symbol
+# stripping removes debug info that release users never consume.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"

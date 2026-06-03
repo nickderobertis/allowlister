@@ -1,0 +1,51 @@
+# cargo-deny policy. Strict by default: advisories, licenses, bans, and sources
+# all fail the check rather than warn. Any exception below is explicit and
+# carries a reason so the policy never silently accumulates debt.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities and unmaintained crates fail the check (cargo-deny default).
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licenses compatible with this MIT-licensed binary. The list is the
+# exact set the current dependency tree uses; adding a dependency with a new
+# license fails the check until that license is reviewed and added here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+exceptions = []
+
+[bans]
+# Duplicate versions of the same crate fail; the skips below are the only
+# unavoidable cases, each pulled transitively by tooling we do not control.
+multiple-versions = "deny"
+# Wildcard ("*") version requirements are forbidden in this repo's manifests.
+wildcards = "deny"
+allow = []
+deny = []
+skip = [
+    # `darling` 0.20 and 0.23 are pulled by independent derive-macro crates in
+    # the build graph (proc-macro only; never linked into the binary).
+    { crate = "darling", reason = "transitive proc-macro dep; two versions via independent macro crates" },
+    { crate = "darling_core", reason = "transitive proc-macro dep; follows darling" },
+    { crate = "darling_macro", reason = "transitive proc-macro dep; follows darling" },
+    # `wit-bindgen` 0.51 and 0.57 come from getrandom's wasi-p2/p3 backends,
+    # which are compiled only for wasm targets, never for our release targets.
+    { crate = "wit-bindgen", reason = "wasm-only backend of getrandom; not built for release targets" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,37 @@
+# Git hooks. Fast checks run pre-commit; the slower full suite runs pre-push.
+# Every check fails the commit/push rather than warning — no warning backlog.
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
+    clippy:
+      glob: "*.rs"
+      # Library + binary only here to stay fast; the full --all-targets lint
+      # runs pre-push and in CI.
+      run: cargo clippy --locked --all-features -- -D warnings
+    merge-conflicts:
+      # Fails on conflict markers or whitespace errors in staged changes.
+      run: git diff --cached --check
+    large-files:
+      run: |
+        status=0
+        for file in {staged_files}; do
+          if [ -f "$file" ] && [ "$(wc -c < "$file")" -gt 1048576 ]; then
+            echo "refusing to commit large file (>1MiB): $file"
+            status=1
+          fi
+        done
+        exit $status
+
+pre-push:
+  parallel: false
+  commands:
+    clippy-all:
+      run: cargo clippy --locked --all-targets --all-features -- -D warnings
+    test:
+      run: cargo nextest run --locked --status-level fail -E 'not binary(e2e)'
+    deny:
+      run: cargo deny --locked check

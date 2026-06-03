@@ -1,0 +1,40 @@
+{
+  "rules": [
+    { "name": "ls",          "match": "ls*",                 "action": "allow" },
+    { "name": "pwd",         "match": "pwd",                 "action": "allow" },
+    { "name": "echo",        "match": "echo *",              "action": "allow" },
+    { "name": "true/false/:", "match": "@(true|false|:)*",   "action": "allow" },
+    { "name": "cat",         "match": "cat *",               "action": "allow" },
+
+    { "name": "git read-only",
+      "match": "git @(status|diff|log|show|branch|remote|rev-parse|describe)*",
+      "action": "allow" },
+
+    { "name": "head/tail/wc/grep/awk/sort/uniq/cut/sed/jq/less as pipe filters",
+      "match": "@(head|tail|wc|grep|awk|sort|uniq|cut|sed|tr|jq|less|more) *",
+      "action": "allow",
+      "roles": ["pipe_filter", "substitution"] },
+
+    { "name": "head/tail/wc/cat bare standalone",
+      "match": "@(head|tail|wc|cat)",
+      "action": "allow",
+      "roles": ["standalone"] },
+
+    { "name": "gh CLI read-only",
+      "argv": ["gh", "@(pr|issue|run|workflow|api|repo|release)", "**"],
+      "action": "allow" },
+
+    { "name": "gh api: deny write methods",
+      "argv": ["gh", "api", "-X", "@(POST|PUT|PATCH|DELETE)", "**"],
+      "action": "deny" },
+
+    { "name": "rm -rf — never",
+      "match": "rm -rf*",
+      "action": "deny" },
+
+    { "name": "shell as pipe target — never (curl|sh etc.)",
+      "argv": ["@(sh|bash|zsh|fish|dash|ksh)", "**"],
+      "action": "deny",
+      "roles": ["pipe_filter"] }
+  ]
+}
