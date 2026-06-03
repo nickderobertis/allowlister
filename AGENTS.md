@@ -50,6 +50,9 @@ edition 2021, toolchain pinned in `rust-toolchain.toml`.
 - Successful `just` recipes print little; failures preserve paths, line/columns,
   rule names, diffs, and exit codes. Noisy diagnostics belong in explicit recipes
   (`doctor`, `cargo-tree`), never in the default gate.
+- The performance suite (`benches/`, the `bench*`/`profile` recipes, the perf CI
+  job) is informational and stays out of `full-check`: its timings are
+  non-deterministic, so it reports rather than gates, like the live harness check.
 
 ## Tests
 

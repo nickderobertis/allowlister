@@ -65,6 +65,27 @@ effects). A new user-visible behavior or bug fix should come with an E2E or
 golden case that would fail without it. Tests must be deterministic, isolated
 (temp dirs, local fixtures), and free of network dependencies.
 
+## Performance
+
+The engine ships with an **informational** performance suite — it measures, it
+does not gate, so it is not part of `just full-check`:
+
+- `just bench` — Criterion micro-benchmarks of the engine hot paths
+  (`analyze`/`decide`/`evaluate` and config load); in-process and low-noise.
+- `just bench-cli` — end-to-end CLI latency for every command via hyperfine
+  (real process startup + config + parse), writing `target/bench/results.*`.
+- `just bench-compare` — diff the latest `bench` run against a `base` baseline
+  saved earlier with `just bench-base` (e.g. on `main`, before a change).
+- `just profile [...]` — record a sampling profile with samply to find
+  bottlenecks: the engine hot path by default, or a looped real CLI invocation
+  (`just profile check 'rm -rf /'`).
+
+`just bootstrap` installs the tools (hyperfine, critcmp, samply). On every pull
+request, CI runs the same suite on a fixed runner and posts the numbers as a
+sticky comment and a job summary; once the bench lands on `main`, that comment
+also shows the regression delta versus the base. Because the timings are noisy,
+the job reports rather than blocks — do not add it to required checks.
+
 ## Dependency upgrades
 
 ```sh
