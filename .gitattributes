@@ -1,0 +1,5 @@
+# Normalize all text files to LF in the working tree on every platform. Without
+# this, Windows checkouts default to CRLF and `cargo fmt --check` fails against
+# rustfmt's `newline_style = "Unix"`. It also keeps shell scripts executable
+# (a CRLF shebang would break `scripts/dist.sh`).
+* text=auto eol=lf
