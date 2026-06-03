@@ -189,6 +189,45 @@ set-theoretic, merge order only affects which rule's name appears in a reason.
 A malformed config file (or a single malformed rule) is skipped with a recorded
 warning; loading never crashes the hook.
 
+## Recommended profiles
+
+Two ready-made, self-contained rulesets live in
+[`examples/recommended/`](examples/recommended/). Pick one as a starting point
+and tune it — copy it to a user config path above, or drop it in as a project
+`.allowlister.json`:
+
+```sh
+cp examples/recommended/read-only.json ~/.config/allowlister/config.json
+```
+
+**`read-only.json`** — auto-allows pure **read** operations and defers
+everything else to the harness (which prompts you). It covers the shell and
+coreutils, `git`/`gh` inspection, and read-only commands across the common
+language ecosystems: `pip`/`uv`/`python`, `npm`/`pnpm`/`yarn`/`bun`/`node`,
+`cargo`/`rustup`, `go`, `poetry`, `make`, and `just`. Anything that writes, runs
+project code, or otherwise isn't a pure read **defers** rather than being
+denied — so a human still approves it case by case. Output redirection on an
+allowed command is blocked (writes are not reads), except scratch under `/tmp`.
+A short list of irreversible, system-level actions (recursive `rm`, disk/partition
+tools, `curl | sh`, reading private keys) is denied outright.
+
+**`repo-write.json`** — a superset of `read-only` that additionally allows the
+writes an agent needs to **manage a repository**: `git add`/`commit`/`branch`/
+`switch`/`merge`/`rebase`/`pull`/`push`, `gh pr`/`issue` collaboration, and
+`install`/`build`/`test`/`format`/`run` across those same ecosystems. Operations
+that look **destructive or irreversible are denied** — force-push, `reset --hard`,
+`clean -f`, history rewrite, branch/tag deletion, recursive `rm`, disk wipes, and
+registry publishing.
+
+> `repo-write` is permissive by design and is **not a sandbox**. Allowing build,
+> test, and run tools (and interpreters like `python`/`node`) means project code
+> can execute arbitrary commands the gate never sees. Its denies are guardrails
+> against obvious mistakes, not a containment boundary. Use `read-only` when you
+> want the agent to look but not touch.
+
+Both files are exercised by `tests/recommended.rs`, which pins their
+security-critical verdicts.
+
 ## Exit codes
 
 | Command | 0 | 1 | 2 |
