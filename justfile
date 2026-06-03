@@ -78,6 +78,10 @@ test-watch:
 test-e2e:
     cargo nextest run --locked --status-level fail -E 'binary(e2e)'
 
+# Live check against the real `claude` CLI (needs Claude Code + auth + network; opt-in, not in full-check).
+test-claude:
+    @bash scripts/e2e-claude.sh
+
 # Enforce line coverage across all tests; a miss fails the command.
 test-cov:
     cargo llvm-cov nextest --locked --all-features \
