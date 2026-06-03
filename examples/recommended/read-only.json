@@ -1,0 +1,232 @@
+{
+  "name": "read-only",
+  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Anything that writes, runs project code, or is otherwise not a pure read defers to the harness (which prompts the human). A small set of irreversible, system-level operations is denied outright. Output redirections are not permitted on allowed commands (writes are blocked), except scratch writes under /tmp.",
+  "rules": [
+
+    { "name": "read: shell inspection commands",
+      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo) or has a file-writing mode (tee, sort -o).",
+      "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|xxd|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq|man|less|more)?( *)",
+      "action": "allow" },
+
+    { "name": "read: echo/printf/cat may write scratch under /tmp",
+      "description": "Output redirection is otherwise denied; permit only throwaway scratch files under /tmp.",
+      "match": "@(echo|printf|cat) *",
+      "action": "allow",
+      "redirections": { "write_glob": ["/tmp/*", "/tmp/**"] } },
+
+    { "name": "read: stream filters in pipes and substitutions",
+      "description": "Stream editors that are safe reading stdin in a pipe but can write files when run standalone (sed -i, sort -o, awk print>file); scope them to pipe/substitution roles.",
+      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|less|more|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr)?( *)",
+      "action": "allow",
+      "roles": ["pipe_filter", "substitution"] },
+
+    { "name": "git read-only: always-safe subcommands",
+      "match": "git @(status|log|show|diff|range-diff|shortlog|describe|blame|annotate|rev-parse|rev-list|name-rev|merge-base|cherry|whatchanged|show-ref|for-each-ref|ls-files|ls-tree|ls-remote|cat-file|diff-tree|diff-files|diff-index|count-objects|verify-commit|verify-tag|check-ignore|check-attr|check-mailmap|fsck|version|help|grep|var)?( *)",
+      "action": "allow" },
+
+    { "name": "git read-only: reflog (show only)",
+      "match": "git reflog?( show*|)",
+      "action": "allow" },
+
+    { "name": "git read-only: branch listing",
+      "match": "git branch?( @(-a|-r|-v|-vv|--all|--remotes|--list|--verbose|--merged|--no-merged|--contains|--no-contains|--points-at|--show-current|--format|--sort|--color|--column|-l)*|)",
+      "action": "allow" },
+
+    { "name": "git read-only: tag listing",
+      "match": "git tag?( @(-l|--list|-n*|--contains|--no-contains|--points-at|--sort|--merged|--no-merged|--format|--column)*|)",
+      "action": "allow" },
+
+    { "name": "git read-only: remote listing",
+      "match": "git remote?( @(-v|--verbose|show|get-url)*|)",
+      "action": "allow" },
+
+    { "name": "git read-only: stash list/show",
+      "match": "git stash @(list|show)?( *)",
+      "action": "allow" },
+
+    { "name": "git read-only: config get/list",
+      "match": "git config @(-l|--list|--get|--get-all|--get-regexp|--get-urlmatch|--name-only)?( *)",
+      "action": "allow" },
+
+    { "name": "git read-only: worktree/submodule/notes listings",
+      "match": "git @(worktree list|submodule|submodule status|submodule summary|notes list|notes show)?( *)",
+      "action": "allow" },
+
+    { "name": "gh read-only: pr/issue inspection",
+      "argv": ["gh", "@(pr|issue)", "@(list|view|status|diff|checks)", "**"],
+      "action": "allow" },
+
+    { "name": "gh read-only: run/release/repo/workflow inspection",
+      "argv": ["gh", "@(run|release|repo|workflow)", "@(list|view|watch)", "**"],
+      "action": "allow" },
+
+    { "name": "gh read-only: list resources",
+      "argv": ["gh", "@(label|gist|cache|variable|secret|ssh-key|gpg-key|extension|alias)", "list", "**"],
+      "action": "allow" },
+
+    { "name": "gh read-only: gist view",
+      "argv": ["gh", "gist", "view", "**"],
+      "action": "allow" },
+
+    { "name": "gh read-only: search",
+      "argv": ["gh", "search", "**"],
+      "action": "allow" },
+
+    { "name": "gh read-only: auth/status",
+      "match": "gh @(auth status|status)?( *)",
+      "action": "allow" },
+
+    { "name": "gh read-only: api GET",
+      "description": "Raw API reads. Write methods and body-field flags are denied below so only GET-style requests are allowed.",
+      "argv": ["gh", "api", "**"],
+      "action": "allow" },
+
+    { "name": "deny: gh api write methods",
+      "match": "gh api*@( -X| --method) @(POST|PUT|PATCH|DELETE|post|put|patch|delete)*",
+      "action": "deny" },
+
+    { "name": "deny: gh api body fields (imply a write request)",
+      "match": "gh api*@( -f| -F| --field| --raw-field| --input)*",
+      "action": "deny" },
+
+    { "name": "node read-only: version only (node runs arbitrary code)",
+      "match": "node @(--version|-v)?( *)",
+      "action": "allow" },
+
+    { "name": "npm read-only",
+      "match": "npm @(list|ls|view|info|show|outdated|search|ping|whoami|root|prefix|bin|why|explain|docs|repo|home|fund|doctor|help|--version|-v)?( *)",
+      "action": "allow" },
+
+    { "name": "npm read-only: config get / pkg get / audit (report only)",
+      "match": "npm @(config @(get|list|ls)|pkg get|audit)?( *)",
+      "action": "allow" },
+
+    { "name": "deny: npm audit fix (writes)",
+      "match": "npm audit*@( fix)*",
+      "action": "deny" },
+
+    { "name": "pnpm read-only",
+      "match": "pnpm @(list|ls|why|outdated|view|info|licenses|root|bin|store status|config get|audit|doctor|--version|-v|help)?( *)",
+      "action": "allow" },
+
+    { "name": "deny: pnpm audit fix (writes)",
+      "match": "pnpm audit*@( --fix| fix)*",
+      "action": "deny" },
+
+    { "name": "yarn read-only",
+      "match": "yarn @(list|info|why|outdated|licenses|versions|node|config @(get|list)|--version|-v|help)?( *)",
+      "action": "allow" },
+
+    { "name": "bun read-only",
+      "match": "bun @(--version|-v|outdated|pm @(ls|hash|hash-string|cache))?( *)",
+      "action": "allow" },
+
+    { "name": "deny: bun pm cache rm (writes)",
+      "match": "bun pm cache*@( rm)*",
+      "action": "deny" },
+
+    { "name": "deno read-only",
+      "match": "deno @(--version|-V|info|doc|lint|fmt --check)?( *)",
+      "action": "allow" },
+
+    { "name": "pip read-only",
+      "match": "@(pip|pip3) @(list|show|freeze|check|inspect|debug|help|--version|-V|config @(list|get|debug)|cache @(list|info|dir)|index versions)?( *)",
+      "action": "allow" },
+
+    { "name": "python read-only: version, pip reads, json formatter",
+      "match": "@(python|python3) @(--version|-V|-m pip @(list|show|freeze|check)|-m json.tool)?( *)",
+      "action": "allow" },
+
+    { "name": "uv read-only",
+      "match": "uv @(--version|tree|pip @(list|show|freeze|check|tree)|python @(list|find|dir)|tool @(list|dir)|cache dir)?( *)",
+      "action": "allow" },
+
+    { "name": "uv version (read; a bare report, not a bump)",
+      "match": "uv version",
+      "action": "allow" },
+
+    { "name": "poetry read-only",
+      "match": "poetry @(show|about|check|search|--version|env @(info|list)|config --list|lock --check)?( *)",
+      "action": "allow" },
+
+    { "name": "poetry version (read; a bare report, not a bump)",
+      "match": "poetry version",
+      "action": "allow" },
+
+    { "name": "cargo read-only",
+      "match": "cargo @(--version|-V|version|tree|metadata|search|locate-project|verify-project|pkgid|read-manifest|help|config get)?( *)",
+      "action": "allow" },
+
+    { "name": "rust toolchain read-only",
+      "match": "@(rustc|rustfmt) @(--version|-V|--help)?( *)",
+      "action": "allow" },
+
+    { "name": "rustup read-only",
+      "match": "rustup @(show|which|--version|toolchain list|target list|component list)?( *)",
+      "action": "allow" },
+
+    { "name": "go read-only",
+      "match": "go @(version|doc|list)?( *)",
+      "action": "allow" },
+
+    { "name": "go env read-only (deny -w/-u which mutate config)",
+      "match": "go env?( *)",
+      "action": "allow" },
+
+    { "name": "deny: go env -w/-u (writes go config)",
+      "match": "go env*@( -w| -u)*",
+      "action": "deny" },
+
+    { "name": "go mod read-only",
+      "match": "go mod @(graph|verify|why|edit -print)?( *)",
+      "action": "allow" },
+
+    { "name": "make read-only: dry-run / introspection",
+      "match": "make @(-n|--dry-run|--just-print|-p|--print-data-base|-q|--question|--version|-v|--help|-h)?( *)",
+      "action": "allow" },
+
+    { "name": "just read-only: list / show recipes (does not run them)",
+      "match": "just @(--list|-l|--summary|--show|-s|--dump|--variables|--evaluate|--fmt --check|--version|--help)?( *)",
+      "action": "allow" },
+
+    { "name": "deny: never read private keys or credentials",
+      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials) through common file readers, to limit accidental exfiltration.",
+      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials)*",
+      "action": "deny" },
+
+    { "name": "deny: recursive rm",
+      "description": "Recursive delete is never auto-allowed; route file removal through git or a human prompt. Flags are matched as whole space-delimited tokens so a filename like '--preserve-root' or 'my-report' is not mistaken for '-r'.",
+      "match": "rm*@( -r| -R| --recursive| -fr| -fR)*",
+      "action": "deny" },
+
+    { "name": "deny: git branch delete/rename/copy/force",
+      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; block them in every position.",
+      "match": "git branch*@( -d| -D| --delete| -m| -M| --move| -c| -C| --copy| -f| --force)*",
+      "action": "deny" },
+
+    { "name": "deny: git tag delete",
+      "match": "git tag*@( -d| --delete)*",
+      "action": "deny" },
+
+    { "name": "deny: filesystem and partition destroyers",
+      "match": "@(mkfs|mkfs.*|fdisk|sfdisk|gdisk|cfdisk|parted|wipefs|blkdiscard|shred)?( *)",
+      "action": "deny" },
+
+    { "name": "deny: dd to a block device",
+      "match": "dd *of=/dev/@(sd|nvme|vd|hd|mmcblk|disk|loop)*",
+      "action": "deny" },
+
+    { "name": "deny: recursive chmod/chown on absolute or home paths",
+      "match": "@(chmod|chown|chgrp)*@( -R| --recursive)*@( /| ~)*",
+      "action": "deny" },
+
+    { "name": "deny: sed/awk/perl in-place file edit",
+      "match": "@(sed|awk|perl)*@( -i| --in-place)*",
+      "action": "deny" },
+
+    { "name": "deny: shell as a pipe target (blocks curl | sh)",
+      "argv": ["@(sh|bash|zsh|fish|dash|ksh|ash|csh|tcsh)", "**"],
+      "action": "deny",
+      "roles": ["pipe_filter"] }
+  ]
+}
