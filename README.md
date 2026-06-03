@@ -52,6 +52,24 @@ falls through to `defer`.
 
 ## Install
 
+### Install script (Linux, macOS)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nickderobertis/allowlister/main/scripts/install.sh | sh
+```
+
+Detects your platform, downloads the matching prebuilt binary, verifies its
+SHA-256 checksum, and installs to `~/.local/bin`. Pin a version or change the
+target directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nickderobertis/allowlister/main/scripts/install.sh \
+  | sh -s -- --version v0.1.0 --to /usr/local/bin
+```
+
+It runs under any POSIX shell, including Git Bash and WSL on Windows. For native
+Windows PowerShell, use the prebuilt archive or `cargo install` below.
+
 ### Prebuilt binaries
 
 Download the archive for your platform from the
