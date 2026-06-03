@@ -37,6 +37,37 @@ impl Matcher {
     }
 }
 
+/// Compile an extglob pattern into a matcher, skipping regex construction when
+/// the pattern has no glob syntax. A metacharacter-free glob's anchored
+/// full-match is exactly string equality (this dialect has no escapes; every
+/// non-meta char matches itself), so such patterns become a [`Matcher::Literal`]
+/// rather than a compiled automaton — building a regex is the dominant
+/// per-invocation cost and the binary recompiles every rule on each spawn.
+pub(crate) fn compile_glob_matcher(pattern: &str) -> Result<Matcher, fancy_regex::Error> {
+    if pattern_has_glob_meta(pattern) {
+        Ok(Matcher::Regex(compile_glob(pattern)?))
+    } else {
+        Ok(Matcher::Literal(pattern.to_string()))
+    }
+}
+
+/// Whether a pattern contains any glob syntax that `translate` would turn into
+/// regex (rather than an escaped literal). Deliberately *over*-approximates: a
+/// `[` or extglob opener that does not actually form a valid construct still
+/// reports `true`, so the pattern compiles to a regex that `translate` makes
+/// behave literally anyway. The reverse — reporting `false` for a real glob —
+/// must never happen, as it would silently change matching to equality.
+fn pattern_has_glob_meta(pattern: &str) -> bool {
+    let bytes = pattern.as_bytes();
+    bytes.iter().enumerate().any(|(i, &b)| match b {
+        b'*' | b'?' | b'[' => true,
+        // An extglob group opens with `@( ?( *( +( !(`; `?(`/`*(` are already
+        // caught by the `?`/`*` arms, the rest are caught here.
+        b'(' => i > 0 && matches!(bytes[i - 1], b'@' | b'?' | b'*' | b'+' | b'!'),
+        _ => false,
+    })
+}
+
 /// Compile an extglob pattern into a full-match regex.
 pub(crate) fn compile_glob(pattern: &str) -> Result<Regex, fancy_regex::Error> {
     Regex::new(&anchored(&translate(pattern)))
@@ -242,5 +273,56 @@ mod tests {
         let re = compile_regex("git (status|diff)").unwrap();
         assert!(re.is_match("git status").unwrap());
         assert!(!re.is_match("git status --short").unwrap());
+    }
+
+    #[test]
+    fn metacharacter_free_globs_compile_to_literals() {
+        // Plain words and patterns whose only "special" chars are literal in the
+        // glob dialect must skip regex construction.
+        for pattern in ["gh", "api", "-X", "git", "a.b", "foo(bar)", "repos/myorg"] {
+            assert!(
+                matches!(compile_glob_matcher(pattern).unwrap(), Matcher::Literal(_)),
+                "expected {pattern:?} to compile to a literal matcher",
+            );
+        }
+    }
+
+    #[test]
+    fn glob_syntax_still_compiles_to_regex() {
+        // Anything `translate` would turn into regex must stay a compiled regex.
+        for pattern in [
+            "ls*",
+            "git ?",
+            "file[0-9]",
+            "@(a|b)",
+            "?(a)",
+            "*(a)",
+            "+(a)",
+            "!(x)",
+        ] {
+            assert!(
+                matches!(compile_glob_matcher(pattern).unwrap(), Matcher::Regex(_)),
+                "expected {pattern:?} to compile to a regex matcher",
+            );
+        }
+    }
+
+    #[test]
+    fn literal_fast_path_matches_exactly_like_the_regex_path() {
+        // The optimization must be transparent: for every literal-detected
+        // pattern the fast path agrees with the full regex it replaced, both on
+        // the exact text and on near-misses.
+        for pattern in ["gh", "-X", "a.b", "foo(bar)", "repos/myorg"] {
+            let fast = compile_glob_matcher(pattern).unwrap();
+            let regex = Matcher::Regex(compile_glob(pattern).unwrap());
+            for value in [pattern, "", &format!("{pattern}x"), &format!("x{pattern}")] {
+                assert_eq!(
+                    fast.is_match(value),
+                    regex.is_match(value),
+                    "fast path disagrees with regex for pattern {pattern:?} on {value:?}",
+                );
+            }
+            assert!(fast.is_match(pattern));
+        }
     }
 }

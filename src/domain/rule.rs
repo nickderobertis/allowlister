@@ -8,7 +8,7 @@
 use fancy_regex::Regex;
 
 use super::analyzer::{Fragment, RedirClass, Redirection, Role};
-use super::glob::{compile_glob, compile_regex, Matcher};
+use super::glob::{compile_glob, compile_glob_matcher, compile_regex, Matcher};
 
 /// Whether a rule grants or blocks a matching fragment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,9 +228,9 @@ impl Rule {
 
 fn build_matcher(pattern: &str, kind: MatchKind) -> Result<Matcher, String> {
     match kind {
-        MatchKind::Glob => compile_glob(pattern)
-            .map(Matcher::Regex)
-            .map_err(|e| format!("invalid glob '{pattern}': {e}")),
+        MatchKind::Glob => {
+            compile_glob_matcher(pattern).map_err(|e| format!("invalid glob '{pattern}': {e}"))
+        }
         MatchKind::Regex => compile_regex(pattern)
             .map(Matcher::Regex)
             .map_err(|e| format!("invalid regex '{pattern}': {e}")),
