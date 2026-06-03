@@ -18,6 +18,21 @@ pub enum Error {
     #[error("config already exists at {0}; refusing to overwrite (remove it or edit in place)")]
     ConfigExists(PathBuf),
 
+    #[error("'{0}' is not a file or a built-in profile (try 'read-only' or 'repo-write')")]
+    UnknownSource(String),
+
+    // `origin` is a plain field (not `#[source]`) because it is a human label —
+    // a file path or a profile name — not an underlying error to chain.
+    #[error("{origin}: {message}")]
+    InvalidConfig { origin: String, message: String },
+
+    #[error("failed to read {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("failed to write {path}: {source}")]
     Write {
         path: PathBuf,

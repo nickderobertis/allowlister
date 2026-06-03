@@ -102,6 +102,15 @@ the hook for the `Bash` matcher and keeps `permissions.allow` / `permissions.ask
 empty so the hook is the source of allow truth, with a tiny nuclear-pattern
 `permissions.deny` as defense-in-depth.
 
+To start from a curated ruleset instead of the minimal starter, install one of
+the [recommended profiles](#recommended-profiles) in place of `init`. When
+`install` creates a new config it prints the same settings snippet, so this is a
+complete first step on its own:
+
+```sh
+allowlister install read-only --global    # or: repo-write
+```
+
 > **Do not** add `"Bash"` or `"Bash(*)"` to `permissions.allow`. A broad allow
 > makes the agent skip its prompt on its own, which short-circuits the hook's
 > per-fragment allow analysis — the entire point of allowlister.
@@ -118,6 +127,11 @@ allowlister explain '<cmd>' [--cwd P]
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local]
                                   Write a starter config and print the settings snippet.
+allowlister install <source> [--global | --local | --output P]
+                                  Merge an allowlist (a built-in profile name —
+                                  read-only or repo-write — or a path to a JSON
+                                  file) into your config. Idempotent: re-running
+                                  never duplicates rules.
 ```
 
 Examples:
@@ -192,12 +206,22 @@ warning; loading never crashes the hook.
 ## Recommended profiles
 
 Two ready-made, self-contained rulesets live in
-[`examples/recommended/`](examples/recommended/). Pick one as a starting point
-and tune it — copy it to a user config path above, or drop it in as a project
-`.allowlister.json`:
+[`examples/recommended/`](examples/recommended/) and ship embedded in the binary.
+Pick one as a starting point and `install` it — that merges its rules into your
+config, creating the file if needed. Re-running is safe: rules already present
+(matched by name) are left in place, so you can layer a profile onto an existing
+config or upgrade `read-only` to `repo-write` later without duplicates.
 
 ```sh
-cp examples/recommended/read-only.json ~/.config/allowlister/config.json
+allowlister install read-only --global   # merge into ~/.config/allowlister/config.json
+allowlister install repo-write --local    # or into this repo's .allowlister.json
+```
+
+`install` also accepts a path, so you can point it at one of the example files or
+any allowlist of your own:
+
+```sh
+allowlister install ./examples/recommended/read-only.json --local
 ```
 
 **`read-only.json`** — auto-allows pure **read** operations and defers

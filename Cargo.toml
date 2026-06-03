@@ -13,12 +13,15 @@ keywords = ["cli", "security", "claude-code", "permissions", "shell"]
 categories = ["command-line-utilities", "development-tools"]
 # Package only what a crates.io consumer needs: the sources, manifest, readme,
 # and license. This keeps the published crate small and avoids packaging the
-# CLAUDE.md symlinks, CI config, tests, and examples.
+# CLAUDE.md symlinks, CI config, tests, and the rest of `examples/`. The two
+# recommended profiles are the exception: `install` embeds them with
+# `include_str!`, so they must be in the package for the crate to build.
 include = [
     "src/**/*.rs",
     "Cargo.toml",
     "README.md",
     "LICENSE",
+    "examples/recommended/*.json",
 ]
 
 [[bin]]

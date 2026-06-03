@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::errors::{Error, Result};
-use crate::io::configfs::Env;
+use crate::io::configfs::{self, Env};
 
 /// A conservative starter ruleset: read-only inspection commands, common pipe
 /// filters scoped to their role, and a couple of nuclear denies.
@@ -87,6 +87,16 @@ pub fn run(_global: bool, local: bool) -> Result<i32> {
 
     println!("Wrote starter config: {}", path.display());
     println!();
+    print_hook_setup();
+
+    Ok(0)
+}
+
+/// Print the `~/.claude/settings.json` snippet that registers the hook, plus the
+/// one rule that matters: never broaden `permissions.allow`. Shared so that any
+/// command which lands a fresh config (`init`, `install`) can hand the user the
+/// same wiring instructions.
+pub(crate) fn print_hook_setup() {
     println!("Add this to ~/.claude/settings.json (merge with any existing keys):");
     println!();
     println!("{SETTINGS_SNIPPET}");
@@ -95,23 +105,13 @@ pub fn run(_global: bool, local: bool) -> Result<i32> {
     println!("A broad allow makes Claude Code skip its prompt on its own, which");
     println!("short-circuits the hook's per-fragment allow analysis — the whole");
     println!("point of allowlister. Let the hook be the source of allow truth.");
-
-    Ok(0)
 }
 
 fn global_config_path() -> Result<PathBuf> {
-    let env = Env::from_process();
-    if let Some(xdg) = env.xdg_config_home {
-        return Ok(xdg.join("allowlister").join("config.json"));
-    }
-    if let Some(home) = env.home {
-        return Ok(home.join(".config").join("allowlister").join("config.json"));
-    }
-    Err(Error::NoConfigHome)
+    configfs::default_user_config_path(&Env::from_process()).ok_or(Error::NoConfigHome)
 }
 
 fn local_config_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".allowlister.json")
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    configfs::local_config_path(&cwd)
 }

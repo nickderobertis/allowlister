@@ -81,7 +81,8 @@ fn help_succeeds_and_lists_subcommands() {
         .stdout(predicate::str::contains("hook"))
         .stdout(predicate::str::contains("check"))
         .stdout(predicate::str::contains("explain"))
-        .stdout(predicate::str::contains("init"));
+        .stdout(predicate::str::contains("init"))
+        .stdout(predicate::str::contains("install"));
 }
 
 #[test]
@@ -327,4 +328,78 @@ fn explain_reports_unsupported_construct() {
         .success()
         .stdout(predicate::str::contains("unsupported"))
         .stdout(predicate::str::contains("verdict: DEFER"));
+}
+
+#[test]
+fn install_global_writes_a_user_config_that_gates() {
+    let xdg = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--global"])
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rule(s) added"));
+    assert!(xdg.path().join("allowlister/config.json").is_file());
+
+    // The freshly installed profile is the source of truth: a pure read allows.
+    let cwd = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .args(["check", "git status", "--cwd"])
+        .arg(cwd.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn install_local_writes_a_project_config() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+}
+
+#[test]
+fn install_is_idempotent_across_runs() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.json");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+    // A second install touches the same file but adds nothing new.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated"))
+        .stdout(predicate::str::contains("0 rule(s) added"));
+}
+
+#[test]
+fn install_unknown_source_fails() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "no-such-thing", "--output"])
+        .arg(dir.path().join("cfg.json"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a file or a built-in profile"));
 }

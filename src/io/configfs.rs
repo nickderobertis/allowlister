@@ -53,6 +53,24 @@ pub fn user_config_path(env: &Env) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// The path a user-level config is *written* to (XDG first, else `~/.config`),
+/// whether or not it already exists. `None` when neither `XDG_CONFIG_HOME` nor
+/// `HOME` is set. Unlike [`user_config_path`], this does not require the file to
+/// exist — it is the destination for `init` and `install`.
+pub(crate) fn default_user_config_path(env: &Env) -> Option<PathBuf> {
+    if let Some(xdg) = &env.xdg_config_home {
+        return Some(xdg.join("allowlister").join("config.json"));
+    }
+    env.home
+        .as_ref()
+        .map(|home| home.join(".config").join("allowlister").join("config.json"))
+}
+
+/// The project-level config path under `dir` (`<dir>/.allowlister.json`).
+pub(crate) fn local_config_path(dir: &Path) -> PathBuf {
+    dir.join(".allowlister.json")
+}
+
 /// Project configs from `cwd` up to a `.git` boundary or the filesystem root,
 /// returned outermost-first.
 pub fn project_config_paths(cwd: &Path) -> Vec<PathBuf> {
