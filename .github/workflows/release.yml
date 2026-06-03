@@ -40,10 +40,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Native runners per target so no target needs cross-compilation:
+          # arm64 Linux builds on a hosted arm64 runner; macOS cross-builds
+          # x86_64<->arm64 within the Apple toolchain (no emulation/Docker).
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
