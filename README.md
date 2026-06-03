@@ -211,7 +211,26 @@ codes, stdout, stderr, and file effects across the critical user journeys
 (`--help`/`--version`, hook allow/deny/defer routing, `check`, `explain`, `init`,
 and error/recovery paths). Smoke tests are a subset of E2E coverage, not the
 whole strategy. Coverage is enforced with a floor that fails the command on a
-miss.
+miss. These tests are hermetic and network-free, so they run in CI on every
+platform.
+
+### Live harness check (opt-in)
+
+The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
+To verify the wiring against a *real* harness, `just test-claude` runs
+[`scripts/e2e-claude.sh`](scripts/e2e-claude.sh), which drives the actual
+`claude` CLI headless with a generated `.claude/settings.json` that registers
+`allowlister hook claude-code` as the `Bash` PreToolUse hook, then asserts that a
+denied command is blocked (and its reason is reported back to the model) while an
+allowed command runs without a prompt:
+
+```sh
+just test-claude     # needs Claude Code installed, authenticated, and online
+```
+
+Because it needs the `claude` binary, network, and a model call, it is **not**
+part of `just full-check` or CI. It skips cleanly (exit 0) when `claude` is not
+on `PATH`.
 
 ## Releasing
 
