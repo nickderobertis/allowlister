@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Two recommended, self-contained profiles in `examples/recommended/`:
+  `read-only` (auto-allow pure reads, defer the rest) and `repo-write` (the
+  reads plus the writes needed to manage a repository, denying destructive
+  operations). Both ship embedded in the binary.
+- CLI: `install <source>` merges an allowlist — a built-in profile name
+  (`read-only`, `repo-write`) or a path to a JSON file — into a target config
+  (`--global`, `--local`, or `--output`), creating it if absent. The merge is by
+  rule name, so re-running never duplicates rules and profiles can be layered.
+  When it creates a config it prints the hook-registration snippet, like `init`.
+
 ## [0.1.0] - 2026-06-03
 
 ### Added

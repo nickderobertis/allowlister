@@ -64,6 +64,23 @@ enum Command {
         #[arg(long)]
         local: bool,
     },
+
+    /// Merge an allowlist into your config, creating it if absent. Re-running
+    /// never duplicates rules, so it is safe to layer profiles.
+    Install {
+        /// A built-in profile name (`read-only` or `repo-write`) or a path to an
+        /// allowlist JSON file.
+        source: String,
+        /// Merge into the user-level config (the default).
+        #[arg(long, conflicts_with_all = ["local", "output"])]
+        global: bool,
+        /// Merge into a project `.allowlister.json` in the current directory.
+        #[arg(long, conflicts_with = "output")]
+        local: bool,
+        /// Merge into an explicit file path instead of a discovered config.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Supported coding harnesses.
@@ -88,6 +105,12 @@ impl Cli {
             }
             Command::Explain { command, cwd } => commands::explain::run(&command, cwd.as_deref()),
             Command::Init { global, local } => commands::init::run(global, local),
+            Command::Install {
+                source,
+                global,
+                local,
+                output,
+            } => commands::install::run(&source, global, local, output.as_deref()),
         }
     }
 }

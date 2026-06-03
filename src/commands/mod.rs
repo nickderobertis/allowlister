@@ -5,6 +5,7 @@ pub mod check;
 pub mod explain;
 pub mod hook;
 pub mod init;
+pub mod install;
 
 use std::path::{Path, PathBuf};
 

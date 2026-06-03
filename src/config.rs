@@ -44,30 +44,46 @@ pub fn load_from_paths(paths: &[PathBuf]) -> LoadedConfig {
                 continue;
             }
         };
-        let raw: RawConfig = match serde_json::from_str(&contents) {
-            Ok(raw) => raw,
-            Err(err) => {
-                config
-                    .sources
-                    .push(format!("{display} (skipped: invalid JSON: {err})"));
-                config
-                    .warnings
-                    .push(format!("invalid JSON in {display}: {err}"));
-                continue;
-            }
-        };
-        for (index, raw_rule) in raw.rules.into_iter().enumerate() {
-            match raw_rule.compile(&display) {
-                Ok(rule) => config.rules.push(rule),
-                Err(err) => config.warnings.push(format!(
-                    "{display}: skipping rule #{index} ('{name}'): {err}",
-                    name = raw_rule.display_name()
-                )),
-            }
-        }
-        config.sources.push(display);
+        append_config(&mut config, &contents, &display);
     }
     config
+}
+
+/// Compile a config straight from its JSON text, with no filesystem read.
+/// `source_label` names the origin in any messages. Like [`load_from_paths`], a
+/// parse error or a malformed rule becomes a warning rather than a hard
+/// failure; a caller that needs strictness inspects `warnings` itself.
+pub(crate) fn compile_str(contents: &str, source_label: &str) -> LoadedConfig {
+    let mut config = LoadedConfig::default();
+    append_config(&mut config, contents, source_label);
+    config
+}
+
+/// Parse `contents` and append its compiled rules — and any problems — to
+/// `config`, recording `display` as a source.
+fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
+    let raw: RawConfig = match serde_json::from_str(contents) {
+        Ok(raw) => raw,
+        Err(err) => {
+            config
+                .sources
+                .push(format!("{display} (skipped: invalid JSON: {err})"));
+            config
+                .warnings
+                .push(format!("invalid JSON in {display}: {err}"));
+            return;
+        }
+    };
+    for (index, raw_rule) in raw.rules.into_iter().enumerate() {
+        match raw_rule.compile(display) {
+            Ok(rule) => config.rules.push(rule),
+            Err(err) => config.warnings.push(format!(
+                "{display}: skipping rule #{index} ('{name}'): {err}",
+                name = raw_rule.display_name()
+            )),
+        }
+    }
+    config.sources.push(display.to_string());
 }
 
 #[derive(Debug, Deserialize)]
