@@ -205,23 +205,25 @@ warning; loading never crashes the hook.
 
 ## Recommended profiles
 
-Two ready-made, self-contained rulesets live in
-[`examples/recommended/`](examples/recommended/) and ship embedded in the binary.
-Pick one as a starting point and `install` it — that merges its rules into your
-config, creating the file if needed. Re-running is safe: rules already present
-(matched by name) are left in place, so you can layer a profile onto an existing
-config or upgrade `read-only` to `repo-write` later without duplicates.
+Two ready-made, self-contained rulesets — sources in
+[`examples/recommended/`](examples/recommended/) — **ship embedded in the
+binary**, so you install them by name from anywhere, with no repo checkout, file
+path, or network needed. Pick one as a starting point and `install` it; that
+merges its rules into your config, creating the file if needed. Re-running is
+safe: rules already present (matched by name) are left in place, so you can layer
+a profile onto an existing config or upgrade `read-only` to `repo-write` later
+without duplicates.
 
 ```sh
 allowlister install read-only --global   # merge into ~/.config/allowlister/config.json
-allowlister install repo-write --local    # or into this repo's .allowlister.json
+allowlister install repo-write --local    # or into the current repo's .allowlister.json
 ```
 
-`install` also accepts a path, so you can point it at one of the example files or
-any allowlist of your own:
+`install` also accepts a path, for installing an allowlist of your own — for
+example one your team keeps in a repo:
 
 ```sh
-allowlister install ./examples/recommended/read-only.json --local
+allowlister install ./team-allowlist.json --local
 ```
 
 **`read-only.json`** — auto-allows pure **read** operations and defers
