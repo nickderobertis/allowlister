@@ -11,12 +11,13 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 # Minimum line coverage enforced by `test-cov` (a miss fails the command).
 cov-min := "85"
 
-# Pinned developer tool versions (installed by `bootstrap`).
+# Pinned developer tool versions (installed by `bootstrap`). CI installs the
+# latest of each via the install action; these pins keep local setups reproducible.
 nextest-version := "0.9.137"
-llvmcov-version := "0.6.20"
-deny-version := "0.18.5"
-machete-version := "0.8.0"
-audit-version := "0.21.2"
+llvmcov-version := "0.8.7"
+deny-version := "0.19.8"
+machete-version := "0.9.2"
+audit-version := "0.22.1"
 
 _default:
     @just --list --unsorted
