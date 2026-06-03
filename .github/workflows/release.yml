@@ -31,9 +31,30 @@ jobs:
       - run: just test
       - run: just test-e2e
 
+  # Create the GitHub Release once, before the parallel upload matrix, so the
+  # matrix jobs never race to create it.
+  create-release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release for the tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --notes "Prebuilt binaries and checksums are attached below. See CHANGELOG.md for release notes."
+          fi
+
   upload:
     name: upload (${{ matrix.target }})
-    needs: test
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -69,7 +90,7 @@ jobs:
   # crates.io publishing is opt-in: set the repository variable
   # PUBLISH_TO_CRATES_IO=true and provide the CARGO_REGISTRY_TOKEN secret.
   publish-crate:
-    needs: [test, upload]
+    needs: [create-release, upload]
     if: ${{ vars.PUBLISH_TO_CRATES_IO == 'true' }}
     runs-on: ubuntu-latest
     steps:
