@@ -42,6 +42,12 @@ thiserror = "2.0"
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.10"
+# Statistical micro-benchmarks of the pure engine (see `benches/`). Default
+# features (plotters HTML reports, rayon) are dropped to keep the dependency
+# tree — and the `cargo deny` surface — small; `cargo_bench_support` is the only
+# feature `cargo bench` needs, and it still emits the per-bench `estimates.json`
+# that `critcmp` diffs.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 # A CLI binary that spawns once per agent tool call: optimize for a small,
 # fast-to-start artifact. `thin` LTO and a single codegen unit shrink the
@@ -53,6 +59,15 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 
+# Profiling builds: the shipped release artifact exactly, but with symbols kept
+# so `samply` (see `scripts/profile.sh`) can attribute time to functions. This
+# never affects the published binary — `just profile` builds `--profile
+# profiling` into `target/profiling/` while `[profile.release]` stays stripped.
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+
 [[test]]
 name = "golden"
 path = "tests/golden.rs"
@@ -60,3 +75,10 @@ path = "tests/golden.rs"
 [[test]]
 name = "e2e"
 path = "tests/e2e/main.rs"
+
+# Statistical micro-benchmarks of the engine hot paths. `harness = false` hands
+# `main` to Criterion instead of libtest, so `cargo nextest`/coverage never pick
+# this target up — it is measured, not gated.
+[[bench]]
+name = "engine"
+harness = false

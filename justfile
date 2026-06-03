@@ -19,6 +19,12 @@ deny-version := "0.19.8"
 machete-version := "0.9.2"
 audit-version := "0.22.1"
 
+# Tools for the informational performance suite (`bench*`, `profile`). Not part
+# of the quality gate; CI installs the latest via the install action.
+hyperfine-version := "1.20.0"
+critcmp-version := "0.1.8"
+samply-version := "0.13.1"
+
 _default:
     @just --list --unsorted
 
@@ -34,6 +40,11 @@ bootstrap:
         cargo-machete@{{machete-version}} \
         cargo-audit@{{audit-version}}
     @command -v lefthook >/dev/null || cargo binstall --no-confirm --disable-telemetry lefthook
+    @echo "» installing benchmark + profiling tools"
+    cargo binstall --no-confirm --disable-telemetry \
+        hyperfine@{{hyperfine-version}} \
+        critcmp@{{critcmp-version}} \
+        samply@{{samply-version}}
     @just hooks-install
     @echo "✓ bootstrap complete"
 
@@ -130,6 +141,38 @@ dist-plan:
 dist-build:
     @bash scripts/dist.sh build
 
+# --- Performance suite (informational; never part of `full-check`) -----------
+# Benchmarks are non-deterministic on shared hardware, so they measure rather
+# than gate — like the live `test-claude` check. `just check`/`clippy` already
+# type-check `benches/`, so the bench can't rot without a gate phase of its own.
+
+# Engine micro-benchmarks (Criterion); saves the `current` baseline for bench-compare.
+bench:
+    cargo bench --locked --bench engine -- --save-baseline current
+
+# Save current engine benchmarks as the `base` baseline (run on the comparison point).
+bench-base:
+    cargo bench --locked --bench engine -- --save-baseline base
+
+# Diff the latest `bench` run against `base` (run `bench-base` first; needs critcmp).
+bench-compare:
+    critcmp base current
+
+# End-to-end CLI latency for every command (hyperfine); writes target/bench/results.*.
+bench-cli:
+    @bash scripts/bench.sh
+
+# Fast smoke check of the CLI benchmark harness (one run, no warmup, no stable numbers).
+bench-cli-smoke:
+    @bash scripts/bench.sh --dry-run
+
+# Run both benchmark layers (Criterion + hyperfine).
+bench-all: bench bench-cli
+
+# Record a sampling profile to find bottlenecks (samply); see scripts/profile.sh for modes.
+profile *args:
+    @bash scripts/profile.sh {{args}}
+
 # Full quality gate. Stops at the first failing phase; minimal output on success.
 full-check:
     #!/usr/bin/env bash
@@ -156,7 +199,7 @@ clean:
 doctor:
     @echo "## toolchain" && rustc --version && cargo --version
     @echo "## components" && (rustup component list --installed 2>/dev/null || echo "rustup not present")
-    @echo "## tools" && for t in just cargo-nextest cargo-llvm-cov cargo-deny cargo-machete lefthook; do printf '%-16s ' "$t"; command -v "$t" || echo "MISSING"; done
+    @echo "## tools" && for t in just cargo-nextest cargo-llvm-cov cargo-deny cargo-machete lefthook hyperfine critcmp samply; do printf '%-16s ' "$t"; command -v "$t" || echo "MISSING"; done
     @echo "## outdated (informational)" && (cargo outdated 2>/dev/null || echo "cargo-outdated not installed")
 
 # Print the full dependency tree (diagnostic).
