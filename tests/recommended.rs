@@ -91,8 +91,8 @@ fn read_only_defers_writes_and_code_execution() {
         "node server.js",
         "make build",
         "gh pr create",
-        "rm file.txt",   // non-recursive: defer (not a catastrophe, not a read)
-        "env printenv",  // command-runner: not auto-allowed, no bypass
+        "rm file.txt",  // non-recursive: defer (not a catastrophe, not a read)
+        "env printenv", // command-runner: not auto-allowed, no bypass
     ] {
         check(&r, cmd, Verdict::Defer);
     }
@@ -133,10 +133,12 @@ fn read_only_denies_destructive_and_secret_reads() {
 #[test]
 fn read_only_token_guards_avoid_false_positives() {
     let r = load("read-only");
-    // '--preserve-root' / '--format' / a 'movie.env'-style read must not trip the
-    // recursive-rm, branch-delete, or secret-read guards by substring.
+    // '--preserve-root' and '--format' embed substrings ('-r', '-f') that the
+    // recursive-rm and branch-delete denies would catch if they matched by
+    // substring instead of on a token boundary. The format value is quoted
+    // because its '%(...)' is bash syntax, not a glob the rule should see.
     check(&r, "rm --preserve-root notes.txt", Verdict::Defer);
-    check(&r, "git branch --format=%(refname)", Verdict::Allow);
+    check(&r, "git branch --format='%(refname)'", Verdict::Allow);
     check(&r, "git branch --merged main", Verdict::Allow);
 }
 
@@ -228,10 +230,10 @@ fn repo_write_denies_destructive_operations() {
 fn repo_write_defers_impactful_but_undecided() {
     let r = load("repo-write");
     for cmd in [
-        "gh pr merge 12",         // merging is impactful: ask a human
-        "git checkout main",      // ambiguous with file discard: ask a human
-        "rm file.txt",            // non-recursive delete: ask a human
-        "sudo apt-get update",    // privilege escalation: not auto-allowed
+        "gh pr merge 12",      // merging is impactful: ask a human
+        "git checkout main",   // ambiguous with file discard: ask a human
+        "rm file.txt",         // non-recursive delete: ask a human
+        "sudo apt-get update", // privilege escalation: not auto-allowed
     ] {
         check(&r, cmd, Verdict::Defer);
     }
