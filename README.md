@@ -70,6 +70,22 @@ curl -fsSL https://raw.githubusercontent.com/nickderobertis/allowlister/main/scr
 It runs under any POSIX shell, including Git Bash and WSL on Windows. For native
 Windows PowerShell, use the prebuilt archive or `cargo install` below.
 
+### With asdf
+
+If you use [asdf](https://asdf-vm.com), the
+[`asdf-allowlister`](https://github.com/nickderobertis/asdf-allowlister) plugin
+installs the same prebuilt release binaries and manages the version through your
+`.tool-versions`:
+
+```sh
+asdf plugin add allowlister https://github.com/nickderobertis/asdf-allowlister
+asdf install allowlister latest
+asdf set allowlister latest          # or pin a specific version, e.g. 0.1.0
+```
+
+Linux and macOS only (`x86_64`/`arm64`); see the plugin's README for version
+pinning and troubleshooting.
+
 ### Prebuilt binaries
 
 Download the archive for your platform from the
