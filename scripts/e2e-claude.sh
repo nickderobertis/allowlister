@@ -44,17 +44,23 @@ note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
+# allowlister must be on PATH so the hook command `init` writes into
+# settings.json — `allowlister hook claude-code` — resolves when `claude` runs it.
+bindir="$repo_root/target/release"
+export PATH="$bindir:$PATH"
+
 sandbox="$(mktemp -d)"
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
 proj="$sandbox/project"
-mkdir -p "$proj/.git" "$proj/.claude" "$sandbox/xdg"
+mkdir -p "$proj/.git" "$sandbox/xdg"
 
 # Deterministic, sandbox-scoped rules: deny `touch`, allow `echo` redirecting
 # anywhere under the sandbox. write_glob is pinned to the temp dir so the allow
 # case always matches its redirection target.
-cat > "$proj/.allowlister.json" <<JSON
+rules="$sandbox/rules.json"
+cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
@@ -64,18 +70,16 @@ cat > "$proj/.allowlister.json" <<JSON
 }
 JSON
 
-# Project settings register allowlister as the Bash PreToolUse hook. This is the
-# exact wiring a user would commit to their own .claude/settings.json.
-cat > "$proj/.claude/settings.json" <<JSON
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "Bash",
-        "hooks": [ { "type": "command", "command": "$bin hook claude-code" } ] }
-    ]
-  }
-}
-JSON
+# Set the project up exactly the way a user would: `init` writes the project
+# `.allowlister.json` (here from our deterministic rules file) AND registers the
+# Bash PreToolUse hook in `.claude/settings.json`. Exercising init here means the
+# live check also covers the hook-registration path end to end.
+note "» wiring the project with \`allowlister init\`"
+( cd "$proj" && "$bin" init --local --profile "$rules" --hooks --force ) >/dev/null \
+    || fail "allowlister init failed to set the project up"
+[ -f "$proj/.allowlister.json" ] || fail "init did not write the project config"
+grep -q 'allowlister hook claude-code' "$proj/.claude/settings.json" \
+    || fail "init did not register the hook in .claude/settings.json"
 
 # Run one headless turn that is steered toward a single exact command.
 #  * bypassPermissions: no human approver exists in a headless run, so this stops

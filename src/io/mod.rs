@@ -2,5 +2,6 @@
 //! adapters. Pure decision logic lives in [`crate::domain`]; this layer is
 //! where the program touches the outside world.
 
+pub mod claude_settings;
 pub mod configfs;
 pub mod harness;

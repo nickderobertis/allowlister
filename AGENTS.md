@@ -69,8 +69,11 @@ edition 2021, toolchain pinned in `rust-toolchain.toml`.
 - CI runs the full gate on Linux/macOS/Windows for every PR and main push with
   least-privilege permissions; it must pass before any release artifact
   publishes.
-- Tagging `vX.Y.Z` builds, archives, and checksums cross-platform binaries.
-  crates.io publishing is a separate gated step.
+- Releases are automated from Conventional Commits by release-plz: a merged
+  release PR bumps the version + changelog, tags `vX.Y.Z`, and cuts the GitHub
+  Release, which builds, archives, and checksums cross-platform binaries. Never
+  bump the version or tag by hand. Commit messages are the release input — keep
+  them conventional. crates.io publishing is a separate, opt-in step.
 
 ## Workflow
 
