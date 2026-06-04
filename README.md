@@ -110,22 +110,31 @@ just build-release   # or: cargo build --release --locked
 ## Quick start (Claude Code)
 
 ```sh
-allowlister init            # writes a starter ~/.config/allowlister/config.json
+allowlister init            # interactive setup on a terminal
 ```
 
-`init` prints the exact `~/.claude/settings.json` snippet to paste. It registers
-the hook for the `Bash` matcher and keeps `permissions.allow` / `permissions.ask`
-empty so the hook is the source of allow truth, with a tiny nuclear-pattern
-`permissions.deny` as defense-in-depth.
+Run on a terminal, `init` walks you through a short setup: where the config
+lives (user-global or project-local), which starting ruleset to write (the
+minimal `starter`, or a curated [recommended profile](#recommended-profiles) —
+`read-only` / `repo-write`), and whether to register the Claude Code hook now.
+It then writes the config and — by default — **registers the hook for you** by
+merging it into `~/.claude/settings.json` (or `./.claude/settings.json` for a
+project). The merge is non-destructive and idempotent: it preserves your other
+settings, never duplicates the hook, and adds a tiny nuclear-pattern
+`permissions.deny` as defense in depth. `permissions.allow` / `permissions.ask`
+are left untouched so the hook stays the source of allow truth.
 
-To start from a curated ruleset instead of the minimal starter, install one of
-the [recommended profiles](#recommended-profiles) in place of `init`. When
-`install` creates a new config it prints the same settings snippet, so this is a
-complete first step on its own:
+Every choice is also a flag, so the same command scripts cleanly in CI:
 
 ```sh
-allowlister install read-only --global    # or: repo-write
+allowlister init --global --profile read-only   # user config, curated reads, hook registered
+allowlister init --local  --no-hooks            # project config, print the snippet instead
+allowlister init -y                              # take all defaults, no prompts
 ```
+
+`--no-hooks` falls back to printing the exact `~/.claude/settings.json` snippet
+to paste by hand. To layer another profile onto an existing config later, use
+[`install`](#recommended-profiles).
 
 > **Do not** add `"Bash"` or `"Bash(*)"` to `permissions.allow`. A broad allow
 > makes the agent skip its prompt on its own, which short-circuits the hook's
@@ -141,8 +150,12 @@ allowlister check '<cmd>' [--cwd P] [--json]
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
-allowlister init [--global | --local]
-                                  Write a starter config and print the settings snippet.
+allowlister init [--global | --local] [--profile SOURCE]
+                 [--hooks | --no-hooks] [-i | -y] [--force]
+                                  Set up: write a config from a ruleset (starter,
+                                  read-only, repo-write, or a file) and register
+                                  the Bash hook in Claude Code's settings.json.
+                                  Interactive on a terminal; flags drive it in CI.
 allowlister install <source> [--global | --local | --output P]
                                   Merge an allowlist (a built-in profile name —
                                   read-only or repo-write — or a path to a JSON
@@ -317,11 +330,11 @@ platform.
 
 The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
 To verify the wiring against a *real* harness, `just test-claude` runs
-[`scripts/e2e-claude.sh`](scripts/e2e-claude.sh), which drives the actual
-`claude` CLI headless with a generated `.claude/settings.json` that registers
-`allowlister hook claude-code` as the `Bash` PreToolUse hook, then asserts that a
-denied command is blocked (and its reason is reported back to the model) while an
-allowed command runs without a prompt:
+[`scripts/e2e-claude.sh`](scripts/e2e-claude.sh). It sets a sandbox project up
+with `allowlister init` — exercising the real hook-registration path that writes
+`.claude/settings.json` — then drives the actual `claude` CLI headless and
+asserts that a denied command is blocked (and its reason is reported back to the
+model) while an allowed command runs without a prompt:
 
 ```sh
 just test-claude     # needs Claude Code installed, authenticated, and online
@@ -333,12 +346,29 @@ on `PATH`.
 
 ## Releasing
 
-1. Bump `version` in `Cargo.toml` and update `CHANGELOG.md`.
-2. `just full-check`.
-3. Tag `vX.Y.Z` and push the tag.
-4. CI must pass; the release workflow then builds, archives, checksums, and
-   uploads binaries for all platforms, and (if configured) publishes to
-   crates.io.
+Releases are automated from [Conventional Commits](https://www.conventionalcommits.org)
+by [release-plz](https://release-plz.dev). You never bump the version or tag by
+hand:
+
+1. Land changes on `main` with conventional commit messages (`feat:` → minor,
+   `fix:`/`perf:` → patch, `!`/`BREAKING CHANGE:` → major; `docs`/`test`/`chore`/
+   `ci` do not release). Pre-1.0 follows Cargo's 0.x rules, so a `feat` is a
+   patch until 1.0.
+2. The [`release-plz`](.github/workflows/release-plz.yml) workflow opens a
+   **release PR** that bumps `Cargo.toml` + `Cargo.lock` and writes the
+   `CHANGELOG.md` section from those commits.
+3. Merge the release PR. release-plz then tags `vX.Y.Z` and cuts the GitHub
+   Release; that triggers [`release.yml`](.github/workflows/release.yml), which
+   gates on a passing test run and then builds, archives, checksums, and uploads
+   the cross-platform binaries.
+
+Because this project is not published to crates.io, the workflow feeds release-plz
+the previous release tag as its version baseline (`--registry-manifest-path`), so
+the bump is computed from git history alone. crates.io publishing stays a
+separate, opt-in step: set the `PUBLISH_TO_CRATES_IO` repo variable and provide a
+`CARGO_REGISTRY_TOKEN` secret. release-plz authenticates with a PAT
+(`RELEASE_PLZ_TOKEN`) so the release it creates is allowed to trigger the binary
+build.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow.
 

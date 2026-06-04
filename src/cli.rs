@@ -54,8 +54,9 @@ enum Command {
         cwd: Option<PathBuf>,
     },
 
-    /// Write a starter config and print the settings snippet to register the
-    /// hook.
+    /// Set allowlister up: write a config from a chosen ruleset and register the
+    /// Bash hook in Claude Code's settings. Runs an interactive flow on a
+    /// terminal, or non-interactively from these flags.
     Init {
         /// Write the user-level config (the default).
         #[arg(long, conflicts_with = "local")]
@@ -63,6 +64,27 @@ enum Command {
         /// Write a project-level `.allowlister.json` in the current directory.
         #[arg(long)]
         local: bool,
+        /// Starting ruleset: a built-in (`starter`, `read-only`, `repo-write`)
+        /// or a path to an allowlist JSON file. Defaults to `starter`.
+        #[arg(long, value_name = "SOURCE")]
+        profile: Option<String>,
+        /// Register the Bash hook in Claude Code's settings.json (the default).
+        #[arg(long, overrides_with = "no_hooks")]
+        hooks: bool,
+        /// Do not touch Claude Code settings; just print the snippet to wire by
+        /// hand.
+        #[arg(long = "no-hooks")]
+        no_hooks: bool,
+        /// Walk through the setup step by step, reading answers from stdin.
+        /// Engaged automatically when stdin is a terminal.
+        #[arg(long, short)]
+        interactive: bool,
+        /// Accept the defaults without prompting (the scriptable path).
+        #[arg(long, short = 'y', conflicts_with = "interactive")]
+        yes: bool,
+        /// Overwrite an existing config instead of refusing.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Merge an allowlist into your config, creating it if absent. Re-running
@@ -104,7 +126,36 @@ impl Cli {
                 commands::check::run(&command, cwd.as_deref(), json)
             }
             Command::Explain { command, cwd } => commands::explain::run(&command, cwd.as_deref()),
-            Command::Init { global, local } => commands::init::run(global, local),
+            Command::Init {
+                global,
+                local,
+                profile,
+                hooks,
+                no_hooks,
+                interactive,
+                yes,
+                force,
+            } => {
+                // `--no-hooks` and `--hooks` override each other (last wins); if
+                // neither is given, leave the choice unset so the interactive
+                // flow can ask and the non-interactive default (on) applies.
+                let hooks = if no_hooks {
+                    Some(false)
+                } else if hooks {
+                    Some(true)
+                } else {
+                    None
+                };
+                commands::init::run(commands::init::InitArgs {
+                    global,
+                    local,
+                    profile,
+                    hooks,
+                    interactive,
+                    yes,
+                    force,
+                })
+            }
             Command::Install {
                 source,
                 global,

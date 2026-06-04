@@ -1,0 +1,78 @@
+name: Release-plz
+
+# Conventional-commit release automation. On every push to main:
+#   * release     — if a version-bump PR was just merged (the bumped version has
+#                   no tag yet), tag vX.Y.Z and cut the GitHub Release.
+#   * release-pr  — open/update a "release vX.Y.Z" PR that bumps the version and
+#                   writes the CHANGELOG for the commits since the last release.
+#
+# Why the binary is driven directly instead of release-plz/action: this project
+# is not published to crates.io, so release-plz has no registry baseline to
+# compute the next version from — left to itself it just mirrors Cargo.toml and
+# never bumps. `--registry-manifest-path` points it at a checkout of the last
+# release tag as the baseline, which restores conventional-commit versioning
+# from git history alone. The action does not expose that flag.
+#
+# RELEASE_PLZ_TOKEN is a PAT, not the default GITHUB_TOKEN: a tag or release
+# created by GITHUB_TOKEN does NOT trigger other workflows, so release.yml would
+# never build the binaries. The PAT needs `contents: write` + `pull-requests: write`.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  # Pin release-plz so the release process is reproducible; bump deliberately.
+  RELEASE_PLZ_VERSION: "0.3.158"
+
+jobs:
+  release-plz:
+    runs-on: ubuntu-latest
+    # Serialize: two quick pushes must not race to tag or to update the same PR.
+    concurrency:
+      group: release-plz
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags are required to diff against the last release.
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install release-plz
+        run: |
+          curl -fsSL "https://github.com/release-plz/release-plz/releases/download/release-plz-v${RELEASE_PLZ_VERSION}/release-plz-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C /usr/local/bin release-plz
+          release-plz --version
+
+      - name: Use the last release tag as the version baseline
+        id: baseline
+        run: |
+          tag="$(git tag --list 'v*' --sort=-version:refname | head -n1)"
+          if [ -n "$tag" ]; then
+            # A worktree outside the repo keeps the working tree clean (an
+            # untracked dir inside it would trip release-plz's dirty-tree check).
+            git worktree add --detach "${RUNNER_TEMP}/release-baseline" "$tag"
+            echo "arg=--registry-manifest-path ${RUNNER_TEMP}/release-baseline/Cargo.toml" >> "$GITHUB_OUTPUT"
+            echo "Baseline: $tag"
+          else
+            echo "arg=" >> "$GITHUB_OUTPUT"
+            echo "No release tag yet; the first release uses the current version."
+          fi
+
+      - name: Tag and publish a merged version bump
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: release-plz release ${{ steps.baseline.outputs.arg }} --git-token "$GITHUB_TOKEN"
+
+      - name: Open or update the release PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: release-plz release-pr ${{ steps.baseline.outputs.arg }} --git-token "$GITHUB_TOKEN"

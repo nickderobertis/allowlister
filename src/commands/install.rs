@@ -1,62 +1,29 @@
-//! `allowlister install` — merge an allowlist file (or a built-in profile) into
-//! a target config, creating it if absent. The merge is by rule name, so
+//! `allowlister install` — merge an allowlist (or a built-in profile) into a
+//! target config, creating it if absent. The merge is by rule name, so
 //! re-running is idempotent: a rule already present is left in place rather than
-//! duplicated. This is the "get started from a known-good ruleset" path; `init`
-//! writes a minimal starter, `install` layers a curated profile onto whatever
-//! you already have.
+//! duplicated. This is the "layer a curated ruleset onto what you already have"
+//! path; `init` writes a fresh config (and wires up the hook). Both share the
+//! source resolution and merge in [`super::profile`].
 
-use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Map, Value};
-
-use crate::config;
-use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-
-/// The built-in profiles, embedded from `examples/recommended/` so they ship
-/// inside the binary and stay byte-for-byte in sync with the files the
-/// recommended-profile tests pin.
-const READ_ONLY: &str = include_str!("../../examples/recommended/read-only.json");
-const REPO_WRITE: &str = include_str!("../../examples/recommended/repo-write.json");
+use crate::{commands::profile, errors::Result};
 
 /// Merge `source` into the chosen target config. `--global` (the default)
 /// targets the user config, `--local` a project `.allowlister.json`, and
 /// `output` an explicit path. `source` is a built-in profile name or a file
 /// path.
 pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> Result<i32> {
-    let source = resolve_source(source)?;
-
-    // Vouch for what we are about to install: every rule must compile, so a
-    // broken profile fails loudly here instead of landing half-applied. The
-    // built-in profiles are already gated by `tests/recommended.rs`, so
-    // re-compiling their 54+ rules on every install is pure overhead — only
-    // untrusted file sources need the check.
-    if !source.trusted {
-        let validated = config::compile_str(&source.text, &source.label);
-        if !validated.warnings.is_empty() {
-            return Err(Error::InvalidConfig {
-                origin: source.label,
-                message: format!("rules do not compile:\n{}", validated.warnings.join("\n")),
-            });
-        }
-    }
-
-    let incoming = rules_of(parse_config(&source.text, &source.label)?, &source.label)?;
-    if incoming.is_empty() {
-        return Err(Error::InvalidConfig {
-            origin: source.label,
-            message: "contains no rules to install".to_string(),
-        });
-    }
+    let source = profile::resolve_source(source)?;
+    profile::validate(&source)?;
+    let incoming = profile::incoming_rules(&source)?;
 
     let target = target_path(local, output)?;
     let created = !target.exists();
-    let mut target_doc = read_target(&target)?;
-    let merge = merge_rules(&mut target_doc, &target, incoming)?;
-
-    write_config(&target, &target_doc)?;
+    let mut target_doc = profile::read_target(&target)?;
+    let merge = profile::merge_rules(&mut target_doc, &target, incoming)?;
+    profile::write_config(&target, &target_doc)?;
 
     let verb = if created { "Created" } else { "Updated" };
     println!("{verb} {} from {}.", target.display(), source.label);
@@ -64,51 +31,15 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
         "  {} rule(s) added, {} already present ({} total).",
         merge.added, merge.skipped, merge.total
     );
-    // A brand-new config still needs the hook wired up to do anything; hand the
-    // user the same snippet `init` would, since `init` refuses once a config
-    // exists.
+    // A brand-new config still needs the hook wired up to do anything; point the
+    // user at the snippet `init` would print, since `install` does not touch
+    // harness settings itself.
     if created {
         println!();
         super::init::print_hook_setup();
     }
 
     Ok(0)
-}
-
-/// A resolved source: its config text, a label for messages, and whether it is
-/// trusted (a built-in profile validated at build time) or an untrusted file
-/// that must be compile-checked before install.
-struct Source {
-    label: String,
-    text: String,
-    trusted: bool,
-}
-
-/// Resolve `source` to its config text. An existing file always wins, so a
-/// built-in name only applies when no such file exists.
-fn resolve_source(source: &str) -> Result<Source> {
-    let path = Path::new(source);
-    if path.is_file() {
-        let text = fs::read_to_string(path).map_err(|err| Error::Read {
-            path: path.to_path_buf(),
-            source: err,
-        })?;
-        return Ok(Source {
-            label: source.to_string(),
-            text,
-            trusted: false,
-        });
-    }
-    let (label, text) = match source {
-        "read-only" => ("built-in profile 'read-only'", READ_ONLY),
-        "repo-write" => ("built-in profile 'repo-write'", REPO_WRITE),
-        _ => return Err(Error::UnknownSource(source.to_string())),
-    };
-    Ok(Source {
-        label: label.to_string(),
-        text: text.to_string(),
-        trusted: true,
-    })
 }
 
 /// Where the merge result is written.
@@ -120,132 +51,18 @@ fn target_path(local: bool, output: Option<&Path>) -> Result<PathBuf> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         return Ok(configfs::local_config_path(&cwd));
     }
-    configfs::default_user_config_path(&Env::from_process()).ok_or(Error::NoConfigHome)
-}
-
-/// Parse config JSON, mapping a syntax error to a typed boundary error.
-fn parse_config(text: &str, label: &str) -> Result<Value> {
-    serde_json::from_str(text).map_err(|err| Error::InvalidConfig {
-        origin: label.to_string(),
-        message: format!("invalid JSON: {err}"),
-    })
-}
-
-/// The `rules` array of a config document, taken by value so the array moves out
-/// rather than being cloned. A document without a `rules` key has no rules.
-fn rules_of(doc: Value, label: &str) -> Result<Vec<Value>> {
-    let mut obj = match doc {
-        Value::Object(obj) => obj,
-        _ => {
-            return Err(Error::InvalidConfig {
-                origin: label.to_string(),
-                message: "expected a JSON object".to_string(),
-            })
-        }
-    };
-    match obj.remove("rules") {
-        None => Ok(Vec::new()),
-        Some(Value::Array(rules)) => Ok(rules),
-        Some(_) => Err(Error::InvalidConfig {
-            origin: label.to_string(),
-            message: "'rules' must be an array".to_string(),
-        }),
-    }
-}
-
-/// Read the target config, or an empty object if it does not exist yet. A
-/// malformed existing target is an error: never clobber a file we cannot parse.
-fn read_target(target: &Path) -> Result<Value> {
-    if !target.exists() {
-        return Ok(Value::Object(Map::new()));
-    }
-    let text = fs::read_to_string(target).map_err(|err| Error::Read {
-        path: target.to_path_buf(),
-        source: err,
-    })?;
-    parse_config(&text, &target.display().to_string())
-}
-
-/// Counts from a merge, for the user-facing summary.
-struct Merge {
-    added: usize,
-    skipped: usize,
-    total: usize,
-}
-
-/// Append every incoming rule whose `name` is not already present in `target`.
-/// Rules with no `name` cannot be deduplicated, so they are always appended.
-fn merge_rules(target: &mut Value, target_path: &Path, incoming: Vec<Value>) -> Result<Merge> {
-    let label = target_path.display().to_string();
-    let obj = target.as_object_mut().ok_or_else(|| Error::InvalidConfig {
-        origin: label.clone(),
-        message: "expected a JSON object".to_string(),
-    })?;
-    let rules = obj
-        .entry("rules")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let rules = rules.as_array_mut().ok_or_else(|| Error::InvalidConfig {
-        origin: label,
-        message: "'rules' must be an array".to_string(),
-    })?;
-
-    let mut seen: HashSet<String> = rules
-        .iter()
-        .filter_map(|rule| rule.get("name").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect();
-
-    let mut added = 0;
-    let mut skipped = 0;
-    for rule in incoming {
-        // Compute the name as an owned value first so the rule is free to move.
-        let name = rule.get("name").and_then(Value::as_str).map(str::to_string);
-        match name {
-            Some(name) if seen.contains(&name) => skipped += 1,
-            Some(name) => {
-                seen.insert(name);
-                rules.push(rule);
-                added += 1;
-            }
-            None => {
-                rules.push(rule);
-                added += 1;
-            }
-        }
-    }
-
-    Ok(Merge {
-        added,
-        skipped,
-        total: rules.len(),
-    })
-}
-
-/// Serialize the merged document (pretty, trailing newline) and write it,
-/// creating parent directories as needed.
-fn write_config(target: &Path, doc: &Value) -> Result<()> {
-    if let Some(parent) = target.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|err| Error::Write {
-                path: parent.to_path_buf(),
-                source: err,
-            })?;
-        }
-    }
-    let mut json = serde_json::to_string_pretty(doc).map_err(|err| Error::InvalidConfig {
-        origin: target.display().to_string(),
-        message: format!("could not serialize merged config: {err}"),
-    })?;
-    json.push('\n');
-    fs::write(target, json).map_err(|err| Error::Write {
-        path: target.to_path_buf(),
-        source: err,
-    })
+    configfs::default_user_config_path(&Env::from_process())
+        .ok_or(crate::errors::Error::NoConfigHome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
+    use crate::errors::Error;
+    use serde_json::Value;
+    use std::collections::HashSet;
+    use std::fs;
     use tempfile::TempDir;
 
     fn read(path: &Path) -> Value {

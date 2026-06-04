@@ -235,18 +235,145 @@ fn explain_prints_fragment_table_and_verdict() {
 }
 
 #[test]
-fn init_local_writes_config_and_prints_snippet() {
+fn init_local_writes_config_and_registers_hook() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("allowlister")
         .unwrap()
-        .arg("init")
-        .arg("--local")
+        .args(["init", "--local"])
         .current_dir(dir.path())
         .assert()
         .success()
         .stdout(predicate::str::contains("allowlister hook claude-code"))
         .stdout(predicate::str::contains("do NOT add"));
+    // Both the config and the registered hook land under the project dir.
     assert!(dir.path().join(".allowlister.json").is_file());
+    let settings = dir.path().join(".claude/settings.json");
+    assert!(settings.is_file(), "the Bash hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook claude-code"
+    );
+}
+
+#[test]
+fn init_no_hooks_skips_settings_and_prints_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Add this to ~/.claude/settings.json",
+        ));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".claude/settings.json").exists(),
+        "--no-hooks must not touch settings.json"
+    );
+}
+
+#[test]
+fn init_profile_installs_a_curated_ruleset() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--profile", "read-only", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("read-only"));
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".allowlister.json")).unwrap())
+            .unwrap();
+    assert!(
+        doc["rules"].as_array().unwrap().len() > 30,
+        "the read-only profile carries many rules"
+    );
+
+    // The freshly initialized profile actually gates: a pure read allows.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "git status", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn init_interactive_flow_reads_answers_from_stdin() {
+    let dir = TempDir::new().unwrap();
+    // Answers: 2 = project-local, 2 = read-only, n = skip hooks.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--interactive"])
+        .current_dir(dir.path())
+        .write_stdin("2\n2\nn\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Which starting ruleset?"));
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join(".allowlister.json")).unwrap())
+            .unwrap();
+    assert!(
+        doc["rules"].as_array().unwrap().len() > 30,
+        "chose read-only"
+    );
+    assert!(
+        !dir.path().join(".claude/settings.json").exists(),
+        "answered 'n' to the hook prompt"
+    );
+}
+
+#[test]
+fn init_force_overwrites_an_existing_config() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join(".allowlister.json"), "{}").unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "init",
+            "--local",
+            "--force",
+            "--profile",
+            "read-only",
+            "--no-hooks",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let text = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
+    assert!(text.contains("\"rules\""), "the empty config was replaced");
+}
+
+#[test]
+fn init_merges_the_hook_into_existing_settings() {
+    let dir = TempDir::new().unwrap();
+    let claude = dir.path().join(".claude");
+    fs::create_dir_all(&claude).unwrap();
+    // A settings file the user already owns: must be preserved, not clobbered.
+    fs::write(
+        claude.join("settings.json"),
+        r#"{"$schema":"x","model":"opus","permissions":{"allow":["Bash(ls *)"]}}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let doc: Value =
+        serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(doc["model"], "opus", "existing keys are preserved");
+    assert_eq!(doc["permissions"]["allow"][0], "Bash(ls *)");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook claude-code"
+    );
 }
 
 #[test]
@@ -264,16 +391,19 @@ fn init_refuses_to_overwrite_existing_config() {
 }
 
 #[test]
-fn init_global_writes_under_xdg() {
+fn init_global_writes_under_xdg_and_registers_hook_under_home() {
     let xdg = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
     Command::cargo_bin("allowlister")
         .unwrap()
-        .arg("init")
-        .arg("--global")
+        .args(["init", "--global"])
         .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
         .assert()
         .success();
+    // The config follows XDG; the Claude hook is always under HOME/.claude.
     assert!(xdg.path().join("allowlister/config.json").is_file());
+    assert!(home.path().join(".claude/settings.json").is_file());
 }
 
 #[test]
@@ -281,8 +411,7 @@ fn init_global_falls_back_to_home_config() {
     let home = TempDir::new().unwrap();
     Command::cargo_bin("allowlister")
         .unwrap()
-        .arg("init")
-        .arg("--global")
+        .args(["init", "--global"])
         .env_remove("XDG_CONFIG_HOME")
         .env("HOME", home.path())
         .assert()
@@ -291,6 +420,7 @@ fn init_global_falls_back_to_home_config() {
         .path()
         .join(".config/allowlister/config.json")
         .is_file());
+    assert!(home.path().join(".claude/settings.json").is_file());
 }
 
 #[test]
