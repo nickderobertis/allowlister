@@ -778,4 +778,105 @@ mod tests {
             .iter()
             .any(|(argv, role)| argv[0] == "git" && *role == Role::Substitution));
     }
+
+    #[test]
+    fn if_elif_else_branches_are_walked() {
+        let frags = argvs("if true; then git status; elif false; then git diff; else echo x; fi");
+        let names: Vec<&str> = frags.iter().map(|(a, _)| a[0].as_str()).collect();
+        assert!(names.contains(&"git"));
+        assert!(names.contains(&"echo"));
+        assert!(frags.iter().all(|(_, role)| *role == Role::Subshell));
+    }
+
+    #[test]
+    fn arithmetic_for_loop_body_is_walked() {
+        let frags = argvs("for ((i = 0; i < 2; i++)); do echo $i; done");
+        assert!(frags
+            .iter()
+            .any(|(argv, role)| argv[0] == "echo" && *role == Role::Subshell));
+    }
+
+    #[test]
+    fn extended_test_runs_no_command() {
+        // `[[ … ]]` is a builtin conditional; on its own it gates nothing.
+        assert!(analyze("[[ -f /etc/hosts ]]").fragments.is_empty());
+        let frags = argvs("[[ -f x ]] && echo ok");
+        assert!(frags.iter().any(|(argv, _)| argv[0] == "echo"));
+    }
+
+    #[test]
+    fn arithmetic_command_runs_nothing() {
+        assert!(analyze("(( count++ ))").fragments.is_empty());
+    }
+
+    #[test]
+    fn coprocess_does_not_panic() {
+        // Behavior varies by parser; only the no-panic contract is asserted.
+        let _ = analyze("coproc git log --oneline");
+    }
+
+    #[test]
+    fn process_substitution_as_redirect_target_is_walked() {
+        let analysis = analyze("wc -l < <(git log --oneline)");
+        assert!(analysis.fragments.iter().any(|f| f.argv[0] == "wc"));
+    }
+
+    #[test]
+    fn duplicate_input_fd_is_neutral() {
+        let frag = analyze("cat <&3").fragments.pop().unwrap();
+        assert!(frag
+            .redirections
+            .iter()
+            .any(|r| r.class == RedirClass::Neutral));
+    }
+
+    #[test]
+    fn read_write_redirect_is_captured() {
+        let frag = analyze("cat <> /tmp/rw").fragments.pop().unwrap();
+        assert!(!frag.redirections.is_empty());
+    }
+
+    #[test]
+    fn backquoted_substitution_is_evaluated() {
+        let frags = argvs("echo `git rev-parse HEAD`");
+        assert!(frags
+            .iter()
+            .any(|(argv, role)| argv[0] == "git" && *role == Role::Substitution));
+    }
+
+    #[test]
+    fn pure_backquoted_command_name_is_suppressed() {
+        let analysis = analyze("`some_unknown_cmd`");
+        assert!(analysis
+            .fragments
+            .iter()
+            .any(|f| f.argv[0] == "some_unknown_cmd" && f.role == Role::Substitution));
+        assert!(!analysis.warnings.is_empty());
+    }
+
+    #[test]
+    fn substitution_parse_error_warns() {
+        let analysis = analyze("echo $(for x)");
+        assert!(analysis.warnings.iter().any(|w| w.contains("parse error")));
+    }
+
+    #[test]
+    fn deep_substitution_nesting_hits_recursion_limit() {
+        let mut src = String::from("echo hi");
+        for _ in 0..70 {
+            src = format!("echo $({src})");
+        }
+        let analysis = analyze(&src);
+        assert!(analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("recursion limit")));
+    }
+
+    #[test]
+    fn wrapper_option_double_dash_terminates() {
+        // `--` ends the wrapper's own options; the command after it is gated.
+        let frags = argvs("nice -n 5 -- git status");
+        assert!(frags.iter().any(|(argv, _)| argv[0] == "git"));
+    }
 }
