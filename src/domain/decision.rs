@@ -141,19 +141,25 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
     let mut matched_allows: Vec<&Rule> = Vec::new();
 
     for rule in rules {
-        if !rule.matches(fragment) {
-            continue;
-        }
         match rule.action {
+            // Deny rules also see read-redirection targets, so `cat < secret` is
+            // denied exactly like `cat secret`. Allow rules match argv only — a
+            // redirection must never be what grants permission.
             Action::Deny => {
-                return FragmentDecision {
-                    fragment: fragment.clone(),
-                    verdict: Verdict::Deny,
-                    rule_name: Some(rule.name.clone()),
-                    reason: format!("denied by rule '{}'", rule.name),
-                };
+                if rule.matches_including_read_redirections(fragment) {
+                    return FragmentDecision {
+                        fragment: fragment.clone(),
+                        verdict: Verdict::Deny,
+                        rule_name: Some(rule.name.clone()),
+                        reason: format!("denied by rule '{}'", rule.name),
+                    };
+                }
             }
-            Action::Allow => matched_allows.push(rule),
+            Action::Allow => {
+                if rule.matches(fragment) {
+                    matched_allows.push(rule);
+                }
+            }
         }
     }
 
@@ -314,6 +320,23 @@ mod tests {
         // command that redirects output is denied.
         let rules = vec![allow("echo", "echo *")];
         assert_eq!(evaluate("echo hi > /tmp/x", &rules).verdict, Verdict::Deny);
+    }
+
+    #[test]
+    fn secret_read_via_input_redirection_is_denied() {
+        // The allow rule grants `cat` and its default policy permits reading any
+        // named file, but the deny rule must still fire on the redirected secret.
+        let rules = vec![
+            allow("read", "cat *"),
+            allow("read-bare", "cat"),
+            deny("secret", "cat *@(id_rsa|*/.ssh/*)*"),
+        ];
+        assert_eq!(
+            evaluate("cat < ~/.ssh/id_rsa", &rules).verdict,
+            Verdict::Deny
+        );
+        // The plain-argument form was already denied; both paths agree now.
+        assert_eq!(evaluate("cat ~/.ssh/id_rsa", &rules).verdict, Verdict::Deny);
     }
 
     #[test]

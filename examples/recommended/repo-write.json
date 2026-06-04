@@ -559,8 +559,8 @@
     },
     {
       "name": "deny: never read private keys or credentials",
-      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials) through common file readers, to limit accidental exfiltration.",
-      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials)*",
+      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials, the gh OAuth token store) through common file readers, to limit accidental exfiltration. The engine also applies this to input-redirection targets, so `cat < ~/.ssh/id_rsa` is denied like `cat ~/.ssh/id_rsa`.",
+      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials|.config/gh/hosts.yml|*/.config/gh/hosts.yml)*",
       "action": "deny"
     },
     {
