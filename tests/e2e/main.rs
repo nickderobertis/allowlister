@@ -403,3 +403,68 @@ fn install_unknown_source_fails() {
         .failure()
         .stderr(predicate::str::contains("not a file or a built-in profile"));
 }
+
+#[test]
+fn install_from_a_file_source_via_the_binary() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("custom.json");
+    fs::write(
+        &src,
+        r#"{"rules":[{"name":"allow-ls","match":"ls*","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("config.json");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .arg("install")
+        .arg(&src)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"))
+        .stdout(predicate::str::contains("1 rule(s) added"));
+    assert!(out.is_file());
+}
+
+#[test]
+fn check_defer_returns_exit_zero() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["check", "some_unknown_tool --flag", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn init_global_without_home_or_xdg_fails() {
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--global"])
+        .env_remove("HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "could not locate a home/config directory",
+        ));
+}
+
+#[test]
+fn init_global_reports_a_write_failure() {
+    // Point XDG at a regular file so creating the config's parent directory
+    // fails; the error must surface as a write failure, not a panic.
+    let dir = TempDir::new().unwrap();
+    let xdg_is_a_file = dir.path().join("xdg");
+    fs::write(&xdg_is_a_file, "x").unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--global"])
+        .env("XDG_CONFIG_HOME", &xdg_is_a_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to write"));
+}

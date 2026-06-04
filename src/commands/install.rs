@@ -394,4 +394,16 @@ mod tests {
         run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
         assert_eq!(read(&target)["rules"].as_array().unwrap().len(), 1);
     }
+
+    #[test]
+    fn write_into_a_path_under_a_file_errors() {
+        let dir = TempDir::new().unwrap();
+        // A regular file stands where a directory would need to be, so creating
+        // the target's parent fails — exercising the write error path.
+        let blocker = dir.path().join("not-a-dir");
+        fs::write(&blocker, "x").unwrap();
+        let target = blocker.join("config.json");
+        let err = run("read-only", true, false, Some(target.as_path())).unwrap_err();
+        assert!(matches!(err, Error::Write { .. }));
+    }
 }

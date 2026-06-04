@@ -8,8 +8,11 @@
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-# Minimum line coverage enforced by `test-cov` (a miss fails the command).
-cov-min := "85"
+# Minimum coverage enforced by `test-cov` — applied to lines, functions, and
+# regions alike (a miss in any fails the command). Actual coverage runs ahead of
+# this; the floor keeps a small margin so a routine change cannot silently erode
+# it, while leaving room for genuinely hard-to-hit I/O error paths.
+cov-min := "90"
 
 # Pinned developer tool versions (installed by `bootstrap`). CI installs the
 # latest of each via the install action; these pins keep local setups reproducible.
@@ -93,11 +96,14 @@ test-e2e:
 test-claude:
     @bash scripts/e2e-claude.sh
 
-# Enforce line coverage across all tests; a miss fails the command.
+# Enforce line, function, and region coverage across all tests; a miss in any
+# one fails the command.
 test-cov:
     cargo llvm-cov nextest --locked --all-features \
         --ignore-filename-regex '(src/main\.rs|tests/)' \
-        --fail-under-lines {{cov-min}}
+        --fail-under-lines {{cov-min}} \
+        --fail-under-functions {{cov-min}} \
+        --fail-under-regions {{cov-min}}
 
 # Build the API docs (warnings are errors).
 doc:
