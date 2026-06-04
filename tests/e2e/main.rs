@@ -452,3 +452,19 @@ fn init_global_without_home_or_xdg_fails() {
             "could not locate a home/config directory",
         ));
 }
+
+#[test]
+fn init_global_reports_a_write_failure() {
+    // Point XDG at a regular file so creating the config's parent directory
+    // fails; the error must surface as a write failure, not a panic.
+    let dir = TempDir::new().unwrap();
+    let xdg_is_a_file = dir.path().join("xdg");
+    fs::write(&xdg_is_a_file, "x").unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--global"])
+        .env("XDG_CONFIG_HOME", &xdg_is_a_file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to write"));
+}
