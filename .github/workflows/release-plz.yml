@@ -67,10 +67,14 @@ jobs:
             echo "No release tag yet; the first release uses the current version."
           fi
 
+      # `release` only ever publishes the version already in Cargo.toml, and
+      # decides whether to by checking for its git tag — so it needs no version
+      # baseline (and does not accept --registry-manifest-path). Only the bump
+      # computation in `release-pr` does.
       - name: Tag and publish a merged version bump
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
-        run: release-plz release ${{ steps.baseline.outputs.arg }} --git-token "$GITHUB_TOKEN"
+        run: release-plz release --git-token "$GITHUB_TOKEN"
 
       - name: Open or update the release PR
         env:
