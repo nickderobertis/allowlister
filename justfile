@@ -101,6 +101,7 @@ test-claude:
 test-cov:
     cargo llvm-cov nextest --locked --all-features \
         --ignore-filename-regex '(src/main\.rs|tests/)' \
+        --show-missing-lines \
         --fail-under-lines {{cov-min}} \
         --fail-under-functions {{cov-min}} \
         --fail-under-regions {{cov-min}}
