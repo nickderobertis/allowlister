@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/nickderobertis/allowlister/compare/v0.1.0...v0.1.1) - 2026-06-04
+
+### Added
+
+- *(init)* consolidate setup into init and automate releases ([#13](https://github.com/nickderobertis/allowlister/pull/13))
+
+### Documentation
+
+- add asdf plugin as an install option ([#7](https://github.com/nickderobertis/allowlister/pull/7))
+
+### Other
+
+- Add `install` command to merge allowlists/profiles into a config ([#6](https://github.com/nickderobertis/allowlister/pull/6))
+- Add recommended read-only and repo-write allowlist profiles ([#5](https://github.com/nickderobertis/allowlister/pull/5))
+- Match metacharacter-free globs as literals, skipping regex build
+- Add cross-platform install script for prebuilt binaries ([#3](https://github.com/nickderobertis/allowlister/pull/3))
+- Add performance benchmarking and profiling suite
+
+### Performance
+
+- skip redundant validation when installing a built-in profile ([#9](https://github.com/nickderobertis/allowlister/pull/9))
+
 ## [0.1.0] - 2026-06-03
 
 ### Added
