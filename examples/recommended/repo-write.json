@@ -251,9 +251,9 @@
       "action": "allow"
     },
     {
-      "name": "write: echo/printf/cat redirect to scratch and build outputs",
-      "description": "Source edits go through the harness's file tools, not the shell; shell redirection is for scratch and build artifacts only.",
-      "match": "@(echo|printf|cat) *",
+      "name": "write: text filters redirect to scratch and build outputs",
+      "description": "Text read/transform filters may redirect stdout only to scratch and build locations (/tmp, build/dist/target, logs, caches); any other target stays denied, so an allowed reader cannot leak into source or system paths. Source edits go through the harness's file tools, not shell redirection. The redirect policy gates only >/>>, so tools that write via an argument (tee, sort -o, sed -i) are not granted by this rule.",
+      "match": "@(echo|printf|cat|head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr) *",
       "action": "allow",
       "redirections": {
         "write_glob": [
