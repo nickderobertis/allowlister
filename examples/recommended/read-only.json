@@ -4,8 +4,8 @@
   "rules": [
 
     { "name": "read: shell inspection commands",
-      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo) or has a file-writing mode (tee, sort -o).",
-      "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|xxd|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq|man|less|more)?( *)",
+      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo), has a file-writing mode (tee, sort -o, shuf -o, xxd's output-file positional), or is an interactive pager that can spawn a shell (less/more via !cmd or LESSOPEN, man via -P). shuf stays (its only write mode, -o, is denied below).",
+      "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq)?( *)",
       "action": "allow" },
 
     { "name": "read: echo/printf/cat may write scratch under /tmp",
@@ -15,8 +15,8 @@
       "redirections": { "write_glob": ["/tmp/*", "/tmp/**"] } },
 
     { "name": "read: stream filters in pipes and substitutions",
-      "description": "Stream editors that are safe reading stdin in a pipe but can write files when run standalone (sed -i, sort -o, awk print>file); scope them to pipe/substitution roles.",
-      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|less|more|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr)?( *)",
+      "description": "Filters that transform stdin→stdout, scoped to pipe/substitution roles. Excludes awk and sed: both are interpreters that run arbitrary shell (awk system()/print|cmd, GNU sed e/w), so role-scoping does not contain them. Also excludes uniq and xxd, whose optional output-file positional writes a file in any role. sort stays here but its -o write mode is denied below.",
+      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|sort|cut|tr|jq|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|hexdump|strings|pr)?( *)",
       "action": "allow",
       "roles": ["pipe_filter", "substitution"] },
 
@@ -181,17 +181,24 @@
       "match": "go mod @(graph|verify|why|edit -print)?( *)",
       "action": "allow" },
 
-    { "name": "make read-only: dry-run / introspection",
-      "match": "make @(-n|--dry-run|--just-print|-p|--print-data-base|-q|--question|--version|-v|--help|-h)?( *)",
+    { "name": "make read-only: version/help only",
+      "description": "Only --version/--help, which print and exit without reading a Makefile. The introspection modes (-n/--dry-run, -p/--print-data-base, -q/--question) are NOT reads: make expands top-level $(shell ...), `!=`, and $(eval ...) during the Makefile read-in phase that all three perform, so they can run project-controlled shell. -n only suppresses recipe execution, not this evaluation.",
+      "match": "make @(--version|-v|--help|-h)?( *)",
       "action": "allow" },
 
     { "name": "just read-only: list / show recipes (does not run them)",
-      "match": "just @(--list|-l|--summary|--show|-s|--dump|--variables|--evaluate|--fmt --check|--version|--help)?( *)",
+      "description": "Listing and showing recipes parse the Justfile without evaluating it. --evaluate is excluded: it forces evaluation of all variables, running any backtick or shell-derived assignment (project-controlled shell).",
+      "match": "just @(--list|-l|--summary|--show|-s|--dump|--variables|--fmt --check|--version|--help)?( *)",
       "action": "allow" },
 
     { "name": "deny: never read private keys or credentials",
-      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials) through common file readers, to limit accidental exfiltration.",
-      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials)*",
+      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials, the gh OAuth token store) through common file readers, to limit accidental exfiltration. The engine also applies this to input-redirection targets, so `cat < ~/.ssh/id_rsa` is denied like `cat ~/.ssh/id_rsa`.",
+      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials|.config/gh/hosts.yml|*/.config/gh/hosts.yml)*",
+      "action": "deny" },
+
+    { "name": "deny: sort/shuf write to a file (-o/--output)",
+      "description": "sort and shuf are otherwise safe stdin→stdout filters, but -o/--output (and the attached -oFILE / --output=FILE forms) writes a file in any role, bypassing the shell-redirection gate. Block that one write mode rather than dropping the tools.",
+      "match": "@(sort|shuf)*@( -o| --output)*",
       "action": "deny" },
 
     { "name": "deny: recursive rm",

@@ -91,6 +91,13 @@ impl RedirPolicy {
         if self.deny {
             return false;
         }
+        // A `..` component lets a write escape the directory its glob pins it to:
+        // `/tmp/../etc/x` matches `/tmp/*` yet resolves outside `/tmp/`. The engine
+        // does no filesystem I/O (so it cannot resolve symlinks), but it can reject
+        // textual parent-directory traversal outright before glob matching.
+        if has_parent_traversal(target) {
+            return false;
+        }
         match &self.write_glob {
             None => false, // writes are denied unless explicitly permitted.
             Some(globs) => globs.iter().any(|g| g.is_match(target).unwrap_or(false)),
@@ -224,6 +231,38 @@ impl Rule {
     pub fn matches(&self, fragment: &Fragment) -> bool {
         self.matches_role(fragment.role) && self.matches_argv(&fragment.argv)
     }
+
+    /// Like [`matches`](Rule::matches), but also treats each file-target **read**
+    /// redirection as if its target were a trailing argument.
+    ///
+    /// A sensitive-path deny rule (`cat ~/.ssh/id_rsa`) is written against argv,
+    /// but `cat < ~/.ssh/id_rsa` hides the path in a redirection that an
+    /// argv-only match never inspects — so the secret read slips through. Applying
+    /// the same pattern to read-redirection targets closes that gap. Only deny
+    /// rules use this; allow matching stays argv-only so a redirection can never
+    /// *grant* permission it otherwise would not.
+    pub fn matches_including_read_redirections(&self, fragment: &Fragment) -> bool {
+        if self.matches(fragment) {
+            return true;
+        }
+        if !self.matches_role(fragment.role) {
+            return false;
+        }
+        fragment.redirections.iter().any(|redir| {
+            redir.class == RedirClass::Read
+                && redir.target.as_deref().is_some_and(|target| {
+                    let mut argv = fragment.argv.clone();
+                    argv.push(target.to_string());
+                    self.matches_argv(&argv)
+                })
+        })
+    }
+}
+
+/// Whether a path contains a `..` component (parent-directory traversal). Split
+/// on both separators so a redirection target is judged the same on any platform.
+fn has_parent_traversal(path: &str) -> bool {
+    path.split(['/', '\\']).any(|component| component == "..")
 }
 
 fn build_matcher(pattern: &str, kind: MatchKind) -> Result<Matcher, String> {
@@ -427,5 +466,72 @@ mod tests {
     fn match_kind_parse_rejects_unknown() {
         assert!(MatchKind::parse(Some("nope")).is_err());
         assert_eq!(MatchKind::parse(None).unwrap(), MatchKind::Glob);
+    }
+
+    #[test]
+    fn read_redirection_target_is_matched_for_deny() {
+        // A deny rule written against argv (`cat ~/.ssh/id_rsa`) must also fire on
+        // the redirection form (`cat < ~/.ssh/id_rsa`), where the secret path lives
+        // in a redirection rather than argv.
+        let rule = Rule::from_match(
+            "secret".into(),
+            Action::Deny,
+            "@(cat|base64) *@(id_rsa|*/.ssh/*)*",
+            MatchKind::Glob,
+            None,
+            RedirPolicy::default(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap();
+
+        let redirected = fragment("cat < ~/.ssh/id_rsa");
+        assert!(
+            !rule.matches(&redirected),
+            "argv alone does not name the path"
+        );
+        assert!(rule.matches_including_read_redirections(&redirected));
+
+        // A write redirection is not a read and must not be folded into argv here.
+        let written = fragment("cat foo > ~/.ssh/id_rsa");
+        assert!(!rule.matches_including_read_redirections(&written));
+
+        // An innocent read target still does not match.
+        let benign = fragment("cat < /etc/hosts");
+        assert!(!rule.matches_including_read_redirections(&benign));
+    }
+
+    #[test]
+    fn parent_traversal_write_target_is_rejected() {
+        let policy = RedirPolicy::new(false, Some(vec![compile_glob("/tmp/**").unwrap()]), None);
+        let ok = analyze("echo x > /tmp/scratch")
+            .fragments
+            .pop()
+            .unwrap()
+            .redirections
+            .pop()
+            .unwrap();
+        assert!(policy.permits(&ok));
+        // `/tmp/../escape` glob-matches `/tmp/**` but escapes the scratch dir.
+        let escape = analyze("echo x > /tmp/../escape")
+            .fragments
+            .pop()
+            .unwrap()
+            .redirections
+            .pop()
+            .unwrap();
+        assert!(!policy.permits(&escape));
+    }
+
+    #[test]
+    fn has_parent_traversal_detects_dotdot_components_only() {
+        assert!(has_parent_traversal("/tmp/../x"));
+        assert!(has_parent_traversal(".."));
+        assert!(has_parent_traversal("a/b/../c"));
+        assert!(has_parent_traversal("a\\..\\b"));
+        // A `..` that is only part of a name is not a traversal component.
+        assert!(!has_parent_traversal("/tmp/scratch"));
+        assert!(!has_parent_traversal("..foo"));
+        assert!(!has_parent_traversal("foo..bar"));
     }
 }
