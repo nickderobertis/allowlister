@@ -9,10 +9,12 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 # Minimum coverage enforced by `test-cov` — applied to lines, functions, and
-# regions alike (a miss in any fails the command). Actual coverage runs ahead of
-# this; the floor keeps a small margin so a routine change cannot silently erode
-# it, while leaving room for genuinely hard-to-hit I/O error paths.
-cov-min := "90"
+# regions alike (a miss in any fails the command). Actual coverage sits just
+# above this on all three metrics; most of what remains uncovered is defensive
+# I/O error handling that cannot fail under test (root reads everything, valid
+# JSON always serializes). New code that adds reachable branches should ship with
+# tests rather than lean on the margin.
+cov-min := "95"
 
 # Pinned developer tool versions (installed by `bootstrap`). CI installs the
 # latest of each via the install action; these pins keep local setups reproducible.

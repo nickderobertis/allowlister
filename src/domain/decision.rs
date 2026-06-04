@@ -291,4 +291,48 @@ mod tests {
         let analysis = analyze("f() { rm -rf /; }; f");
         assert_eq!(decide(&analysis, &rules).verdict, Verdict::Defer);
     }
+
+    #[test]
+    fn empty_command_allows() {
+        let rules: Vec<Rule> = Vec::new();
+        let result = evaluate("", &rules);
+        assert_eq!(result.verdict, Verdict::Allow);
+        assert!(result.reason.contains("empty"));
+    }
+
+    #[test]
+    fn unparseable_command_defers() {
+        let rules: Vec<Rule> = Vec::new();
+        let result = evaluate("for do done (", &rules);
+        assert_eq!(result.verdict, Verdict::Defer);
+        assert!(result.reason.contains("warnings"));
+    }
+
+    #[test]
+    fn allowed_command_with_forbidden_redirect_denies() {
+        // The default redirection policy denies writes, so an otherwise-allowed
+        // command that redirects output is denied.
+        let rules = vec![allow("echo", "echo *")];
+        assert_eq!(evaluate("echo hi > /tmp/x", &rules).verdict, Verdict::Deny);
+    }
+
+    #[test]
+    fn allowed_command_with_permitted_redirect_allows() {
+        let globs = vec!["/tmp/*".to_string()];
+        let rule = Rule::from_match(
+            "echo".into(),
+            Action::Allow,
+            "echo *",
+            MatchKind::Glob,
+            None,
+            RedirPolicy::from_globs(false, Some(globs.as_slice()), None).unwrap(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            evaluate("echo hi > /tmp/x", &[rule]).verdict,
+            Verdict::Allow
+        );
+    }
 }

@@ -406,4 +406,33 @@ mod tests {
         let err = run("read-only", true, false, Some(target.as_path())).unwrap_err();
         assert!(matches!(err, Error::Write { .. }));
     }
+
+    #[test]
+    fn reading_a_directory_target_errors() {
+        let dir = TempDir::new().unwrap();
+        // The target path is a directory, so reading it back as config fails.
+        let target = dir.path().join("a-directory");
+        fs::create_dir(&target).unwrap();
+        let err = run("read-only", true, false, Some(target.as_path())).unwrap_err();
+        assert!(matches!(err, Error::Read { .. }));
+    }
+
+    #[test]
+    fn merging_into_a_non_object_target_errors() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        // Valid JSON, but a top-level array is not a config object.
+        fs::write(&target, "[]").unwrap();
+        let err = run("read-only", true, false, Some(target.as_path())).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn merging_into_a_target_with_non_array_rules_errors() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.json");
+        fs::write(&target, r#"{"rules": 5}"#).unwrap();
+        let err = run("read-only", true, false, Some(target.as_path())).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
 }
