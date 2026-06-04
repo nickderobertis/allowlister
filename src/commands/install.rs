@@ -26,23 +26,27 @@ const REPO_WRITE: &str = include_str!("../../examples/recommended/repo-write.jso
 /// `output` an explicit path. `source` is a built-in profile name or a file
 /// path.
 pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> Result<i32> {
-    let (label, text) = resolve_source(source)?;
+    let source = resolve_source(source)?;
 
-    // Vouch for what we are about to install: every rule must compile. A broken
-    // profile should fail loudly here, never land half-applied in someone's
-    // config.
-    let validated = config::compile_str(&text, &label);
-    if !validated.warnings.is_empty() {
-        return Err(Error::InvalidConfig {
-            origin: label,
-            message: format!("rules do not compile:\n{}", validated.warnings.join("\n")),
-        });
+    // Vouch for what we are about to install: every rule must compile, so a
+    // broken profile fails loudly here instead of landing half-applied. The
+    // built-in profiles are already gated by `tests/recommended.rs`, so
+    // re-compiling their 54+ rules on every install is pure overhead — only
+    // untrusted file sources need the check.
+    if !source.trusted {
+        let validated = config::compile_str(&source.text, &source.label);
+        if !validated.warnings.is_empty() {
+            return Err(Error::InvalidConfig {
+                origin: source.label,
+                message: format!("rules do not compile:\n{}", validated.warnings.join("\n")),
+            });
+        }
     }
 
-    let incoming = rules_of(&parse_config(&text, &label)?, &label)?;
+    let incoming = rules_of(parse_config(&source.text, &source.label)?, &source.label)?;
     if incoming.is_empty() {
         return Err(Error::InvalidConfig {
-            origin: label,
+            origin: source.label,
             message: "contains no rules to install".to_string(),
         });
     }
@@ -55,7 +59,7 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
     write_config(&target, &target_doc)?;
 
     let verb = if created { "Created" } else { "Updated" };
-    println!("{verb} {} from {label}.", target.display());
+    println!("{verb} {} from {}.", target.display(), source.label);
     println!(
         "  {} rule(s) added, {} already present ({} total).",
         merge.added, merge.skipped, merge.total
@@ -71,25 +75,40 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
     Ok(0)
 }
 
-/// Resolve `source` to its config text and a label for messages. An existing
-/// file always wins, so a built-in name only applies when no such file exists.
-fn resolve_source(source: &str) -> Result<(String, String)> {
+/// A resolved source: its config text, a label for messages, and whether it is
+/// trusted (a built-in profile validated at build time) or an untrusted file
+/// that must be compile-checked before install.
+struct Source {
+    label: String,
+    text: String,
+    trusted: bool,
+}
+
+/// Resolve `source` to its config text. An existing file always wins, so a
+/// built-in name only applies when no such file exists.
+fn resolve_source(source: &str) -> Result<Source> {
     let path = Path::new(source);
     if path.is_file() {
         let text = fs::read_to_string(path).map_err(|err| Error::Read {
             path: path.to_path_buf(),
             source: err,
         })?;
-        return Ok((source.to_string(), text));
+        return Ok(Source {
+            label: source.to_string(),
+            text,
+            trusted: false,
+        });
     }
-    match source {
-        "read-only" => Ok(("built-in profile 'read-only'".to_string(), READ_ONLY.into())),
-        "repo-write" => Ok((
-            "built-in profile 'repo-write'".to_string(),
-            REPO_WRITE.into(),
-        )),
-        _ => Err(Error::UnknownSource(source.to_string())),
-    }
+    let (label, text) = match source {
+        "read-only" => ("built-in profile 'read-only'", READ_ONLY),
+        "repo-write" => ("built-in profile 'repo-write'", REPO_WRITE),
+        _ => return Err(Error::UnknownSource(source.to_string())),
+    };
+    Ok(Source {
+        label: label.to_string(),
+        text: text.to_string(),
+        trusted: true,
+    })
 }
 
 /// Where the merge result is written.
@@ -112,16 +131,21 @@ fn parse_config(text: &str, label: &str) -> Result<Value> {
     })
 }
 
-/// The `rules` array of a config document, cloned as owned values for merging.
-/// A document without a `rules` key has no rules (an empty list).
-fn rules_of(doc: &Value, label: &str) -> Result<Vec<Value>> {
-    let obj = doc.as_object().ok_or_else(|| Error::InvalidConfig {
-        origin: label.to_string(),
-        message: "expected a JSON object".to_string(),
-    })?;
-    match obj.get("rules") {
+/// The `rules` array of a config document, taken by value so the array moves out
+/// rather than being cloned. A document without a `rules` key has no rules.
+fn rules_of(doc: Value, label: &str) -> Result<Vec<Value>> {
+    let mut obj = match doc {
+        Value::Object(obj) => obj,
+        _ => {
+            return Err(Error::InvalidConfig {
+                origin: label.to_string(),
+                message: "expected a JSON object".to_string(),
+            })
+        }
+    };
+    match obj.remove("rules") {
         None => Ok(Vec::new()),
-        Some(Value::Array(rules)) => Ok(rules.clone()),
+        Some(Value::Array(rules)) => Ok(rules),
         Some(_) => Err(Error::InvalidConfig {
             origin: label.to_string(),
             message: "'rules' must be an array".to_string(),
