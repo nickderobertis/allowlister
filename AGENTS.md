@@ -74,6 +74,10 @@ edition 2021, toolchain pinned in `rust-toolchain.toml`.
   Release, which builds, archives, and checksums cross-platform binaries. Never
   bump the version or tag by hand. Commit messages are the release input — keep
   them conventional. crates.io publishing is a separate, opt-in step.
+- Pre-1.0, the minor slot acts as the major: `fix`/`perf`/`feat` are patches and
+  only `feat!`/`BREAKING CHANGE` bumps the minor (`0.1.x`→`0.2.0`). Cut a
+  feature-milestone release with `feat!`; a plain `feat` cannot bump the minor
+  before 1.0 (a Cargo-semver constraint, not a setting).
 
 ## Workflow
 

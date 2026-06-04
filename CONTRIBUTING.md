@@ -99,13 +99,39 @@ full gate. Do not mutate dependencies outside this flow without explicit review.
 
 ## Releasing
 
-1. Bump `version` in `Cargo.toml`; move the `CHANGELOG.md` "Unreleased" notes
-   under a new version heading.
-2. `just full-check`.
-3. Commit, tag `vX.Y.Z`, and push the tag.
-4. CI must pass; the release workflow builds, archives, checksums, and uploads
-   the cross-platform binaries. crates.io publishing is a separate gated step
-   requiring `CARGO_REGISTRY_TOKEN`.
+Releases are automated from [Conventional Commits](https://www.conventionalcommits.org)
+by [release-plz](https://release-plz.dev) — you never edit the version or tag by
+hand:
+
+1. Land changes on `main` with conventional commit messages.
+2. release-plz opens a **release PR** that bumps `Cargo.toml` + `Cargo.lock` and
+   writes the `CHANGELOG.md` section.
+3. Merge the release PR. release-plz tags `vX.Y.Z` and cuts the GitHub Release;
+   that triggers the binary build, which archives, checksums, and uploads the
+   cross-platform artifacts. crates.io publishing is a separate, opt-in step
+   (`PUBLISH_TO_CRATES_IO` + `CARGO_REGISTRY_TOKEN`).
+
+### Commit type → version bump
+
+The commit type drives the bump. **Pre-1.0** the project follows Cargo's 0.x
+rules, where the *minor* slot acts as the major:
+
+| Commit type | Effect pre-1.0 | Effect at ≥1.0 |
+| --- | --- | --- |
+| `fix:` / `perf:` | patch (`0.1.0`→`0.1.1`) | patch |
+| `feat:` | patch (`0.1.0`→`0.1.1`) | minor |
+| `feat!:` / `BREAKING CHANGE:` | **minor** (`0.1.1`→`0.2.0`) | major |
+| `docs:` / `test:` / `chore:` / `ci:` | no release | no release |
+
+So **to cut a feature-milestone (minor) release before 1.0, mark the commit
+`feat!:` (or add a `BREAKING CHANGE:` footer)** — a plain `feat:` is only a
+patch until the project reaches 1.0. This is a release-plz/Cargo-semver
+constraint, not a preference: there is no config to make a plain `feat` bump the
+minor pre-1.0.
+
+Because the crate is not published to crates.io, the release workflow feeds
+release-plz the previous release tag as its version baseline
+(`--registry-manifest-path`), so the bump is computed from git history alone.
 
 ## Agent-assisted contributions
 
