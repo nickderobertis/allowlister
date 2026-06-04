@@ -350,10 +350,20 @@ Releases are automated from [Conventional Commits](https://www.conventionalcommi
 by [release-plz](https://release-plz.dev). You never bump the version or tag by
 hand:
 
-1. Land changes on `main` with conventional commit messages (`feat:` → minor,
-   `fix:`/`perf:` → patch, `!`/`BREAKING CHANGE:` → major; `docs`/`test`/`chore`/
-   `ci` do not release). Pre-1.0 follows Cargo's 0.x rules, so a `feat` is a
-   patch until 1.0.
+1. Land changes on `main` with conventional commit messages. The type drives the
+   bump — and **pre-1.0 the minor slot acts as the major**, per Cargo's 0.x
+   rules:
+
+   | Commit type | Pre-1.0 | ≥1.0 |
+   | --- | --- | --- |
+   | `fix:` / `perf:` | patch (`0.1.0`→`0.1.1`) | patch |
+   | `feat:` | patch (`0.1.0`→`0.1.1`) | minor |
+   | `feat!:` / `BREAKING CHANGE:` | **minor** (`0.1.1`→`0.2.0`) | major |
+   | `docs` / `test` / `chore` / `ci` | no release | no release |
+
+   So before 1.0, cut a feature-milestone (minor) release with `feat!:` — a plain
+   `feat:` is only a patch. There is no setting to change this; it's how Cargo
+   semver treats `0.x`.
 2. The [`release-plz`](.github/workflows/release-plz.yml) workflow opens a
    **release PR** that bumps `Cargo.toml` + `Cargo.lock` and writes the
    `CHANGELOG.md` section from those commits.
