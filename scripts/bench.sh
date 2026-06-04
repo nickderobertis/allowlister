@@ -73,8 +73,9 @@ trap cleanup EXIT
 
 proj="$sandbox/project"
 initdir="$sandbox/initdir"
+installdir="$sandbox/installdir"
 payload="$sandbox/payload.json"
-mkdir -p "$proj/.git" "$initdir" "$sandbox/xdg/allowlister"
+mkdir -p "$proj/.git" "$initdir" "$installdir" "$sandbox/xdg/allowlister"
 cp "$repo_root/examples/user-config.json" "$sandbox/xdg/allowlister/config.json"
 cp "$repo_root/examples/project-config.json" "$proj/.allowlister.json"
 
@@ -92,12 +93,14 @@ mkdir -p "$out"
 
 note "» benchmarking $bin"
 # One invocation so a single export holds every command. `--prepare` clears the
-# init target before each run (init refuses to overwrite); it is a harmless
-# no-op for the other commands. The deny case exits 2 by design, so it is
-# wrapped with `|| true` to keep hyperfine from treating it as a failure.
+# write targets before each run — `init` refuses to overwrite, and `install`
+# should measure the create-from-empty path each time, not an idempotent re-run;
+# removing both is a harmless no-op for the read-only commands. The deny case
+# exits 2 by design, so it is wrapped with `|| true` to keep hyperfine from
+# treating it as a failure.
 hyperfine \
     --warmup "$warmup" "${runs_opt[@]}" \
-    --prepare "rm -f '$initdir/.allowlister.json'" \
+    --prepare "rm -f '$initdir/.allowlister.json' '$installdir/config.json'" \
     --export-json "$out/results.json" \
     --export-markdown "$out/results.md" \
     -n "version" "'$bin' --version" \
@@ -108,7 +111,8 @@ hyperfine \
     -n "check:json" "'$bin' check 'gh pr list' --json --cwd '$proj'" \
     -n "explain" "'$bin' explain 'gh pr list | head -20 | wc -l' --cwd '$proj'" \
     -n "hook:allow" "'$bin' hook claude-code < '$payload'" \
-    -n "init:local" "cd '$initdir' && '$bin' init --local > /dev/null"
+    -n "init:local" "cd '$initdir' && '$bin' init --local > /dev/null" \
+    -n "install:profile" "'$bin' install read-only --output '$installdir/config.json' > /dev/null"
 
 note ""
 note "✓ wrote $out/results.json"
