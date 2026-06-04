@@ -250,9 +250,23 @@ fn repo_write_allows_scratch_and_build_redirection() {
     check(&r, "echo x > ./dist/app.js", Verdict::Allow);
     check(&r, "echo x > run.log", Verdict::Allow);
     check(&r, "echo x > /tmp/s", Verdict::Allow);
+    // Read/transform filters (not just echo/printf/cat) get the same scratch and
+    // build redirect grant; without it an allowed filter carrying a forbidden
+    // redirect is a hard deny, which blocked routine `jq ... > /tmp/x` work.
+    check(&r, "jq -S . input.json > /tmp/out.json", Verdict::Allow);
+    check(&r, "git show HEAD:f | jq . > /tmp/b.json", Verdict::Allow);
+    check(&r, "sed s/a/b/ f > /tmp/out", Verdict::Allow);
+    check(&r, "grep TODO src > build/todos.txt", Verdict::Allow);
+    check(&r, "sort f > ./dist/sorted", Verdict::Allow);
     // System paths and in-tree source are still blocked.
     check(&r, "echo x > /etc/passwd", Verdict::Deny);
     check(&r, "echo x > src/main.rs", Verdict::Deny);
+    // The wider command list does not widen the target: filters cannot reach
+    // source, system paths, parent-dir escapes, or secret reads via redirect.
+    check(&r, "jq . a > /etc/passwd", Verdict::Deny);
+    check(&r, "jq . a > src/main.rs", Verdict::Deny);
+    check(&r, "jq . a > /tmp/../etc/x", Verdict::Deny);
+    check(&r, "cat ~/.ssh/id_rsa > /tmp/leak", Verdict::Deny);
 }
 
 #[test]
