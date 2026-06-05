@@ -1416,3 +1416,163 @@ fn init_global_reports_a_write_failure() {
         .failure()
         .stderr(predicate::str::contains("failed to write"));
 }
+
+// ---- Non-shell tool-call gating (built-in + MCP tools) ----
+
+/// A project dir whose config gates non-shell tool calls: reads scoped to the
+/// repo (and `.ssh`/`.pem` denied), web_fetch to github only, and a portable MCP
+/// rule pair.
+fn tool_project() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    let allow_glob = format!("{}/**", dir.path().to_string_lossy());
+    let cfg = serde_json::json!({
+        "rules": [
+            { "name": "reads in repo", "tool": "read", "action": "allow",
+              "params": { "path": [allow_glob] } },
+            { "name": "no secrets", "tool": "read", "action": "deny",
+              "params": { "path": ["**/.ssh/**", "**/*.pem"] } },
+            { "name": "web github only", "tool": "web_fetch", "action": "allow",
+              "params": { "url": ["https://github.com/**"] } },
+            { "name": "mcp linear read-only", "tool": "mcp", "action": "allow",
+              "params": { "mcp_server": ["linear"], "mcp_tool": ["@(list|get)*"] } },
+            { "name": "mcp deny destructive", "tool": "mcp", "action": "deny",
+              "params": { "mcp_tool": ["delete*"] } }
+        ]
+    })
+    .to_string();
+    fs::write(dir.path().join(".allowlister.json"), cfg).unwrap();
+    dir
+}
+
+/// A binary command with an empty hermetic HOME/XDG so no ambient user config
+/// leaks into a tool-gating test.
+fn hermetic_cmd(empty: &TempDir) -> Command {
+    let mut cmd = Command::cargo_bin("allowlister").unwrap();
+    cmd.env("XDG_CONFIG_HOME", empty.path())
+        .env("HOME", empty.path());
+    cmd
+}
+
+#[test]
+fn check_tool_read_allows_inside_repo() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let path = format!("{}/src/main.rs", project.path().to_string_lossy());
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "read", "--param"])
+        .arg(format!("path={path}"))
+        .arg("--cwd")
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn check_tool_read_denies_ssh_key_with_exit_two() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/home/u/.ssh/id_rsa",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+}
+
+#[test]
+fn check_tool_read_outside_rules_defers() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/etc/hosts",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn check_tool_mcp_portable_rule_denies_destructive() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "mcp__linear__delete_issue", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+}
+
+#[test]
+fn check_tool_bad_param_is_a_usage_error() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "read", "--param", "nokey", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("must be key=value"));
+}
+
+#[test]
+fn claude_hook_read_tool_denies_secret_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": { "file_path": "/home/u/.ssh/id_rsa" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // The hook always exits 0; the deny rides in the decision JSON.
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn claude_hook_read_tool_allows_inside_repo_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let file = format!("{}/a.txt", project.path().to_string_lossy());
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": { "file_path": file },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "allow");
+}

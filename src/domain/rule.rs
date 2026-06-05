@@ -6,9 +6,11 @@
 //! cheap regex/string test thereafter.
 
 use fancy_regex::Regex;
+use serde_json::Value;
 
 use super::analyzer::{Fragment, RedirClass, Redirection, Role};
 use super::glob::{compile_glob, compile_glob_matcher, compile_regex, Matcher};
+use super::toolcall::{Capability, ParamKey, ToolCall};
 
 /// Whether a rule grants or blocks a matching fragment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +312,219 @@ fn build_matcher(pattern: &str, kind: MatchKind) -> Result<Matcher, String> {
     }
 }
 
+/// Which tool a [`ToolRule`] selects: a canonical capability, or a glob over the
+/// raw harness tool name (the escape hatch for MCP tools, e.g. `mcp__github__*`,
+/// and any tool not yet given a canonical capability).
+#[derive(Debug, Clone)]
+enum ToolSelector {
+    Capability(Capability),
+    RawName(Matcher),
+}
+
+/// Where a [`ParamConstraint`] reads its value(s) from a [`ToolCall`].
+#[derive(Debug, Clone)]
+enum ParamSelector {
+    /// A canonical scalar parameter the adapter normalized.
+    Canonical(ParamKey),
+    /// A path into the raw tool-input JSON, for server-defined parameters.
+    JsonPath(Vec<PathSeg>),
+}
+
+/// One step of a JSON path: an object key or an array index.
+#[derive(Debug, Clone)]
+enum PathSeg {
+    Key(String),
+    Index(usize),
+}
+
+/// One AND-ed parameter constraint on a tool rule.
+#[derive(Debug, Clone)]
+struct ParamConstraint {
+    selector: ParamSelector,
+    /// Any-of globs (mirrors [`RedirPolicy`]'s `globs.iter().any`).
+    globs: Vec<Matcher>,
+    /// Reject a value containing `..` before glob matching (path params only).
+    reject_traversal: bool,
+}
+
+/// A rule that matches a normalized [`ToolCall`] — the non-shell sibling of
+/// [`Rule`]. It reuses the same [`Action`], the same `Matcher` engine, and
+/// (via [`decision`](super::decision)) the same deny-supreme / first-allow /
+/// else-defer composition. The structural shell [`Rule`] is left untouched, so a
+/// tool call and a bash command never cross paths.
+#[derive(Debug, Clone)]
+pub struct ToolRule {
+    pub name: String,
+    pub action: Action,
+    selector: ToolSelector,
+    /// AND-ed parameter constraints; an empty list matches the capability/name
+    /// regardless of parameters (a capability-only rule).
+    params: Vec<ParamConstraint>,
+    pub description: String,
+    pub source: String,
+}
+
+impl ToolRule {
+    /// Compile a tool rule from its config pieces. `tool` is a capability word
+    /// (`read`/`write`/…/`mcp`) or, failing that, a glob over the raw tool name.
+    /// Canonical `params` and raw `jsonpath` constraints both compile their globs
+    /// with the rule's `kind`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compile(
+        name: String,
+        action: Action,
+        tool: &str,
+        kind: MatchKind,
+        params: &[(ParamKey, Vec<String>)],
+        jsonpath: &[(String, Vec<String>)],
+        description: String,
+        source: String,
+    ) -> Result<ToolRule, String> {
+        let selector = match Capability::parse(tool) {
+            Some(cap) => ToolSelector::Capability(cap),
+            None => ToolSelector::RawName(build_matcher(tool, kind)?),
+        };
+
+        let mut constraints = Vec::with_capacity(params.len() + jsonpath.len());
+        for (key, globs) in params {
+            constraints.push(ParamConstraint {
+                selector: ParamSelector::Canonical(*key),
+                globs: compile_matchers(globs, kind)?,
+                reject_traversal: key.is_path_like(),
+            });
+        }
+        for (path, globs) in jsonpath {
+            let segs = parse_json_path(path);
+            if segs.is_empty() {
+                return Err(format!("invalid jsonpath '{path}': empty path"));
+            }
+            constraints.push(ParamConstraint {
+                selector: ParamSelector::JsonPath(segs),
+                globs: compile_matchers(globs, kind)?,
+                reject_traversal: false,
+            });
+        }
+
+        Ok(ToolRule {
+            name,
+            action,
+            selector,
+            params: constraints,
+            description,
+            source,
+        })
+    }
+
+    /// Whether this rule matches a tool call: the selector matches **and** every
+    /// parameter constraint holds.
+    pub fn matches(&self, call: &ToolCall) -> bool {
+        let selected = match &self.selector {
+            ToolSelector::Capability(cap) => call.capability == *cap,
+            ToolSelector::RawName(matcher) => matcher.is_match(&call.tool_name),
+        };
+        selected && self.params.iter().all(|c| c.matches(call, self.action))
+    }
+}
+
+impl ParamConstraint {
+    /// Whether this constraint is satisfied. The allow/deny asymmetry mirrors the
+    /// shell engine: an **allow** requires *every* resolved value to be permitted
+    /// (and a `..` escape is never permitted), while a **deny** fires if *any*
+    /// value is dangerous. A constraint whose parameter is absent never matches —
+    /// absence is undecided, so it defers rather than allowing or denying.
+    fn matches(&self, call: &ToolCall, action: Action) -> bool {
+        let values = self.resolve(call);
+        if values.is_empty() {
+            return false;
+        }
+        let hit = |value: &str| self.globs.iter().any(|g| g.is_match(value));
+        match action {
+            Action::Allow => values
+                .iter()
+                .all(|v| !(self.reject_traversal && has_parent_traversal(v)) && hit(v)),
+            Action::Deny => values.iter().any(|v| hit(v)),
+        }
+    }
+
+    /// The string value(s) this constraint should test. A canonical parameter is
+    /// at most one value; a JSON path may resolve to several (an array yields one
+    /// per element).
+    fn resolve(&self, call: &ToolCall) -> Vec<String> {
+        match &self.selector {
+            ParamSelector::Canonical(key) => call
+                .params
+                .get(*key)
+                .map(str::to_string)
+                .into_iter()
+                .collect(),
+            ParamSelector::JsonPath(path) => resolve_json_path(&call.raw, path),
+        }
+    }
+}
+
+/// Compile a list of glob patterns into matchers under one match kind.
+fn compile_matchers(patterns: &[String], kind: MatchKind) -> Result<Vec<Matcher>, String> {
+    patterns.iter().map(|p| build_matcher(p, kind)).collect()
+}
+
+/// Parse a dotted JSON path with optional `[index]` array steps, e.g.
+/// `args.files[0].path` → `[Key("args"), Key("files"), Index(0), Key("path")]`.
+fn parse_json_path(path: &str) -> Vec<PathSeg> {
+    let mut segs = Vec::new();
+    for part in path.split('.') {
+        let (name, rest) = match part.find('[') {
+            Some(open) => (&part[..open], &part[open..]),
+            None => (part, ""),
+        };
+        if !name.is_empty() {
+            segs.push(PathSeg::Key(name.to_string()));
+        }
+        let mut chars = rest;
+        while let Some(open) = chars.find('[') {
+            let Some(close_rel) = chars[open..].find(']') else {
+                break;
+            };
+            let close = open + close_rel;
+            if let Ok(n) = chars[open + 1..close].parse::<usize>() {
+                segs.push(PathSeg::Index(n));
+            }
+            chars = &chars[close + 1..];
+        }
+    }
+    segs
+}
+
+/// Resolve a JSON path against a value, returning the string form of the
+/// leaf(s). A string/number/bool stringifies; an array yields one string per
+/// element; an object leaf or an unresolved path yields nothing.
+fn resolve_json_path(root: &Value, path: &[PathSeg]) -> Vec<String> {
+    let mut current = root;
+    for seg in path {
+        match seg {
+            PathSeg::Key(key) => match current.get(key.as_str()) {
+                Some(next) => current = next,
+                None => return Vec::new(),
+            },
+            PathSeg::Index(idx) => match current.get(*idx) {
+                Some(next) => current = next,
+                None => return Vec::new(),
+            },
+        }
+    }
+    value_to_strings(current)
+}
+
+fn value_to_strings(value: &Value) -> Vec<String> {
+    match value {
+        Value::String(s) => vec![s.clone()],
+        Value::Number(n) => vec![n.to_string()],
+        Value::Bool(b) => vec![b.to_string()],
+        Value::Array(items) => items.iter().flat_map(value_to_strings).collect(),
+        // An object leaf has no scalar value (path deeper); null is absent.
+        Value::Object(_) | Value::Null => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +781,56 @@ mod tests {
         assert!(!has_parent_traversal("/tmp/scratch"));
         assert!(!has_parent_traversal("..foo"));
         assert!(!has_parent_traversal("foo..bar"));
+    }
+
+    #[test]
+    fn json_path_resolves_scalars_arrays_and_misses() {
+        let raw = serde_json::json!({
+            "a": { "b": ["x", 7, true] },
+            "obj": { "k": "v" },
+            "n": 3
+        });
+        let at = |p: &str| resolve_json_path(&raw, &parse_json_path(p));
+        assert_eq!(at("a.b[0]"), vec!["x".to_string()]);
+        // Numbers and bools stringify so they can be globbed.
+        assert_eq!(at("a.b[1]"), vec!["7".to_string()]);
+        assert_eq!(at("a.b[2]"), vec!["true".to_string()]);
+        // A whole array yields one string per element.
+        assert_eq!(
+            at("a.b"),
+            vec!["x".to_string(), "7".to_string(), "true".to_string()]
+        );
+        assert_eq!(at("n"), vec!["3".to_string()]);
+        // Object leaf, missing key, out-of-range index, and indexing a non-array
+        // all resolve to nothing (the constraint then fails rather than panics).
+        assert!(at("obj").is_empty());
+        assert!(at("missing").is_empty());
+        assert!(at("a.b[9]").is_empty());
+        assert!(at("n[0]").is_empty());
+    }
+
+    #[test]
+    fn parse_json_path_tolerates_garbage_without_panic() {
+        // Dotted keys plus chained indices.
+        assert_eq!(parse_json_path("a.b[0][1].c").len(), 5);
+        // A non-numeric index contributes no Index step; an unterminated bracket
+        // simply stops — neither panics.
+        assert_eq!(parse_json_path("a[x]").len(), 1);
+        assert_eq!(parse_json_path("a[0").len(), 1);
+    }
+
+    #[test]
+    fn tool_rule_rejects_empty_jsonpath_key() {
+        let result = ToolRule::compile(
+            "r".into(),
+            Action::Allow,
+            "mcp",
+            MatchKind::Glob,
+            &[],
+            &[(String::new(), vec!["x".into()])],
+            String::new(),
+            String::new(),
+        );
+        assert!(result.is_err());
     }
 }

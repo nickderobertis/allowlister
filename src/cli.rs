@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
 
 use crate::commands;
 use crate::errors::Result;
@@ -29,11 +29,12 @@ enum Command {
         harness: Harness,
     },
 
-    /// Evaluate a single command and print its verdict. Exit 0 for
-    /// allow/defer, 2 for deny.
+    /// Evaluate a single command — or, with `--tool`, a non-shell tool call —
+    /// and print its verdict. Exit 0 for allow/defer, 2 for deny.
+    #[command(group(ArgGroup::new("target").required(true).args(["command", "tool"])))]
     Check {
-        /// The shell command to evaluate.
-        command: String,
+        /// The shell command to evaluate. Omit when using `--tool`.
+        command: Option<String>,
         /// Directory used for project-config discovery (defaults to the current
         /// directory).
         #[arg(long)]
@@ -41,6 +42,19 @@ enum Command {
         /// Emit a machine-readable JSON object instead of human text.
         #[arg(long)]
         json: bool,
+        /// Evaluate a non-shell tool call instead: a capability
+        /// (read/write/edit/glob/grep/web_fetch/web_search/mcp) or a raw tool
+        /// name such as `mcp__github__create_issue`.
+        #[arg(long)]
+        tool: Option<String>,
+        /// A canonical tool parameter as `key=value` (repeatable), e.g.
+        /// `--param path=/repo/src/main.rs`. Requires `--tool`.
+        #[arg(long = "param", value_name = "KEY=VALUE", requires = "tool")]
+        param: Vec<String>,
+        /// Raw tool-input JSON object for server-defined parameters and
+        /// `jsonpath` rules, e.g. `--raw '{"owner":"acme"}'`. Requires `--tool`.
+        #[arg(long, value_name = "JSON", requires = "tool")]
+        raw: Option<String>,
     },
 
     /// Explain how a command is evaluated: config sources, fragments, and the
@@ -138,9 +152,21 @@ impl Cli {
     pub fn dispatch(self) -> Result<i32> {
         match self.command {
             Command::Hook { harness } => commands::hook::run(harness),
-            Command::Check { command, cwd, json } => {
-                commands::check::run(&command, cwd.as_deref(), json)
-            }
+            Command::Check {
+                command,
+                cwd,
+                json,
+                tool,
+                param,
+                raw,
+            } => commands::check::run(commands::check::CheckArgs {
+                command: command.as_deref(),
+                cwd: cwd.as_deref(),
+                json,
+                tool: tool.as_deref(),
+                params: &param,
+                raw: raw.as_deref(),
+            }),
             Command::Explain { command, cwd } => commands::explain::run(&command, cwd.as_deref()),
             Command::Init {
                 global,

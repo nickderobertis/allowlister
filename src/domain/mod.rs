@@ -11,7 +11,11 @@ mod glob;
 pub mod analyzer;
 pub mod decision;
 pub mod rule;
+pub mod toolcall;
 
 pub use analyzer::{analyze, Analysis, Fragment, RedirClass, Redirection, Role};
-pub use decision::{decide, evaluate, DecisionResult, FragmentDecision, Verdict};
-pub use rule::{Action, Grant, MatchKind, RedirPolicy, Rule};
+pub use decision::{
+    decide, evaluate, evaluate_tool_call, DecisionResult, FragmentDecision, Verdict,
+};
+pub use rule::{Action, Grant, MatchKind, RedirPolicy, Rule, ToolRule};
+pub use toolcall::{Capability, NormalizedParams, ParamKey, ToolCall};
