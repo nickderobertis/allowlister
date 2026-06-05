@@ -81,12 +81,14 @@ fn discovery_dir(input: &HookInput) -> &str {
 }
 
 fn write_decision<W: Write>(stdout: &mut W, permission: &str, message: &str) {
-    // Carry the reason under both `agentMessage` (camelCase, per Cursor's published
-    // hook type definitions) and `agent_message` (snake_case, per Cursor's hooks
-    // docs). Cursor ignores unknown keys, so emitting both delivers the reason
-    // whichever the running build reads. `permission` is the field that gates and
-    // is unambiguous. If writing fails Cursor treats the missing output as a
-    // fail-open (the command proceeds), which is the safe fallback.
+    // Carry the reason under both `agentMessage` (Cursor's published hook types,
+    // camelCase) and `agent_message` (Cursor's hooks docs, snake_case): the two
+    // disagree and we cannot tell which a given Cursor build reads, so emit both
+    // (Cursor ignores unknown keys). The message surfaces to the agent on `ask`;
+    // on `deny` Cursor substitutes its own generic "blocked by a hook" text and
+    // drops ours, which a hook cannot override. `permission` is the field that
+    // gates and is unambiguous. If writing fails Cursor treats the missing output
+    // as a fail-open (the command proceeds), which is the safe fallback.
     let output = serde_json::json!({
         "permission": permission,
         "agentMessage": message,
