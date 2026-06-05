@@ -1,13 +1,54 @@
 # allowlister
 
-A small, fast Rust CLI that hooks into AI coding agents (Claude Code, Cursor, and
-the OpenAI Codex CLI, and the GitHub Copilot CLI) and decides whether to
-**allow**, **deny**, or **defer** each shell command the agent wants to run.
+A small, fast Rust CLI that gates the shell commands your AI coding agents run —
+**a cross-platform allowlist for every major agent.** You write and maintain
+**one allowlist**, and allowlister enforces it identically across Claude Code,
+Cursor, GitHub Copilot CLI, OpenAI Codex CLI, Crush, Qwen Code, Goose, and
+OpenCode. For each command the agent wants to run it decides **allow**, **deny**,
+or **defer** — same engine, same config, no matter which agent is driving.
 
 It replaces the simplistic string-prefix allow lists that current agents ship
 with. Instead of classifying a command as safe or unsafe in the abstract,
 allowlister classifies each command by the **structural role** it plays in the
 shell expression it appears in.
+
+## One allowlist, every agent
+
+allowlister's rule engine is **harness-agnostic**: the same `(argv, role,
+redirections)` decision pipeline runs behind every agent. Only the thin
+stdin/stdout adapter that speaks each agent's hook protocol differs. So you keep a
+single allowlist — one `.allowlister.json` (or user-global config) — and it
+governs every agent below.
+
+| Agent | `--harness` | How allowlister gates it | Hook/config it writes |
+|-------|-------------|--------------------------|-----------------------|
+| Claude Code | `claude-code` | `PreToolUse` hook | `~/.claude/settings.json` |
+| Cursor | `cursor` | `beforeShellExecution` hook | `~/.cursor/hooks.json` |
+| GitHub Copilot CLI | `copilot` | `preToolUse` hook | `.github/hooks/allowlister.json` |
+| OpenAI Codex CLI | `codex` | `PreToolUse` hook | `~/.codex/hooks.json` |
+| Crush | `crush` | `PreToolUse` hook | `crush.json` |
+| Qwen Code | `qwen` | `PreToolUse` hook | `~/.qwen/settings.json` |
+| Goose | `goose` | `PreToolUse` hook (plugin) | `.agents/plugins/allowlister/` |
+| OpenCode | `opencode` | `tool.execute.before` plugin shim | `.opencode/plugin/allowlister.js` |
+
+Because the engine is shared, **every allowlister feature works on every agent** —
+you never re-learn or rewrite rules per tool:
+
+| Feature | Every agent above |
+|---------|:-----------------:|
+| Role-aware matching (standalone / pipe / subshell / substitution) | ✅ |
+| Whole-command composition (N commands → one verdict) | ✅ |
+| Glob, regex, and argv-pattern rules | ✅ |
+| Redirection policy (scope out-redirects to allowed paths) | ✅ |
+| Recommended profiles (`read-only`, `repo-write`) | ✅ |
+| One config, auto-merged from user + project scope | ✅ |
+| `allow` / `deny` / `defer` verdicts | ✅ |
+| Auto-registration via `allowlister init --harness <name>` | ✅ |
+| Fail-open on any internal error (never a spurious deny) | ✅ |
+| Live end-to-end tested against the real CLI | ✅ |
+
+Each adapter is verified end-to-end against the real agent (see
+[Live harness check](#live-harness-check-opt-in)).
 
 ## Why
 
@@ -133,27 +174,21 @@ into `~/.cursor/hooks.json` (or `./.cursor/hooks.json` for a project), just as
 idempotently. Cursor has no allow list to broaden, so there is no allow-list
 warning — the hook is the sole gate.
 
-For the **OpenAI Codex CLI** (`--harness codex`) it merges the `PreToolUse` hook
-into `~/.codex/hooks.json` (or `./.codex/hooks.json` for a project), scoped to the
-`Bash` tool. Codex's hook honors only a deny (it rejects a bare `allow`), so an
-allow or defer verdict emits nothing and hands the call back to Codex's normal
-flow. Codex reviews new hooks on startup — approve allowlister's hook when
-prompted to activate the gate.
-
-For **GitHub Copilot CLI** (`--harness copilot`) it writes the `preToolUse` hook
-to `./.github/hooks/allowlister.json` for a project (or
-`~/.copilot/hooks/allowlister.json` globally). Copilot loads a directory of hook
-files, so allowlister owns its own rather than merging a shared one. The hook is
-consulted before Copilot's permission service, so its `deny` blocks a command even
-when the agent runs with `--allow-all-tools`.
+For every other agent — **GitHub Copilot CLI** (`--harness copilot`), the **OpenAI
+Codex CLI** (`codex`), **Crush** (`crush`), **Qwen Code** (`qwen`), **Goose**
+(`goose`), and **OpenCode** (`opencode`) — `init` writes that agent's hook into the
+location shown in the [supported-harnesses table](#one-allowlist-every-agent),
+idempotently. None has an allow list to broaden, so the hook is the sole gate: a
+`deny` blocks a command even when the agent runs unattended (e.g. Copilot's
+`--allow-all-tools` or `GOOSE_MODE=auto`).
 
 Every choice is also a flag, so the same command scripts cleanly in CI:
 
 ```sh
 allowlister init --global --profile read-only   # user config, curated reads, Claude hook registered
 allowlister init --local  --harness cursor      # project config, Cursor hook registered
-allowlister init --local  --harness codex       # project config, Codex hook registered
-allowlister init --local  --harness copilot     # project config, Copilot hook registered
+allowlister init --local  --harness goose       # project config, Goose hook registered
+# …also: copilot, codex, crush, qwen, opencode
 allowlister init --local  --no-hooks            # print the snippet instead of registering
 allowlister init -y                              # take all defaults, no prompts
 ```
@@ -174,22 +209,22 @@ config later, use [`install`](#recommended-profiles).
 
 ```text
 allowlister hook <harness>        Read hook JSON on stdin, write a decision on stdout.
-                                  Harnesses: claude-code, cursor, codex, copilot.
+                                  Harnesses: claude-code, cursor, copilot, codex,
+                                  crush, qwen, goose, opencode.
 allowlister check '<cmd>' [--cwd P] [--json]
                                   Evaluate one command. Exit 0 for allow/defer, 2 for deny.
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local] [--profile SOURCE]
-                 [--harness claude-code|cursor|codex|copilot]
+                 [--harness claude-code|cursor|copilot|codex|crush|qwen|goose|opencode]
                  [--hooks | --no-hooks] [-i | -y] [--force]
                                   Set up: write a config from a ruleset (starter,
                                   read-only, repo-write, or a file) and register
-                                  the hook in the chosen harness's settings
-                                  (claude-code: settings.json; cursor/codex:
-                                  hooks.json; copilot:
-                                  .github/hooks/allowlister.json). Interactive on
-                                  a terminal; flags drive it in CI.
+                                  the hook in the chosen harness's settings (the
+                                  per-harness location is listed in the supported-
+                                  harnesses table). Interactive on a terminal;
+                                  flags drive it in CI.
 allowlister install <source> [--global | --local | --output P]
                                   Merge an allowlist (a built-in profile name —
                                   read-only or repo-write — or a path to a JSON
@@ -372,24 +407,27 @@ platform.
 ### Live harness check (opt-in)
 
 The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
-To verify the wiring against a *real* harness, three opt-in scripts set a sandbox
-project up with `allowlister init` — exercising the real hook-registration path —
-then drive the actual agent headless and assert that a denied command is blocked
-while an allowed command runs:
+To verify the wiring against a *real* harness, one opt-in script per agent sets a
+sandbox project up with `allowlister init` — exercising the real hook-registration
+path — then drives the actual agent headless and asserts that a denied command is
+blocked while an allowed command runs:
 
 ```sh
 just test-claude     # drives `claude`;       writes/reads .claude/settings.json
 just test-cursor     # drives `cursor-agent`; writes/reads .cursor/hooks.json
-just test-codex      # drives `codex`;   writes/reads .codex/hooks.json
-just test-copilot    # drives `copilot`; writes/reads .github/hooks/allowlister.json
+just test-copilot    # drives `copilot`;      writes/reads .github/hooks/allowlister.json
+just test-codex      # drives `codex`;        writes/reads .codex/hooks.json
+just test-crush      # drives `crush`;        writes/reads crush.json
+just test-qwen       # drives `qwen`;         writes/reads ~/.qwen/settings.json
+just test-goose      # drives `goose`;        writes/reads .agents/plugins/allowlister/
+just test-opencode   # drives `opencode`;     writes/reads .opencode/plugin/allowlister.js
 ```
 
 Each needs its harness binary, network, and a model call, so none is part of
 `just full-check` or CI. All skip cleanly (exit 0) when their CLI is not on
-`PATH`. The Codex and Copilot checks additionally prove the `deny` holds even when
-the agent's own approvals are relaxed — Codex under its no-approval/bypass modes
-and Copilot under `--allow-all-tools` — since the hook is consulted before the
-harness's permission service.
+`PATH`. Every check additionally proves the `deny` holds even when the agent is
+running fully autonomous (no human approver) — the hook is consulted before the
+agent's own permission flow, so allowlister is the authoritative gate.
 
 ## Releasing
 
