@@ -9,7 +9,7 @@ use std::path::PathBuf;
 /// Errors that can reach `main`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("harness '{0}' is not yet implemented (supported: claude-code, cursor)")]
+    #[error("harness '{0}' is not yet implemented (supported: claude-code, cursor, goose)")]
     HarnessUnimplemented(String),
 
     #[error("could not locate a home/config directory to write to")]

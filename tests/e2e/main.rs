@@ -83,6 +83,17 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// A Goose `PreToolUse` payload whose `working_dir` points at the sandbox
+    /// project dir. Goose names its shell tool `developer__shell` and carries the
+    /// cwd under `working_dir` (not `cwd`).
+    fn goose_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"event":"PreToolUse","tool_name":"developer__shell","tool_input":{{"command":{}}},"working_dir":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -97,6 +108,12 @@ fn decision_of(stdout: &[u8]) -> String {
 fn permission_of(stdout: &[u8]) -> String {
     let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
     value["permission"].as_str().unwrap().to_string()
+}
+
+/// Read the top-level `decision` field Goose's hook adapter writes for a block.
+fn goose_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["decision"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -271,6 +288,63 @@ fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn goose_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Goose's native block keyword is `block`, not `deny`.
+    assert_eq!(goose_decision_of(&output), "block");
+}
+
+#[test]
+fn goose_hook_allow_emits_empty_stdout() {
+    // A non-block verdict is a no-op: empty stdout hands the call back to Goose's
+    // normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn goose_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through to Goose's flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn goose_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion: Goose treats exit 2 as a block, so a parse failure
+    // must exit 0 (not 1/2) with empty stdout — never a block.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "goose"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
     sandbox
@@ -406,6 +480,53 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
     assert!(
         !dir.path().join(".cursor/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_goose_local_registers_plugin() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "goose"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook goose"))
+        // Goose has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Goose wires a plugin directory, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let plugin = dir.path().join(".agents/plugins/allowlister");
+    assert!(
+        plugin.join("plugin.json").is_file(),
+        "the manifest is written"
+    );
+    let hooks = plugin.join("hooks/hooks.json");
+    assert!(hooks.is_file(), "the goose hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "developer__shell");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook goose"
+    );
+}
+
+#[test]
+fn init_goose_no_hooks_prints_goose_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "goose", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".agents/plugins/allowlister"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".agents").exists(),
+        "--no-hooks must not write the plugin directory"
     );
 }
 

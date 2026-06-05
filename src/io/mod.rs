@@ -5,4 +5,5 @@
 pub mod claude_settings;
 pub mod configfs;
 pub mod cursor_settings;
+pub mod goose_settings;
 pub mod harness;

@@ -14,7 +14,7 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings};
+use crate::io::{claude_settings, cursor_settings, goose_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -76,6 +76,31 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
       { "command": "allowlister hook cursor" }
     ]
   }
+}"#;
+
+/// The `hooks/hooks.json` snippet `init --harness goose --no-hooks` prints for
+/// manual wiring: register the hook on Goose's `PreToolUse` event, scoped to the
+/// `developer__shell` tool. Goose has no permissions block, so there is nothing to
+/// deny here.
+const GOOSE_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "developer__shell",
+        "hooks": [
+          { "type": "command", "command": "allowlister hook goose", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}"#;
+
+/// The `plugin.json` manifest that accompanies the Goose hooks file — Goose
+/// discovers a plugin *directory*, not a single settings file.
+const GOOSE_MANIFEST_SNIPPET: &str = r#"{
+  "name": "allowlister",
+  "version": "0.1.0",
+  "description": "Gate AI-agent shell commands through allowlister."
 }"#;
 
 /// The one rule that matters wherever a config is landed: never broaden
@@ -263,6 +288,7 @@ fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Cursor => "Cursor",
+        Harness::Goose => "Goose",
         Harness::Copilot => "Copilot",
     }
 }
@@ -289,6 +315,12 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
+        Harness::Goose => {
+            let path = goose_settings::settings_path(global, cwd, env)?;
+            let change = goose_settings::register_hook(&path)?;
+            report_goose_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
     }
 }
@@ -302,6 +334,10 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         }
         Harness::Cursor => {
             let _ = write_cursor_hook_setup(out);
+            Ok(())
+        }
+        Harness::Goose => {
+            let _ = write_goose_hook_setup(out);
             Ok(())
         }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
@@ -368,6 +404,33 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what registering the Goose hook changed. Goose discovers a plugin
+/// directory rather than a single settings file, and has no permissions block, so
+/// there is no allow-list warning — just a note that the plugin activates on the
+/// next Goose start.
+fn report_goose_hook<W: Write>(out: &mut W, change: &goose_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the developer__shell PreToolUse hook.",
+            change.path.display(),
+            goose_settings::hook_command()
+        );
+        let _ = writeln!(
+            out,
+            "  Goose discovers the plugin on its next start — no enable flag or trust step."
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -395,6 +458,22 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
+/// Write the Goose plugin snippet. Goose discovers a plugin *directory*, so this
+/// describes both files: the manifest and the hooks config. Goose has no allow
+/// list to broaden, so there is no allow-list warning to print.
+fn write_goose_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Create the plugin under ~/.agents/plugins/allowlister/ (or .agents/plugins/allowlister/ per-repo)."
+    )?;
+    writeln!(out)?;
+    writeln!(out, "plugin.json:")?;
+    writeln!(out, "{GOOSE_MANIFEST_SNIPPET}")?;
+    writeln!(out)?;
+    writeln!(out, "hooks/hooks.json (merge with any existing keys):")?;
+    writeln!(out, "{GOOSE_SETTINGS_SNIPPET}")
 }
 
 #[cfg(test)]
@@ -723,6 +802,75 @@ mod tests {
         // The config still lands under XDG; only the hook wiring is harness-specific.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("home/.cursor/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_goose_local_registers_plugin() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Goose,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Goose writes a plugin directory, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let plugin = dir.path().join(".agents/plugins/allowlister");
+        assert!(
+            plugin.join("plugin.json").is_file(),
+            "the manifest is written"
+        );
+        let hooks = plugin.join("hooks/hooks.json");
+        assert!(hooks.is_file(), "the goose hook must be registered locally");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "developer__shell");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "allowlister hook goose"
+        );
+    }
+
+    #[test]
+    fn execute_goose_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Goose,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".agents").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(".agents/plugins/allowlister"));
+        assert!(text.contains("allowlister hook goose"));
+        // Goose has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_goose_global_writes_under_home_agents() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Goose,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir
+            .path()
+            .join("home/.agents/plugins/allowlister/hooks/hooks.json")
+            .is_file());
     }
 
     #[test]
