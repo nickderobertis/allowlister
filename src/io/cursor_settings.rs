@@ -27,9 +27,14 @@ const HOOK_COMMAND: &str = "allowlister hook cursor";
 /// A user-pinned version is preserved rather than overwritten.
 const HOOKS_VERSION: u64 = 1;
 
-/// The lifecycle event allowlister gates on: Cursor runs this before executing
-/// any shell command.
-const HOOK_EVENT: &str = "beforeShellExecution";
+/// The lifecycle events allowlister gates on: shell commands, file reads, and MCP
+/// tool calls, each on its own Cursor event. (Cursor has no pre-execution
+/// write/edit event, so writes/edits cannot be gated.)
+const HOOK_EVENTS: [&str; 3] = [
+    "beforeShellExecution",
+    "beforeReadFile",
+    "beforeMCPExecution",
+];
 
 /// Where Cursor reads hooks: `~/.cursor/hooks.json` for the user (global) scope,
 /// or `<cwd>/.cursor/hooks.json` for a project (local) scope. Like Claude Code's
@@ -141,27 +146,31 @@ fn ensure_version(obj: &mut serde_json::Map<String, Value>) -> bool {
     true
 }
 
-/// Ensure a `beforeShellExecution` hook running our command is present. Returns
-/// whether it was added. Idempotency is keyed on our command appearing as the
-/// `command` of any element, so a user's own hook is left untouched and we append
-/// our own element beside it.
+/// Ensure a hook running our command is present for every event in
+/// [`HOOK_EVENTS`]. Returns whether any was added. Idempotency is keyed per event
+/// on our command appearing as the `command` of any element, so a user's own hook
+/// is left untouched and only missing events are appended.
 fn ensure_hook(obj: &mut serde_json::Map<String, Value>, label: &str) -> Result<bool> {
     let hooks = obj
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| type_error(label, "hooks", "an object"))?;
-    let event = hooks
-        .entry(HOOK_EVENT)
-        .or_insert_with(|| json!([]))
-        .as_array_mut()
-        .ok_or_else(|| type_error(label, "hooks.beforeShellExecution", "an array"))?;
 
-    if event.iter().any(registers_our_hook) {
-        return Ok(false);
+    let mut added = false;
+    for event_name in HOOK_EVENTS {
+        let event = hooks
+            .entry(event_name)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| type_error(label, &format!("hooks.{event_name}"), "an array"))?;
+        if event.iter().any(registers_our_hook) {
+            continue;
+        }
+        event.push(json!({ "command": HOOK_COMMAND }));
+        added = true;
     }
-    event.push(json!({ "command": HOOK_COMMAND }));
-    Ok(true)
+    Ok(added)
 }
 
 /// True if a hook entry already runs our command.

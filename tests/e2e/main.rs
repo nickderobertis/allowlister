@@ -821,10 +821,17 @@ fn init_cursor_local_registers_hooks_json() {
     assert!(hooks.is_file(), "the cursor hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
     assert_eq!(doc["version"], 1);
-    assert_eq!(
-        doc["hooks"]["beforeShellExecution"][0]["command"],
-        "allowlister hook cursor"
-    );
+    // All three gateable Cursor events are registered: shell, file read, and MCP.
+    for event in [
+        "beforeShellExecution",
+        "beforeReadFile",
+        "beforeMCPExecution",
+    ] {
+        assert_eq!(
+            doc["hooks"][event][0]["command"], "allowlister hook cursor",
+            "the {event} hook must be auto-registered"
+        );
+    }
 }
 
 #[test]
@@ -1630,4 +1637,69 @@ fn copilot_hook_read_tool_denies_secret_with_stringified_args() {
         .stdout
         .clone();
     assert_eq!(copilot_decision_of(&output), "deny");
+}
+
+#[test]
+fn cursor_before_read_file_denies_secret_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeReadFile",
+        "file_path": "/home/u/.ssh/id_rsa",
+        "workspace_roots": [project.path().to_string_lossy()],
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "deny");
+}
+
+#[test]
+fn cursor_before_mcp_execution_denies_destructive_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeMCPExecution",
+        "tool_name": "mcp__linear__delete_issue",
+        "tool_input": {},
+        "workspace_roots": [project.path().to_string_lossy()],
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "deny");
+}
+
+#[test]
+fn opencode_read_tool_denies_secret_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // The shim forwards the real tool id (`read`) and camelCase args.
+    let payload = serde_json::json!({
+        "tool_name": "read",
+        "tool_input": { "filePath": "/home/u/.ssh/id_rsa" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "opencode"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(opencode_decision_of(&output), "deny");
 }

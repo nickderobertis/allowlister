@@ -3,13 +3,15 @@
 //! OpenCode has no subprocess hook: it gates a tool call only through an
 //! in-process JS/TS plugin (`tool.execute.before`, which blocks by throwing). So
 //! allowlister ships a tiny plugin shim (written by `init` into
-//! `.opencode/plugin/`) that, before any `bash` call, spawns `allowlister hook
-//! opencode`, pipes the command as JSON to this adapter, and throws when we say
-//! deny. This adapter is the Rust half of that bridge — the plugin↔binary
-//! contract is entirely ours, so it mirrors the other deny-only adapters:
+//! `.opencode/plugin/`) that, before any tool call, spawns `allowlister hook
+//! opencode`, pipes the tool name and arguments as JSON to this adapter, and
+//! throws when we say deny. This adapter is the Rust half of that bridge — the
+//! plugin↔binary contract is entirely ours, so it mirrors the other deny-only
+//! adapters:
 //!
-//! - **Input** (sent by the shim): `{"tool_name":"bash","tool_input":{"command":
-//!   "…"},"cwd":"…"}`.
+//! - **Input** (sent by the shim): `{"tool_name":"<tool>","tool_input":{…},
+//!   "cwd":"…"}` — the real tool id (`read`/`write`/`bash`/`server:tool`…) and its
+//!   arguments.
 //! - **Output**: a flat `{"decision":"deny","reason":"…"}` only on a deny; an
 //!   allow or defer verdict emits *nothing*, which the shim treats as "no
 //!   objection" and lets the call proceed.
@@ -17,11 +19,10 @@
 //!   the decision JSON, so an internal read/parse failure here is a no-op
 //!   (empty stdout) that fails open — an internal error can never become a block.
 //!
-//! The shim gates on *command content*, not tool identity: it labels every tool
-//! call that carries a `command` argument (the `bash`/shell tools) as `bash` and
-//! forwards it here, so a single `bash` check covers OpenCode's shell tool across
-//! builds. `tool.execute.before` fires for sub-agent (`task`-tool) calls too, so
-//! those are gated as well.
+//! The shim forwards every tool call with its real id; this adapter routes a shell
+//! call (the `bash`/`shell` tool, or any call carrying a `command`) to the command
+//! engine and every other tool to the tool-rule engine. `tool.execute.before`
+//! fires for sub-agent (`task`-tool) calls too, so those are gated as well.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -29,13 +30,23 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::normalize;
 use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
 
-/// The tool name the plugin shim labels shell calls with. Any other tool is not
-/// one we gate, so it emits nothing.
-const SHELL_TOOL: &str = "bash";
+/// Whether this call is a shell command: the shim labels OpenCode's shell tool
+/// `bash` (some builds expose `shell`), and any shell-like tool carries a
+/// `command` argument. Everything else is a non-shell tool, gated by the
+/// tool-rule engine.
+fn is_shell_call(input: &HookInput) -> bool {
+    matches!(input.tool_name.as_str(), "bash" | "shell")
+        || input
+            .tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some()
+}
 
 /// Wire the adapter to the process's standard streams.
 pub fn run() -> Result<i32> {
@@ -66,15 +77,17 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         }
     };
 
-    if input.tool_name != SHELL_TOOL {
-        // Not a shell command — emit nothing so the shim lets it proceed.
-        return 0;
-    }
-
     let dir = discovery_dir(&input);
     let loaded = config::load(Path::new(dir));
-    let command = command_from(&input.tool_input);
-    let result = domain::evaluate(&command, &loaded.rules);
+    // The shim forwards every tool call. A shell call keeps its structural path;
+    // every other tool is normalized and gated by the tool-rule engine. An
+    // unrecognized tool with no matching rule emits nothing — the prior behavior.
+    let result = if is_shell_call(&input) {
+        domain::evaluate(&command_from(&input.tool_input), &loaded.rules)
+    } else {
+        let call = normalize::opencode(&input.tool_name, &input.tool_input);
+        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+    };
 
     // Only `deny` is asserted. An allow or defer verdict emits nothing — the shim
     // reads empty stdout as "no objection" and lets the call run.
@@ -249,5 +262,41 @@ mod tests {
         );
         assert_eq!(code, 0);
         assert!(stdout.is_empty());
+    }
+
+    /// A sandbox that denies reading `.ssh` paths via a tool rule.
+    fn sandbox_with_read_deny() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(
+            dir.path().join(".allowlister.json"),
+            r#"{"rules":[{"name":"no ssh","tool":"read","action":"deny","params":{"path":["**/.ssh/**"]}}]}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    fn read_payload(file_path: &str, cwd: &Path) -> String {
+        format!(
+            r#"{{"tool_name":"read","tool_input":{{"filePath":{}}},"cwd":{}}}"#,
+            serde_json::to_string(file_path).unwrap(),
+            serde_json::to_string(&cwd.to_string_lossy().into_owned()).unwrap()
+        )
+    }
+
+    #[test]
+    fn read_tool_of_ssh_key_is_denied() {
+        let dir = sandbox_with_read_deny();
+        let (code, stdout) = run_payload(&read_payload("/home/u/.ssh/id_rsa", dir.path()));
+        assert_eq!(code, 0);
+        assert_eq!(decision(&stdout), "deny");
+    }
+
+    #[test]
+    fn read_tool_outside_any_rule_emits_nothing() {
+        let dir = sandbox_with_read_deny();
+        let (code, stdout) = run_payload(&read_payload("/repo/a.txt", dir.path()));
+        assert_eq!(code, 0);
+        assert!(stdout.is_empty(), "an undecided read must emit nothing");
     }
 }
