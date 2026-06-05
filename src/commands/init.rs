@@ -16,6 +16,7 @@ use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
 use crate::io::{
     claude_settings, codex_settings, copilot_settings, crush_settings, cursor_settings,
+    qwen_settings,
 };
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
@@ -103,6 +104,23 @@ const CRUSH_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       { "matcher": "^bash$", "command": "allowlister hook crush", "timeout": 30 }
+    ]
+  }
+}"#;
+
+/// The settings snippet `init --harness qwen --no-hooks` prints for manual wiring:
+/// register the hook on Qwen Code's `PreToolUse` event, scoped to the
+/// `run_shell_command` tool. Qwen has no permissions block, so there is nothing to
+/// deny here.
+const QWEN_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "run_shell_command",
+        "hooks": [
+          { "type": "command", "command": "allowlister hook qwen" }
+        ]
+      }
     ]
   }
 }"#;
@@ -311,6 +329,7 @@ fn harness_label(harness: Harness) -> &'static str {
         Harness::Cursor => "Cursor",
         Harness::Codex => "Codex",
         Harness::Crush => "Crush",
+        Harness::Qwen => "Qwen Code",
         Harness::Copilot => "Copilot",
     }
 }
@@ -348,6 +367,12 @@ fn register_hook_for<W: Write>(
             report_crush_hook(out, &change);
             Ok(())
         }
+        Harness::Qwen => {
+            let path = qwen_settings::settings_path(global, cwd, env)?;
+            let change = qwen_settings::register_hook(&path)?;
+            report_qwen_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => {
             let path = copilot_settings::settings_path(global, cwd, env)?;
             let change = copilot_settings::register_hook(&path)?;
@@ -364,6 +389,7 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         Harness::Cursor => write_cursor_hook_setup(out),
         Harness::Codex => write_codex_hook_setup(out),
         Harness::Crush => write_crush_hook_setup(out),
+        Harness::Qwen => write_qwen_hook_setup(out),
         Harness::Copilot => write_copilot_hook_setup(out),
     };
     Ok(())
@@ -476,6 +502,27 @@ fn report_crush_hook<W: Write>(out: &mut W, change: &crush_settings::SettingsCha
     }
 }
 
+/// Report what registering the Qwen Code hook changed. Qwen's `settings.json` has
+/// no permissions block to broaden, so there is no allow-list warning to print.
+fn report_qwen_hook<W: Write>(out: &mut W, change: &qwen_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the run_shell_command PreToolUse hook.",
+            change.path.display(),
+            qwen_settings::hook_command()
+        );
+    }
+}
+
 /// Report what registering the Copilot hook changed. Copilot's hook file has no
 /// allow list to broaden, so there is no allow-list warning to print.
 fn report_copilot_hook<W: Write>(out: &mut W, change: &copilot_settings::SettingsChange) {
@@ -552,6 +599,17 @@ fn write_crush_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CRUSH_SETTINGS_SNIPPET}")
+}
+
+/// Write the Qwen Code `settings.json` snippet. Qwen has no allow list to broaden,
+/// so there is no allow-list warning to print.
+fn write_qwen_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to ~/.qwen/settings.json (or .qwen/settings.json per-repo; merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{QWEN_SETTINGS_SNIPPET}")
 }
 
 /// Write the Copilot hooks snippet. Copilot loads a directory of independent hook
@@ -1018,6 +1076,73 @@ mod tests {
         // The config still lands under XDG; Crush's global config is XDG-aware too.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("xdg/crush/crush.json").is_file());
+    }
+
+    #[test]
+    fn execute_qwen_local_registers_settings_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Qwen,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Qwen writes .qwen/settings.json, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let settings = dir.path().join(".qwen/settings.json");
+        assert!(
+            settings.is_file(),
+            "the qwen hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["matcher"],
+            "run_shell_command"
+        );
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "allowlister hook qwen"
+        );
+    }
+
+    #[test]
+    fn execute_qwen_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Qwen,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".qwen/settings.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("~/.qwen/settings.json"));
+        assert!(text.contains("allowlister hook qwen"));
+        // Qwen has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_qwen_global_writes_under_home_qwen() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Qwen,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("home/.qwen/settings.json").is_file());
     }
 
     #[test]

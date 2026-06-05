@@ -10,3 +10,4 @@ pub mod codex;
 pub mod copilot;
 pub mod crush;
 pub mod cursor;
+pub mod qwen;

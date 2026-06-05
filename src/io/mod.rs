@@ -9,3 +9,4 @@ pub mod copilot_settings;
 pub mod crush_settings;
 pub mod cursor_settings;
 pub mod harness;
+pub mod qwen_settings;

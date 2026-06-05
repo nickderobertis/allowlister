@@ -122,6 +122,8 @@ pub enum Harness {
     Codex,
     /// Crush (`PreToolUse` hook).
     Crush,
+    /// Qwen Code (`PreToolUse` hook).
+    Qwen,
     /// GitHub Copilot CLI (`preToolUse` hook).
     Copilot,
 }
