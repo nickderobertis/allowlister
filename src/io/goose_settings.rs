@@ -36,12 +36,13 @@ const HOOK_COMMAND: &str = "allowlister hook goose";
 /// fired before the tool executes in every approval mode.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex, tested unanchored against the tool name). Goose
-/// exposes the developer extension's shell tool as a bare `shell` when it is a
-/// builtin (e.g. `--with-builtin developer`) and as `developer__shell` when
-/// namespaced, so match both (and any `<ext>__shell`) without catching unrelated
-/// tools.
-const MATCHER: &str = "(^|__)shell$";
+/// The tool-name matcher (a regex, tested unanchored against the tool name). It
+/// covers the shell (bare `shell` or any `<ext>__shell`) plus every namespaced
+/// tool — the developer extension's `__write`/`__edit` and any `<server>__<tool>`
+/// MCP call — via the `__` substring. The adapter routes each to the shell or
+/// tool engine, so one block fires once per tool. (Goose's RE2 matcher has no
+/// look-ahead, so the shell is matched and then re-routed rather than excluded.)
+const MATCHER: &str = "^shell$|__";
 
 /// Seconds Goose waits for the hook before giving up (and failing open). Goose's
 /// own default is 30; a tight value keeps a slow gate from stalling the agent.
@@ -249,7 +250,7 @@ mod tests {
 
         let doc = read(&plugin.join("hooks/hooks.json"));
         let group = &doc["hooks"]["PreToolUse"][0];
-        assert_eq!(group["matcher"], "(^|__)shell$");
+        assert_eq!(group["matcher"], MATCHER);
         assert_eq!(group["hooks"][0]["timeout"], 10);
         assert!(group_registers_our_hook(group));
     }
