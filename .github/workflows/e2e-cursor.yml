@@ -1,0 +1,77 @@
+name: E2E (Cursor)
+
+# Live end-to-end check that drives the real `cursor-agent` CLI against
+# allowlister wired as a beforeShellExecution hook (scripts/e2e-cursor.sh).
+# Unlike ci.yml this needs network, a model call, and the CURSOR_API_KEY secret,
+# so it lives in its own workflow gated to trusted contexts only.
+#
+# Security: a secret in a public repo must never be reachable by untrusted code.
+# GitHub already withholds secrets from fork pull requests; the job `if` below is
+# defense in depth — it runs only in the canonical repo and never for a PR whose
+# head is a fork, so this workflow can be edited in a fork PR without exposing
+# the key.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-cursor-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: cursor live e2e
+    if: >-
+      github.repository == 'nickderobertis/allowlister' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the API key is present
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "${CURSOR_API_KEY:-}" ]; then
+            echo "::error::CURSOR_API_KEY secret is not set. Generate a user key at https://cursor.com/dashboard/api and add it: gh secret set CURSOR_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          # The installer drops `cursor-agent` under ~/.local/bin; add it to PATH
+          # for later steps. Fall back to locating it if the layout differs.
+          if [ -x "$HOME/.local/bin/cursor-agent" ]; then
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          else
+            dir="$(dirname "$(find "$HOME" -name cursor-agent -type f 2>/dev/null | head -1)")"
+            [ -n "$dir" ] && echo "$dir" >> "$GITHUB_PATH"
+          fi
+
+      # Fails the job (rather than letting the script skip) if the install did not
+      # put cursor-agent on PATH — a missing CLI must not read as a silent pass.
+      - name: Show cursor-agent version
+        run: cursor-agent --version
+
+      - name: Live hook e2e against the real CLI
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: just test-cursor

@@ -10,10 +10,11 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
-use crate::io::claude_settings;
 use crate::io::configfs::{self, Env};
+use crate::io::{claude_settings, cursor_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -26,6 +27,9 @@ pub struct InitArgs {
     /// `--profile <SOURCE>`: a built-in (`starter`, `read-only`, `repo-write`)
     /// or a path to an allowlist JSON file.
     pub profile: Option<String>,
+    /// `--harness <NAME>`: which coding harness to wire the hook into. Defaults
+    /// to `claude-code` at the CLI layer.
+    pub harness: Harness,
     /// `Some(true)` for `--hooks`, `Some(false)` for `--no-hooks`, `None` when
     /// neither was passed.
     pub hooks: Option<bool>,
@@ -62,6 +66,18 @@ const SETTINGS_SNIPPET: &str = r#"{
   }
 }"#;
 
+/// The hooks snippet `init --harness cursor --no-hooks` prints for manual wiring:
+/// register the hook on Cursor's `beforeShellExecution` event. Cursor has no
+/// permissions block, so there is nothing to deny here.
+const CURSOR_SETTINGS_SNIPPET: &str = r#"{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "allowlister hook cursor" }
+    ]
+  }
+}"#;
+
 /// The one rule that matters wherever a config is landed: never broaden
 /// `permissions.allow`, or the agent skips its prompt and the hook never runs.
 const ALLOW_GUIDANCE: &str =
@@ -76,7 +92,9 @@ struct Plan {
     global: bool,
     /// The ruleset source name or path.
     source: String,
-    /// Register the Claude Code hook.
+    /// Which harness to wire the hook into.
+    harness: Harness,
+    /// Register the harness hook.
     hooks: bool,
 }
 
@@ -111,6 +129,9 @@ fn resolve_plan<R: BufRead, W: Write>(
     Ok(Plan {
         global,
         source,
+        // The harness comes from the flag (or its `claude-code` default), not a
+        // prompt — keeping the interactive flow identical for Claude users.
+        harness: args.harness,
         hooks,
     })
 }
@@ -186,7 +207,10 @@ fn resolve_hooks<R: BufRead, W: Write>(
     let answer = ask(
         input,
         out,
-        "Register the Bash hook in Claude Code's settings now? [Y/n]\n> ",
+        &format!(
+            "Register the hook in {}'s settings now? [Y/n]\n> ",
+            harness_label(args.harness)
+        ),
     )?;
     Ok(!matches!(answer.to_ascii_lowercase().as_str(), "n" | "no"))
 }
@@ -226,14 +250,62 @@ fn execute<W: Write>(plan: &Plan, force: bool, cwd: &Path, env: &Env, out: &mut 
     );
 
     if plan.hooks {
-        let settings_path = claude_settings::settings_path(plan.global, cwd, env)?;
-        let change = claude_settings::register_hook(&settings_path)?;
-        report_hook(out, &change);
+        register_hook_for(plan.harness, plan.global, cwd, env, out)?;
     } else {
         let _ = writeln!(out);
-        let _ = write_hook_setup(out);
+        write_hook_setup_for(plan.harness, out)?;
     }
     Ok(0)
+}
+
+/// A human label for a harness, used in prompts and messages.
+fn harness_label(harness: Harness) -> &'static str {
+    match harness {
+        Harness::ClaudeCode => "Claude Code",
+        Harness::Cursor => "Cursor",
+        Harness::Copilot => "Copilot",
+    }
+}
+
+/// Register the chosen harness's hook and report what changed. Copilot is not yet
+/// implemented, so selecting it is a typed error rather than a half-wired setup.
+fn register_hook_for<W: Write>(
+    harness: Harness,
+    global: bool,
+    cwd: &Path,
+    env: &Env,
+    out: &mut W,
+) -> Result<()> {
+    match harness {
+        Harness::ClaudeCode => {
+            let path = claude_settings::settings_path(global, cwd, env)?;
+            let change = claude_settings::register_hook(&path)?;
+            report_claude_hook(out, &change);
+            Ok(())
+        }
+        Harness::Cursor => {
+            let path = cursor_settings::settings_path(global, cwd, env)?;
+            let change = cursor_settings::register_hook(&path)?;
+            report_cursor_hook(out, &change);
+            Ok(())
+        }
+        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
+    }
+}
+
+/// Print the manual-wiring snippet for the chosen harness (the `--no-hooks` path).
+fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
+    match harness {
+        Harness::ClaudeCode => {
+            let _ = write_hook_setup(out);
+            Ok(())
+        }
+        Harness::Cursor => {
+            let _ = write_cursor_hook_setup(out);
+            Ok(())
+        }
+        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
+    }
 }
 
 /// The config path for the chosen scope.
@@ -245,8 +317,9 @@ fn config_target(global: bool, cwd: &Path, env: &Env) -> Result<PathBuf> {
     }
 }
 
-/// Report what registering the hook changed, then the one allow-list warning.
-fn report_hook<W: Write>(out: &mut W, change: &claude_settings::SettingsChange) {
+/// Report what registering the Claude Code hook changed, then the one allow-list
+/// warning.
+fn report_claude_hook<W: Write>(out: &mut W, change: &claude_settings::SettingsChange) {
     let _ = writeln!(out);
     if change.was_noop() {
         let _ = writeln!(
@@ -274,6 +347,27 @@ fn report_hook<W: Write>(out: &mut W, change: &claude_settings::SettingsChange) 
     let _ = writeln!(out, "{ALLOW_GUIDANCE}");
 }
 
+/// Report what registering the Cursor hook changed. Cursor's `hooks.json` has no
+/// permissions block to broaden, so there is no allow-list warning to print.
+fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the beforeShellExecution hook.",
+            change.path.display(),
+            cursor_settings::hook_command()
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -292,6 +386,17 @@ fn write_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     writeln!(out, "{ALLOW_GUIDANCE}")
 }
 
+/// Write the `~/.cursor/hooks.json` snippet. Cursor has no allow list to broaden,
+/// so there is no allow-list warning to print.
+fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to ~/.cursor/hooks.json (merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +410,7 @@ mod tests {
             global: false,
             local: true,
             profile: Some("starter".to_string()),
+            harness: Harness::ClaudeCode,
             hooks: Some(false),
             interactive: false,
             yes: true,
@@ -322,6 +428,7 @@ mod tests {
                 global: false,
                 local: false,
                 profile: None,
+                harness: Harness::ClaudeCode,
                 hooks: None,
                 interactive: true,
                 yes: false,
@@ -347,6 +454,7 @@ mod tests {
                 global: false,
                 local: false,
                 profile: None,
+                harness: Harness::ClaudeCode,
                 hooks: None,
                 interactive: false,
                 yes: true,
@@ -373,6 +481,7 @@ mod tests {
                 global: false,
                 local: false,
                 profile: None,
+                harness: Harness::ClaudeCode,
                 hooks: None,
                 interactive: true,
                 yes: false,
@@ -399,6 +508,7 @@ mod tests {
                 global: true,
                 local: false,
                 profile: Some("read-only".to_string()),
+                harness: Harness::ClaudeCode,
                 hooks: Some(false),
                 interactive: true,
                 yes: false,
@@ -430,6 +540,7 @@ mod tests {
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: false,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
@@ -448,6 +559,7 @@ mod tests {
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: true,
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
@@ -469,6 +581,7 @@ mod tests {
         let plan = Plan {
             global: false,
             source: "read-only".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
@@ -490,6 +603,7 @@ mod tests {
         let plan = Plan {
             global: true,
             source: "starter".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: true,
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
@@ -504,6 +618,7 @@ mod tests {
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: false,
         };
         let err = execute(
@@ -524,6 +639,7 @@ mod tests {
         let plan = Plan {
             global: false,
             source: "read-only".to_string(),
+            harness: Harness::ClaudeCode,
             hooks: false,
         };
         execute(
@@ -543,5 +659,89 @@ mod tests {
     fn args_helper_builds_non_interactive_inputs() {
         let a = args();
         assert!(a.yes && a.local && !a.global);
+    }
+
+    #[test]
+    fn execute_cursor_local_registers_hooks_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Cursor,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Cursor writes hooks.json, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let hooks = dir.path().join(".cursor/hooks.json");
+        assert!(
+            hooks.is_file(),
+            "the cursor hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["version"], 1);
+        assert_eq!(
+            doc["hooks"]["beforeShellExecution"][0]["command"],
+            "allowlister hook cursor"
+        );
+    }
+
+    #[test]
+    fn execute_cursor_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Cursor,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".cursor/hooks.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("~/.cursor/hooks.json"));
+        assert!(text.contains("allowlister hook cursor"));
+        // Cursor has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_cursor_global_writes_under_home_cursor() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Cursor,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("home/.cursor/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_copilot_harness_is_unimplemented() {
+        let dir = TempDir::new().unwrap();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Copilot,
+            hooks: true,
+        };
+        let err = execute(
+            &plan,
+            false,
+            dir.path(),
+            &sandbox_env(dir.path()),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::HarnessUnimplemented(_)));
     }
 }

@@ -61,6 +61,28 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// A Cursor `beforeShellExecution` payload whose `cwd` points at the sandbox
+    /// project dir.
+    fn cursor_payload(&self, command: &str) -> String {
+        let dir = serde_json::to_string(&self.cwd().to_string_lossy()).unwrap();
+        format!(
+            r#"{{"hook_event_name":"beforeShellExecution","command":{},"cwd":{},"workspace_roots":[{}]}}"#,
+            serde_json::to_string(command).unwrap(),
+            dir,
+            dir
+        )
+    }
+
+    /// A Cursor payload with an empty `cwd`, so discovery must fall back to
+    /// `workspace_roots`.
+    fn cursor_payload_empty_cwd(&self, command: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"beforeShellExecution","command":{},"cwd":"","workspace_roots":[{}]}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -69,6 +91,12 @@ fn decision_of(stdout: &[u8]) -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+/// Read the `permission` field Cursor's hook adapter writes.
+fn permission_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["permission"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -168,14 +196,78 @@ fn hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
-fn hook_unimplemented_harness_errors() {
+fn cursor_hook_allow_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "allow");
+}
+
+#[test]
+fn cursor_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "deny");
+}
+
+#[test]
+fn cursor_hook_defer_maps_to_ask() {
+    // Cursor has no "defer" token: an undecided command escalates to "ask".
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "ask");
+}
+
+#[test]
+fn cursor_hook_empty_cwd_uses_workspace_root() {
+    // An empty `cwd` (common from Cursor) must fall back to `workspace_roots`,
+    // so the project config still gates the command.
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload_empty_cwd("rm -rf /var"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "deny");
+}
+
+#[test]
+fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
     Command::cargo_bin("allowlister")
         .unwrap()
         .args(["hook", "cursor"])
-        .write_stdin("{}")
+        .write_stdin("{ this is not json")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
 }
 
 #[test]
@@ -272,6 +364,48 @@ fn init_no_hooks_skips_settings_and_prints_snippet() {
     assert!(
         !dir.path().join(".claude/settings.json").exists(),
         "--no-hooks must not touch settings.json"
+    );
+}
+
+#[test]
+fn init_cursor_local_registers_hooks_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "cursor"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook cursor"))
+        // Cursor has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Cursor wires hooks.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let hooks = dir.path().join(".cursor/hooks.json");
+    assert!(hooks.is_file(), "the cursor hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+    assert_eq!(
+        doc["hooks"]["beforeShellExecution"][0]["command"],
+        "allowlister hook cursor"
+    );
+}
+
+#[test]
+fn init_cursor_no_hooks_prints_cursor_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "cursor", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Add this to ~/.cursor/hooks.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".cursor/hooks.json").exists(),
+        "--no-hooks must not write hooks.json"
     );
 }
 
