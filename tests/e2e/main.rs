@@ -83,6 +83,17 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// A Qwen Code `PreToolUse` payload whose `cwd` points at the sandbox project
+    /// dir. Qwen names its shell tool `run_shell_command` (Gemini-style) and rides
+    /// the command under `tool_input.command`.
+    fn qwen_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"run_shell_command","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -271,6 +282,64 @@ fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn qwen_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Qwen shares Claude Code's PreToolUse decision shape for a deny.
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn qwen_hook_allow_emits_empty_stdout() {
+    // A non-deny verdict is a no-op: empty stdout hands the call back to Qwen's
+    // normal approval flow rather than auto-approving via an explicit allow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn qwen_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through to Qwen's own
+    // approval flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn qwen_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion: Qwen treats exit 2 as a block, so a parse failure
+    // must exit 0 (not 1/2) with empty stdout — never a deny.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "qwen"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
     sandbox
@@ -406,6 +475,53 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
     assert!(
         !dir.path().join(".cursor/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_qwen_local_registers_settings_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "qwen"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook qwen"))
+        // Qwen has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Qwen wires .qwen/settings.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let settings = dir.path().join(".qwen/settings.json");
+    assert!(settings.is_file(), "the qwen hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["matcher"],
+        "run_shell_command"
+    );
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook qwen"
+    );
+}
+
+#[test]
+fn init_qwen_no_hooks_prints_qwen_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "qwen", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Add this to ~/.qwen/settings.json",
+        ));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".qwen/settings.json").exists(),
+        "--no-hooks must not write settings.json"
     );
 }
 
