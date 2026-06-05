@@ -108,6 +108,24 @@ run_agent() {
 # echoed back to the model verbatim in the blocked tool result).
 denied_in() { grep -aq 'allowlister:.*denied' "$1"; }
 
+# Diagnostic: print the deny stream's shape so a CI run reveals exactly where
+# Cursor surfaces a hook denial (its event types and the lines that mention the
+# block), used to harden the reason assertion below.
+dump_deny_diagnostic() {
+    local stream="$1"
+    note "  ── deny stream diagnostic ──────────────────────────────"
+    if command -v jq >/dev/null 2>&1; then
+        note "  event types (type/subtype  count):"
+        jq -rc 'select(type=="object") | "\(.type)/\(.subtype // "")"' "$stream" 2>/dev/null \
+            | sort | uniq -c | sed 's/^/    /'
+    fi
+    note "  full stream (<=200 lines):"
+    head -200 "$stream" | sed 's/^/    /'
+    note "  stderr tail:"
+    tail -8 "$stream.err" 2>/dev/null | sed 's/^/    /'
+    note "  ────────────────────────────────────────────────────────"
+}
+
 note "» case 1/2: deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
@@ -117,7 +135,8 @@ run_agent "Use the shell to run exactly this one command, then stop: touch $deny
 if denied_in "$sandbox/deny.stream"; then
     note "  ok: command blocked and the deny reason was reported to the model"
 else
-    note "  ok: command blocked (deny reason not found in stream; Cursor's schema may differ)"
+    note "  ok: command blocked (deny reason not found in stream; dumping for diagnosis)"
+    dump_deny_diagnostic "$sandbox/deny.stream"
 fi
 
 note "» case 2/2: allow — \`echo\` must run"
