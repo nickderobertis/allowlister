@@ -104,9 +104,16 @@ run_agent() {
     }
 }
 
-# True if the transcript shows allowlister denying a command (its reason string is
-# echoed back to the model verbatim in the blocked tool result).
-denied_in() { grep -aq 'allowlister:.*denied' "$1"; }
+# True if the deny stream shows Cursor's structured hook rejection: a
+# `tool_call/completed` event whose shell result is `rejected` with a
+# "blocked by a hook" reason. This proves *our* hook caused the block — not merely
+# that the file is absent — independent of how Cursor renders the message.
+hook_rejected_in() { grep -aq '"rejected"' "$1" && grep -aiq 'blocked by a hook' "$1"; }
+
+# True if allowlister's own reason text reached the agent transcript. Cursor may
+# substitute its generic hook-block message instead, so this is a bonus signal,
+# not a gate.
+reason_surfaced_in() { grep -aq 'allowlister:' "$1"; }
 
 # Diagnostic: print the deny stream's shape so a CI run reveals exactly where
 # Cursor surfaces a hook denial (its event types and the lines that mention the
@@ -132,11 +139,15 @@ rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
     "$sandbox/deny.stream"
 [ -e "$deny_sentinel" ] && fail "denied command executed: $deny_sentinel was created"
-if denied_in "$sandbox/deny.stream"; then
-    note "  ok: command blocked and the deny reason was reported to the model"
-else
-    note "  ok: command blocked (deny reason not found in stream; dumping for diagnosis)"
+hook_rejected_in "$sandbox/deny.stream" || {
     dump_deny_diagnostic "$sandbox/deny.stream"
+    fail "deny stream shows no structured hook rejection (Cursor's schema may have changed)"
+}
+note "  ok: command rejected by the hook (structured 'rejected' event present)"
+if reason_surfaced_in "$sandbox/deny.stream"; then
+    note "  bonus: allowlister's reason text reached the agent"
+else
+    note "  note: Cursor showed its generic hook-block message; allowlister's reason was not surfaced"
 fi
 
 note "» case 2/2: allow — \`echo\` must run"
@@ -147,7 +158,7 @@ run_agent "Use the shell to run exactly this one command, then stop: echo $marke
     "$sandbox/allow.stream"
 [ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
 grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
-denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
+hook_rejected_in "$sandbox/allow.stream" && fail "allowed command was rejected by a hook"
 note "  ok: command executed without a permission prompt"
 
 note "✓ cursor live e2e passed (deny blocked, allow ran)"
