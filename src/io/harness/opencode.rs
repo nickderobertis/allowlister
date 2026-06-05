@@ -10,7 +10,7 @@
 //! adapters:
 //!
 //! - **Input** (sent by the shim): `{"tool_name":"<tool>","tool_input":{…},
-//!   "cwd":"…"}` — the real tool id (`read`/`write`/`bash`/`server:tool`…) and its
+//!   "cwd":"…"}` — the real tool id (`read`/`write`/`bash`/`server_tool`…) and its
 //!   arguments.
 //! - **Output**: a flat `{"decision":"deny","reason":"…"}` only on a deny; an
 //!   allow or defer verdict emits *nothing*, which the shim treats as "no
