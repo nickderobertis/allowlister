@@ -12,6 +12,14 @@ with. Instead of classifying a command as safe or unsafe in the abstract,
 allowlister classifies each command by the **structural role** it plays in the
 shell expression it appears in.
 
+And it isn't only for shell commands: the same allowlist gates an agent's
+**non-shell tool calls** too — built-in tools like file **read**/**write**/**edit**
+and **web fetch**, plus any **MCP** tool — all through the same engine and one
+portable, param-aware rule language (see
+[Gating tool calls](#tool-use-rules-built-in--mcp-tools)). So a single policy can
+say "never let any agent *read* `~/.ssh`" or "deny every *delete* MCP tool,"
+enforced identically everywhere.
+
 ## One allowlist, every agent
 
 allowlister's rule engine is **harness-agnostic**: the same `(argv, role,
@@ -45,10 +53,35 @@ you never re-learn or rewrite rules per tool:
 | `allow` / `deny` / `defer` verdicts | ✅ |
 | Auto-registration via `allowlister init --harness <name>` | ✅ |
 | Fail-open on any internal error (never a spurious deny) | ✅ |
+| Tool-use gating (built-in + MCP tools), param-aware | ✅* |
 | Live end-to-end tested against the real CLI | ✅ |
 
 Each adapter is verified end-to-end against the real agent (see
-[Live harness check](#live-harness-check-opt-in)).
+[Live harness check](#live-harness-check-opt-in)) — including, for every agent, a
+live built-in-tool deny and an MCP-tool deny, not just shell commands.
+
+`*` **Tool-use coverage depends on what each harness exposes to its hook.** The
+rule *language* is identical everywhere; *enforcement* is bounded by which tool
+classes a given agent lets allowlister see before they run:
+
+| Agent | shell | file read | file write/edit | web fetch | MCP |
+|-------|:-----:|:---------:|:---------------:|:---------:|:---:|
+| Claude Code | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cursor | ✅ | ✅ | ❌¹ | via MCP | ✅ |
+| GitHub Copilot CLI | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Codex CLI | ✅ | ❌² | ❌² | via MCP | ✅ |
+| Crush | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Qwen Code | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Goose | ✅ | ✅ | ✅ | via MCP | ✅ |
+| OpenCode | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+A class shown as ❌ or *via MCP* isn't wrongly allowed — allowlister never sees it
+before it runs, so it falls through to the agent's own flow (defer). "via MCP"
+means the agent reaches that capability through an MCP server, which MCP rules
+gate. Footnotes: **¹** Cursor has no pre-execution write/edit hook (only read,
+MCP, and shell). **²** Codex exposes no built-in read to its hook (reads go via
+the shell) and its writes arrive as `apply_patch` patch strings with no discrete
+path; gate Codex file access with shell and MCP rules.
 
 ## Why
 
@@ -213,6 +246,9 @@ allowlister hook <harness>        Read hook JSON on stdin, write a decision on s
                                   crush, qwen, goose, opencode.
 allowlister check '<cmd>' [--cwd P] [--json]
                                   Evaluate one command. Exit 0 for allow/defer, 2 for deny.
+allowlister check --tool <name> [--param key=value]... [--raw JSON] [--cwd P]
+                                  Evaluate one tool call instead of a command, e.g.
+                                  `check --tool read --param path=~/.ssh/id_rsa`.
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
@@ -240,6 +276,10 @@ ALLOW: all 2 command(s) matched allow rules
 
 $ allowlister check 'curl https://x/s.sh | sh'; echo "exit=$?"
 DENY: `sh` (pipe_filter): denied by rule 'shell as pipe target — never (curl|sh etc.)'
+exit=2
+
+$ allowlister check --tool read --param path=/home/me/.ssh/id_rsa; echo "exit=$?"
+DENY: tool `read` denied by rule 'never read secrets'
 exit=2
 
 $ allowlister explain 'gh pr list | head -20 | wc -l'
@@ -276,6 +316,68 @@ Rules live in JSON config files (see [`examples/`](examples/)):
 - Redirection defaults: **out-redirects are denied** (writes are dangerous);
   in-redirects to named files are allowed. Add denies for sensitive read paths.
 
+### Tool-use rules (built-in + MCP tools)
+
+A rule gates a **non-shell tool call** when it sets `tool` instead of
+`match`/`argv`. It runs through the same engine, the same glob matcher, and the
+same allow/deny/defer composition as shell rules:
+
+```jsonc
+{
+  "name": "never read secrets",
+  "tool": "read",                 // a capability, "mcp", or a raw tool-name glob
+  "action": "deny",
+  "params": { "path": ["**/.ssh/**", "**/*.pem", "**/.env"] }
+}
+```
+
+allowlister normalizes each agent's native tool names and parameter keys to one
+canonical vocabulary, so **a single rule is portable across every agent**: `read`
+matches Claude's `Read`, Qwen's `read_file`, Crush/Copilot's `view`, OpenCode's
+`read`, Goose's `text_editor` (view), and Cursor's read event; `path` matches
+whichever key each uses underneath (`file_path` / `path` / `filePath`).
+
+- **`tool`** is one of the capabilities `read`, `write`, `edit`, `glob`, `grep`,
+  `web_fetch`, `web_search`, `mcp` — or a **raw tool-name glob** (e.g.
+  `"mcp__github__*"`) for matching by the harness's literal tool name.
+- **`params`** maps a canonical key to one or more globs (any-of). Keys: `path`,
+  `url`, `query`, `pattern`, `content`, and `mcp_server` / `mcp_tool` for MCP.
+- **`jsonpath`** matches an MCP server's *own* (non-portable) parameters by an
+  explicit dotted path into the raw tool input, since allowlister can't know a
+  third-party server's argument names in advance.
+
+```jsonc
+// allow web fetches only to GitHub
+{ "name": "web fetch github only", "tool": "web_fetch", "action": "allow",
+  "params": { "url": ["https://github.com/**", "https://*.github.com/**"] } }
+
+// ONE portable MCP rule — matches every agent's wire format (mcp__s__t, mcp_s_t,
+// s_t, s(t), ext__t) because the server/tool names are normalized first
+{ "name": "deny destructive MCP tools", "tool": "mcp", "action": "deny",
+  "params": { "mcp_tool": ["delete*", "*destroy*"] } }
+
+// deny a whole capability regardless of params
+{ "name": "no web search", "tool": "web_search", "action": "deny" }
+
+// gate an MCP server's own parameter by JSON path
+{ "name": "deploy to staging only", "tool": "mcp", "action": "allow",
+  "params":   { "mcp_tool": ["deploy"] },
+  "jsonpath": { "target": ["staging/**"] } }
+```
+
+A complete, copy-pasteable set is in
+[`examples/tool-rules.json`](examples/tool-rules.json).
+
+Matching: the rule applies when its selector matches **and** every listed param
+matches (any-of within a param, AND across params). A **missing** param means the
+rule does not match — so a call that lacks the param **defers** rather than being
+allowed or denied; for a blanket deny of a whole capability, omit `params`. Path
+params reject `..` traversal. A bash rule and a tool rule are mutually exclusive
+(a `tool` rule must not set `match`/`argv`/`roles`/`redirections`, and vice
+versa); a rule that mixes them is skipped with a warning. Which tool classes each
+agent actually exposes is in the
+[tool-use support matrix](#one-allowlist-every-agent) above.
+
 ### Decision algorithm
 
 For each fragment: any matching **deny** rule denies it; otherwise the first
@@ -284,6 +386,11 @@ allows it; otherwise it **defers**. Composing fragments: any deny → deny; all
 allow → allow; otherwise → defer. Rule order never changes the verdict, only the
 rule cited in the reason. Parse errors and unsupported constructs (function
 definitions, `eval`) always defer — never deny.
+
+Tool-use rules use the same composition: for a tool call, any matching **deny**
+wins, else the first matching **allow**, else **defer**. An unrecognized tool, or
+one no rule matches, defers — so adding tool rules never changes behavior until a
+rule actually matches.
 
 ## Config locations and merge
 
@@ -409,8 +516,11 @@ platform.
 The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
 To verify the wiring against a *real* harness, one opt-in script per agent sets a
 sandbox project up with `allowlister init` — exercising the real hook-registration
-path — then drives the actual agent headless and asserts that a denied command is
-blocked while an allowed command runs:
+path — then drives the actual agent headless and asserts that denied work is
+blocked while allowed work runs. Each script covers all three surfaces: a denied
+**shell** command, a denied **built-in tool** (a `read` of a planted secret, or a
+`write` where the agent has no gateable read), and a denied **MCP** tool (a
+destructive call routed through a bundled stdio MCP server fixture):
 
 ```sh
 just test-claude     # drives `claude`;       writes/reads .claude/settings.json

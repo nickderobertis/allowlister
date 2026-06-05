@@ -33,6 +33,10 @@ bin="$repo_root/target/release/allowlister"
 note() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# Shared helpers for the built-in-tool and MCP tool-use cases (rules + assertions).
+# shellcheck source=scripts/e2e-lib.sh
+. "$repo_root/scripts/e2e-lib.sh"
+
 # A missing `claude` is a skip, not a failure: this script is opt-in and the rest
 # of the project must build and test on machines without the harness installed.
 if ! command -v claude >/dev/null 2>&1; then
@@ -57,15 +61,17 @@ proj="$sandbox/project"
 mkdir -p "$proj/.git" "$sandbox/xdg"
 
 # Deterministic, sandbox-scoped rules: deny `touch`, allow `echo` redirecting
-# anywhere under the sandbox. write_glob is pinned to the temp dir so the allow
-# case always matches its redirection target.
+# anywhere under the sandbox (write_glob is pinned to the temp dir so the allow
+# case always matches its redirection target), plus the shared tool-use rules
+# (built-in read/write/edit + MCP denies, and the shell-read fence).
 rules="$sandbox/rules.json"
 cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
     { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
-      "redirections": { "write_glob": ["$sandbox/*"] } }
+      "redirections": { "write_glob": ["$sandbox/*"] } },
+${AL_TOOL_RULES}
   ]
 }
 JSON
@@ -81,20 +87,42 @@ note "» wiring the project with \`allowlister init\`"
 grep -q 'allowlister hook claude-code' "$proj/.claude/settings.json" \
     || fail "init did not register the hook in .claude/settings.json"
 
+# Plant the built-in read-tool fixtures (a gated secret + an ungated readme) and
+# wire the shared stdio MCP server via project `.mcp.json`, so the tool-use cases
+# below have something to gate. The settings the `init` step wrote already
+# register a PreToolUse matcher for the built-in tools and `mcp__*`.
+al_plant_read_fixtures "$proj"
+mcp_server="$(al_mcp_server "$repo_root")"
+mcp_sentinel="$sandbox/mcp-deleted.sentinel"
+mcp_log="$sandbox/mcp-requests.log"
+mcp_token="ALLOWTOKEN-${RANDOM}${RANDOM}"
+mcp_config="$proj/.mcp.json"
+if al_have_python; then
+    cat > "$mcp_config" <<JSON
+{ "mcpServers": { "altest": { "command": "python3",
+    "args": ["$mcp_server", "$mcp_sentinel", "$mcp_token", "$mcp_log"] } } }
+JSON
+fi
+
 # Run one headless turn that is steered toward a single exact command.
 #  * bypassPermissions: no human approver exists in a headless run, so this stops
 #    `default` mode from hanging on a prompt. Hooks still run and a hook `deny`
 #    still blocks, so the hook remains the sole decider for the cases we assert.
+#  * --mcp-config + --strict-mcp-config load ONLY our test server (when present),
+#    so the MCP tool names are the predictable `mcp__altest__*`.
 #  * XDG_CONFIG_HOME points at an empty dir so no ambient user config leaks in;
 #    HOME is left intact so `claude` keeps its credentials.
 #  * stdin from /dev/null avoids the interactive "waiting for stdin" delay.
 run_claude() {
     local prompt="$1" stream="$2"
+    local mcp_args=()
+    [ -f "$mcp_config" ] && mcp_args=(--mcp-config "$mcp_config" --strict-mcp-config)
     ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
         timeout 150 claude -p "$prompt" \
             --permission-mode bypassPermissions \
             --model "$model" \
-            --max-turns 4 \
+            --max-turns 6 \
+            "${mcp_args[@]}" \
             --output-format stream-json --verbose \
             </dev/null ) >"$stream" 2>"$stream.err" || {
         note "  (claude exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
@@ -105,7 +133,7 @@ run_claude() {
 # is echoed back to the model verbatim in the blocked tool result).
 denied_in() { grep -aq 'allowlister:.*denied' "$1"; }
 
-note "» case 1/2: deny — \`touch\` must be blocked"
+note "» case 1/4: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_claude "Use the Bash tool to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -114,7 +142,7 @@ run_claude "Use the Bash tool to run exactly this one command, then stop: touch 
 denied_in "$sandbox/deny.stream" || fail "no allowlister deny appeared in the transcript (hook did not fire, or the model never attempted the command)"
 note "  ok: command blocked and the deny reason was reported to the model"
 
-note "» case 2/2: allow — \`echo\` must run"
+note "» case 2/4: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
 rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
@@ -125,4 +153,19 @@ grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote une
 denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
 note "  ok: command executed without a permission prompt"
 
-note "✓ claude live e2e passed (deny blocked, allow ran)"
+note "» case 3/4: built-in read tool — reading the secret must be blocked"
+run_claude "There are two files in this project. Use your Read tool to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
+    "$sandbox/read.stream"
+al_read_conclude "$sandbox/read.stream"
+
+if al_have_python && [ -f "$mcp_config" ]; then
+    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    rm -f "$mcp_sentinel" "$mcp_log"
+    run_claude "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
+        "$sandbox/mcp.stream"
+    al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
+else
+    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+fi
+
+note "✓ claude live e2e passed (shell deny+allow, built-in read deny, MCP deny)"

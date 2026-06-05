@@ -28,21 +28,13 @@ struct ToolSpec {
 /// A per-harness MCP-name parser: raw tool name → `(server, tool)` or `None`.
 type McpParser = fn(&str) -> Option<(String, String)>;
 
-/// Build a [`ToolCall`] from a tool table and an MCP parser. MCP is tried first
-/// (its names never collide with built-ins); then the table; otherwise the tool
-/// is `Other`, carrying only its raw name (still raw-name matchable).
+/// Build a [`ToolCall`] from a tool table and an MCP parser. The table is tried
+/// first: some harnesses' MCP wire format is a bare `<server>_<tool>` that can
+/// collide with a built-in whose own name contains `_` (e.g. OpenCode's
+/// `apply_patch`), so a known built-in name always wins. Then the MCP parser;
+/// otherwise the tool is `Other`, carrying only its raw name (still raw-name
+/// matchable).
 fn normalize(tool_name: &str, tool_input: &Value, table: &[ToolSpec], mcp: McpParser) -> ToolCall {
-    if let Some((server, tool)) = mcp(tool_name) {
-        let mut params = NormalizedParams::new();
-        params.insert(ParamKey::McpServer, server);
-        params.insert(ParamKey::McpTool, tool);
-        return ToolCall::new(
-            Capability::Mcp,
-            tool_name.to_string(),
-            params,
-            tool_input.clone(),
-        );
-    }
     if let Some(spec) = table.iter().find(|spec| spec.name == tool_name) {
         let mut params = NormalizedParams::new();
         for (raw, canonical) in spec.params {
@@ -52,6 +44,17 @@ fn normalize(tool_name: &str, tool_input: &Value, table: &[ToolSpec], mcp: McpPa
         }
         return ToolCall::new(
             spec.capability,
+            tool_name.to_string(),
+            params,
+            tool_input.clone(),
+        );
+    }
+    if let Some((server, tool)) = mcp(tool_name) {
+        let mut params = NormalizedParams::new();
+        params.insert(ParamKey::McpServer, server);
+        params.insert(ParamKey::McpTool, tool);
+        return ToolCall::new(
+            Capability::Mcp,
             tool_name.to_string(),
             params,
             tool_input.clone(),
@@ -95,7 +98,8 @@ fn parse_mcp_paren(tool_name: &str) -> Option<(String, String)> {
 
 /// `<ext>__<tool>` — Goose's namespace, shared by built-in extensions and MCP
 /// servers. The built-in `developer` extension is not an MCP server, so its
-/// tools (`developer__write`, etc.) are matched by the table instead.
+/// tools (`developer__text_editor`, `developer__shell`) are handled by `goose`
+/// directly rather than treated as MCP.
 fn parse_mcp_namespaced(tool_name: &str) -> Option<(String, String)> {
     let (server, tool) = tool_name.split_once("__")?;
     if server == "developer" {
@@ -104,9 +108,13 @@ fn parse_mcp_namespaced(tool_name: &str) -> Option<(String, String)> {
     nonempty(server, tool)
 }
 
-/// `<server>:<tool>` — OpenCode's sanitized server-qualified name.
-fn parse_mcp_colon(tool_name: &str) -> Option<(String, String)> {
-    let (server, tool) = tool_name.split_once(':')?;
+/// `<server>_<tool>` — OpenCode's sanitized server-qualified name (e.g.
+/// `altest_deletewidget`). Like Crush's form the single underscore is ambiguous
+/// when a server or tool name contains `_`; split on the first underscore as a
+/// best effort. Built-ins are matched by the table first (see [`normalize`]), so
+/// a name like `apply_patch` is never mistaken for an MCP server `apply`.
+fn parse_mcp_opencode(tool_name: &str) -> Option<(String, String)> {
+    let (server, tool) = tool_name.split_once('_')?;
     nonempty(server, tool)
 }
 
@@ -282,25 +290,62 @@ pub(crate) fn codex(tool_name: &str, tool_input: &Value) -> ToolCall {
     normalize(tool_name, tool_input, CODEX, parse_mcp_dunder)
 }
 
+// Goose's developer extension delivers its file tools to the hook under BARE
+// names (verified from a live payload: `write` carries `path`/`content`), not the
+// `developer__`-namespaced names the docs use. Map those bare tools here; the
+// multi-purpose `text_editor` (older Goose) is handled by `goose` below. Any
+// `<server>__<tool>` that isn't a developer builtin is MCP.
 const GOOSE: &[ToolSpec] = &[
-    // Goose has no built-in read tool; its developer extension writes/edits use
-    // `path`/`content` (not `file_path`).
     ToolSpec {
-        name: "developer__write",
+        name: "write",
         capability: Capability::Write,
         params: &[("path", ParamKey::Path), ("content", ParamKey::Content)],
     },
     ToolSpec {
-        name: "developer__edit",
+        name: "read",
+        capability: Capability::Read,
+        params: &[("path", ParamKey::Path)],
+    },
+    ToolSpec {
+        name: "edit",
         capability: Capability::Edit,
         params: &[("path", ParamKey::Path)],
     },
 ];
 
-/// Normalize a Goose `PreToolUse` tool call (`<ext>__<tool>` namespace; built-in
-/// writes/edits use `path`; any non-`developer` `<server>__<tool>` is MCP).
+/// Normalize a Goose `PreToolUse` tool call. Developer file tools arrive under bare
+/// names (`write`/`read`/`edit`) or, on older Goose, the multi-purpose
+/// `text_editor` whose `command` selects the capability; any non-developer
+/// `<server>__<tool>` is MCP.
 pub(crate) fn goose(tool_name: &str, tool_input: &Value) -> ToolCall {
+    if tool_name == "text_editor" || tool_name == "developer__text_editor" {
+        return goose_text_editor(tool_name, tool_input);
+    }
     normalize(tool_name, tool_input, GOOSE, parse_mcp_namespaced)
+}
+
+/// Map Goose's `text_editor` to a capability by its `command`: `view` is a read,
+/// `write` a write, and `str_replace`/`insert`/anything else an edit. The file is
+/// at `path`; new content (for `write`) is at `file_text`.
+fn goose_text_editor(tool_name: &str, tool_input: &Value) -> ToolCall {
+    let capability = match tool_input.get("command").and_then(Value::as_str) {
+        Some("view") => Capability::Read,
+        Some("write") => Capability::Write,
+        _ => Capability::Edit,
+    };
+    let mut params = NormalizedParams::new();
+    if let Some(path) = tool_input.get("path").and_then(Value::as_str) {
+        params.insert(ParamKey::Path, path.to_string());
+    }
+    if let Some(content) = tool_input.get("file_text").and_then(Value::as_str) {
+        params.insert(ParamKey::Content, content.to_string());
+    }
+    ToolCall::new(
+        capability,
+        tool_name.to_string(),
+        params,
+        tool_input.clone(),
+    )
 }
 
 const COPILOT: &[ToolSpec] = &[
@@ -384,9 +429,9 @@ const OPENCODE: &[ToolSpec] = &[
 
 /// Normalize an OpenCode `tool.execute.before` call (the shim forwards `input.tool`
 /// as the name and `output.args` as the input). Built-ins use camelCase
-/// `filePath`; MCP is the `server:tool` form.
+/// `filePath`; MCP is the `server_tool` form (e.g. `altest_deletewidget`).
 pub(crate) fn opencode(tool_name: &str, tool_input: &Value) -> ToolCall {
-    normalize(tool_name, tool_input, OPENCODE, parse_mcp_colon)
+    normalize(tool_name, tool_input, OPENCODE, parse_mcp_opencode)
 }
 
 /// Normalize a Cursor `beforeReadFile` event into a read tool call. The event has
@@ -485,14 +530,52 @@ mod tests {
     }
 
     #[test]
-    fn goose_namespace_distinguishes_builtin_from_mcp() {
+    fn goose_text_editor_capability_follows_command() {
+        // `developer__text_editor` is one tool whose `command` selects the
+        // capability: view -> read, write -> write, str_replace/insert -> edit.
+        let view = goose(
+            "developer__text_editor",
+            &json!({ "command": "view", "path": "/r/a" }),
+        );
+        assert_eq!(view.capability, Capability::Read);
+        assert_eq!(view.params.get(ParamKey::Path), Some("/r/a"));
+
         let write = goose(
-            "developer__write",
-            &json!({ "path": "/r/a", "content": "x" }),
+            "developer__text_editor",
+            &json!({ "command": "write", "path": "/r/a", "file_text": "x" }),
         );
         assert_eq!(write.capability, Capability::Write);
         assert_eq!(write.params.get(ParamKey::Path), Some("/r/a"));
-        // A non-developer namespace is an MCP server.
+        assert_eq!(write.params.get(ParamKey::Content), Some("x"));
+
+        let edit = goose(
+            "developer__text_editor",
+            &json!({ "command": "str_replace", "path": "/r/a" }),
+        );
+        assert_eq!(edit.capability, Capability::Edit);
+    }
+
+    #[test]
+    fn goose_bare_developer_tools_map_to_capabilities() {
+        // Goose delivers its developer file tools to the hook under bare names.
+        let write = goose("write", &json!({ "path": "/r/a", "content": "x" }));
+        assert_eq!(write.capability, Capability::Write);
+        assert_eq!(write.params.get(ParamKey::Path), Some("/r/a"));
+        assert_eq!(write.params.get(ParamKey::Content), Some("x"));
+
+        let read = goose("read", &json!({ "path": "/r/a" }));
+        assert_eq!(read.capability, Capability::Read);
+        assert_eq!(read.params.get(ParamKey::Path), Some("/r/a"));
+    }
+
+    #[test]
+    fn goose_namespace_distinguishes_builtin_from_mcp() {
+        // The developer shell is not a file tool, and a non-developer namespace is
+        // an MCP server.
+        assert_eq!(
+            goose("developer__shell", &json!({ "command": "ls" })).capability,
+            Capability::Other
+        );
         let mcp = goose("linear__list_issues", &json!({}));
         assert_eq!(mcp.capability, Capability::Mcp);
         assert_eq!(mcp.params.get(ParamKey::McpServer), Some("linear"));
@@ -514,16 +597,23 @@ mod tests {
     }
 
     #[test]
-    fn opencode_camel_case_and_colon_mcp() {
+    fn opencode_camel_case_and_underscore_mcp() {
         let read = opencode("read", &json!({ "filePath": "/repo/a" }));
         assert_eq!(read.capability, Capability::Read);
         assert_eq!(read.params.get(ParamKey::Path), Some("/repo/a"));
         let write = opencode("write", &json!({ "filePath": "/r/o", "content": "x" }));
         assert_eq!(write.params.get(ParamKey::Content), Some("x"));
-        let mcp = opencode("linear:list_issues", &json!({}));
+        // OpenCode names MCP tools `<server>_<tool>` (e.g. `altest_deletewidget`).
+        let mcp = opencode("altest_deletewidget", &json!({ "id": "1" }));
         assert_eq!(mcp.capability, Capability::Mcp);
-        assert_eq!(mcp.params.get(ParamKey::McpServer), Some("linear"));
-        assert_eq!(mcp.params.get(ParamKey::McpTool), Some("list_issues"));
+        assert_eq!(mcp.params.get(ParamKey::McpServer), Some("altest"));
+        assert_eq!(mcp.params.get(ParamKey::McpTool), Some("deletewidget"));
+        // A built-in whose name contains `_` is NOT mistaken for MCP: the table
+        // wins (see `normalize`), so `apply_patch` stays an edit.
+        assert_eq!(
+            opencode("apply_patch", &json!({})).capability,
+            Capability::Edit
+        );
     }
 
     #[test]
@@ -550,6 +640,6 @@ mod tests {
         assert!(parse_mcp_paren("plain").is_none());
         assert!(parse_mcp_namespaced("developer__shell").is_none());
         assert!(parse_mcp_namespaced("noseparator").is_none());
-        assert!(parse_mcp_colon("plain").is_none());
+        assert!(parse_mcp_opencode("plain").is_none());
     }
 }

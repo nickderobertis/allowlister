@@ -41,6 +41,12 @@ bin="$repo_root/target/release/allowlister"
 note() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# Shared helpers for the MCP tool-use case (rules + assertions). Codex has no
+# built-in read tool firing PreToolUse, and its writes arrive as `apply_patch`
+# patch strings (no canonical path), so its gateable non-shell surface is MCP.
+# shellcheck source=scripts/e2e-lib.sh
+. "$repo_root/scripts/e2e-lib.sh"
+
 # A missing `codex` is a skip, not a failure: this script is opt-in and the rest
 # of the project must build and test on machines without the harness.
 if ! command -v "$agent_bin" >/dev/null 2>&1; then
@@ -82,7 +88,8 @@ cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
-    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
+${AL_TOOL_RULES}
   ]
 }
 JSON
@@ -103,6 +110,24 @@ cat >> "$HOME/.codex/config.toml" <<TOML
 [projects."$proj"]
 trust_level = "trusted"
 TOML
+
+# Register the shared stdio MCP server under Codex's user config. Codex exposes MCP
+# tools as `mcp__altest__*`, which the hook matcher already covers. Codex has no
+# gateable built-in read/write tool, so MCP is its non-shell tool-use surface.
+mcp_server="$(al_mcp_server "$repo_root")"
+mcp_sentinel="$sandbox/mcp-deleted.sentinel"
+mcp_log="$sandbox/mcp-requests.log"
+mcp_token="ALLOWTOKEN-${RANDOM}${RANDOM}"
+have_mcp=0
+if al_have_python; then
+    cat >> "$HOME/.codex/config.toml" <<TOML
+
+[mcp_servers.altest]
+command = "python3"
+args = ["$mcp_server", "$mcp_sentinel", "$mcp_token", "$mcp_log"]
+TOML
+    have_mcp=1
+fi
 
 # Authenticate non-interactively from the API key (writes creds under $HOME/.codex).
 if [ -n "${OPENAI_API_KEY:-}" ]; then
@@ -208,7 +233,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/2: deny — \`touch\` must be blocked even running unattended"
+note "» case 1/3: shell deny — \`touch\` must be blocked even running unattended"
 deny_sentinel="$proj/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -224,7 +249,7 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Codex rendered its own block)"
 fi
 
-note "» case 2/2: allow — \`mkdir\` must run"
+note "» case 2/3: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 rm -rf "$allow_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
@@ -235,4 +260,16 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed (allow fell through to Codex's normal flow)"
 
-note "✓ codex live e2e passed (deny blocked unattended, allow ran)"
+# Codex exposes no built-in read/write tool to PreToolUse (reads go via the shell,
+# writes via apply_patch patch strings), so MCP is its gateable non-shell surface.
+if [ "$have_mcp" = 1 ]; then
+    note "» case 3/3: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    rm -f "$mcp_sentinel" "$mcp_log"
+    run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
+        "$sandbox/mcp.stream"
+    al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
+else
+    note "» case 3/3: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+fi
+
+note "✓ codex live e2e passed (shell deny+allow, MCP deny)"
