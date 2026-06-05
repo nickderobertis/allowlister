@@ -81,12 +81,19 @@ const SETTINGS_SNIPPET: &str = r#"{
 }"#;
 
 /// The hooks snippet `init --harness cursor --no-hooks` prints for manual wiring:
-/// register the hook on Cursor's `beforeShellExecution` event. Cursor has no
-/// permissions block, so there is nothing to deny here.
+/// register the hook on Cursor's `beforeShellExecution` (shell), `beforeReadFile`
+/// (reads), and `beforeMCPExecution` (MCP) events. Cursor has no pre-execution
+/// write/edit event, and no permissions block, so there is nothing to deny here.
 const CURSOR_SETTINGS_SNIPPET: &str = r#"{
   "version": 1,
   "hooks": {
     "beforeShellExecution": [
+      { "command": "allowlister hook cursor" }
+    ],
+    "beforeReadFile": [
+      { "command": "allowlister hook cursor" }
+    ],
+    "beforeMCPExecution": [
       { "command": "allowlister hook cursor" }
     ]
   }

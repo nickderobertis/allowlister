@@ -104,6 +104,12 @@ fn parse_mcp_namespaced(tool_name: &str) -> Option<(String, String)> {
     nonempty(server, tool)
 }
 
+/// `<server>:<tool>` — OpenCode's sanitized server-qualified name.
+fn parse_mcp_colon(tool_name: &str) -> Option<(String, String)> {
+    let (server, tool) = tool_name.split_once(':')?;
+    nonempty(server, tool)
+}
+
 fn nonempty(server: &str, tool: &str) -> Option<(String, String)> {
     if server.is_empty() || tool.is_empty() {
         return None;
@@ -333,6 +339,82 @@ pub(crate) fn copilot(tool_name: &str, tool_args: &Value) -> ToolCall {
     }
 }
 
+const OPENCODE: &[ToolSpec] = &[
+    ToolSpec {
+        name: "read",
+        capability: Capability::Read,
+        params: &[("filePath", ParamKey::Path)],
+    },
+    ToolSpec {
+        name: "write",
+        capability: Capability::Write,
+        params: &[("filePath", ParamKey::Path), ("content", ParamKey::Content)],
+    },
+    ToolSpec {
+        name: "edit",
+        capability: Capability::Edit,
+        params: &[("filePath", ParamKey::Path)],
+    },
+    ToolSpec {
+        name: "apply_patch",
+        capability: Capability::Edit,
+        params: &[],
+    },
+    ToolSpec {
+        name: "webfetch",
+        capability: Capability::WebFetch,
+        params: &[("url", ParamKey::Url)],
+    },
+    ToolSpec {
+        name: "websearch",
+        capability: Capability::WebSearch,
+        params: &[("query", ParamKey::Query)],
+    },
+    ToolSpec {
+        name: "grep",
+        capability: Capability::Grep,
+        params: &[("pattern", ParamKey::Pattern), ("path", ParamKey::Path)],
+    },
+    ToolSpec {
+        name: "glob",
+        capability: Capability::Glob,
+        params: &[("pattern", ParamKey::Pattern), ("path", ParamKey::Path)],
+    },
+];
+
+/// Normalize an OpenCode `tool.execute.before` call (the shim forwards `input.tool`
+/// as the name and `output.args` as the input). Built-ins use camelCase
+/// `filePath`; MCP is the `server:tool` form.
+pub(crate) fn opencode(tool_name: &str, tool_input: &Value) -> ToolCall {
+    normalize(tool_name, tool_input, OPENCODE, parse_mcp_colon)
+}
+
+/// Normalize a Cursor `beforeReadFile` event into a read tool call. The event has
+/// no `tool_name`; the file is at `file_path`.
+pub(crate) fn cursor_read(file_path: &str) -> ToolCall {
+    let mut params = NormalizedParams::new();
+    params.insert(ParamKey::Path, file_path.to_string());
+    ToolCall::new(
+        Capability::Read,
+        "beforeReadFile".to_string(),
+        params,
+        serde_json::json!({ "file_path": file_path }),
+    )
+}
+
+/// Normalize a Cursor `beforeMCPExecution` event. Its `tool_input` is an object
+/// per Cursor's types but a JSON string per its docs, so parse-if-string; the
+/// name is the standard `mcp__server__tool`.
+pub(crate) fn cursor_mcp(tool_name: &str, tool_input: &Value) -> ToolCall {
+    match tool_input {
+        Value::String(text) => {
+            let parsed = serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
+            normalize(tool_name, &parsed, &[], parse_mcp_dunder)
+        }
+        other => normalize(tool_name, other, &[], parse_mcp_dunder),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +514,35 @@ mod tests {
     }
 
     #[test]
+    fn opencode_camel_case_and_colon_mcp() {
+        let read = opencode("read", &json!({ "filePath": "/repo/a" }));
+        assert_eq!(read.capability, Capability::Read);
+        assert_eq!(read.params.get(ParamKey::Path), Some("/repo/a"));
+        let write = opencode("write", &json!({ "filePath": "/r/o", "content": "x" }));
+        assert_eq!(write.params.get(ParamKey::Content), Some("x"));
+        let mcp = opencode("linear:list_issues", &json!({}));
+        assert_eq!(mcp.capability, Capability::Mcp);
+        assert_eq!(mcp.params.get(ParamKey::McpServer), Some("linear"));
+        assert_eq!(mcp.params.get(ParamKey::McpTool), Some("list_issues"));
+    }
+
+    #[test]
+    fn cursor_read_event_and_mcp() {
+        let read = cursor_read("/repo/secret.txt");
+        assert_eq!(read.capability, Capability::Read);
+        assert_eq!(read.params.get(ParamKey::Path), Some("/repo/secret.txt"));
+
+        // Object args.
+        let mcp = cursor_mcp("mcp__filesystem__read_file", &json!({ "path": "/x" }));
+        assert_eq!(mcp.capability, Capability::Mcp);
+        assert_eq!(mcp.params.get(ParamKey::McpServer), Some("filesystem"));
+        // Stringified args (Cursor's docs shape) also work.
+        let mcp_str = cursor_mcp("mcp__linear__list", &json!(r#"{"teamId":"T"}"#));
+        assert_eq!(mcp_str.capability, Capability::Mcp);
+        assert_eq!(mcp_str.raw["teamId"], json!("T"));
+    }
+
+    #[test]
     fn malformed_mcp_names_do_not_parse() {
         assert!(parse_mcp_dunder("mcp__only").is_none());
         assert!(parse_mcp_dunder("Read").is_none());
@@ -439,5 +550,6 @@ mod tests {
         assert!(parse_mcp_paren("plain").is_none());
         assert!(parse_mcp_namespaced("developer__shell").is_none());
         assert!(parse_mcp_namespaced("noseparator").is_none());
+        assert!(parse_mcp_colon("plain").is_none());
     }
 }

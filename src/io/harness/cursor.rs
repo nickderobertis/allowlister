@@ -1,21 +1,26 @@
-//! Cursor `beforeShellExecution` hook adapter.
+//! Cursor hook adapter.
 //!
-//! Reads the hook JSON from stdin, evaluates the shell command, and writes a
-//! decision JSON on stdout. Exit code is always `0` for normal operation; a
-//! malformed payload writes a stderr note and exits `1` (Cursor treats any
-//! non-zero exit as a fail-open, so the agent proceeds). The hook never denies on
-//! a parse failure or internal error.
+//! Reads the hook JSON from stdin and writes a decision JSON on stdout. Exit code
+//! is always `0` for normal operation; a malformed payload writes a stderr note
+//! and exits `1` (Cursor treats any non-zero exit as a fail-open, so the agent
+//! proceeds). The hook never denies on a parse failure or internal error.
 //!
-//! Unlike Claude Code's `PreToolUse`, the event carries the command at the top
-//! level with no `tool_name`, so there is no non-shell branch — the adapter
-//! always evaluates. Cursor has no "defer" permission, so a deferred verdict maps
-//! to `ask` (its safest escalation: surface to the user), never to `allow`.
+//! Cursor splits tool categories across separate events, so the adapter
+//! dispatches on `hook_event_name`: `beforeShellExecution` carries the command at
+//! the top level (the structural shell path), `beforeReadFile` carries a
+//! `file_path` (gated as a `read` tool call), and `beforeMCPExecution` carries an
+//! `mcp__server__tool` name plus arguments (gated as an MCP tool call). Cursor has
+//! no pre-execution write/edit event, so writes/edits cannot be gated. Cursor has
+//! no "defer" permission either, so a deferred verdict maps to `ask` (its safest
+//! escalation: surface to the user), never to `allow`.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use serde::Deserialize;
+use serde_json::Value;
 
+use super::normalize;
 use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
@@ -48,12 +53,27 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
 
     let dir = discovery_dir(&input);
     let loaded = config::load(Path::new(dir));
-    let result = domain::evaluate(&input.command, &loaded.rules);
+    // Cursor splits tool categories across separate events. `beforeReadFile` and
+    // `beforeMCPExecution` are normalized and gated by the tool-rule engine;
+    // `beforeShellExecution` (and any unrecognized event) keeps the structural
+    // shell path. Cursor has no pre-execution write/edit event, so writes/edits
+    // are not gateable here.
+    let result = match input.hook_event_name.as_str() {
+        "beforeReadFile" => {
+            let call = normalize::cursor_read(input.file_path.as_deref().unwrap_or_default());
+            domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        }
+        "beforeMCPExecution" => {
+            let call = normalize::cursor_mcp(&input.tool_name, &input.tool_input);
+            domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        }
+        _ => domain::evaluate(&input.command, &loaded.rules),
+    };
 
     let permission = match result.verdict {
         Verdict::Allow => "allow",
         Verdict::Deny => "deny",
-        // Cursor has no "defer": escalate an undecided command to the user.
+        // Cursor has no "defer": escalate an undecided call to the user.
         Verdict::Ask | Verdict::Defer => "ask",
     };
     write_decision(
@@ -99,8 +119,21 @@ fn write_decision<W: Write>(stdout: &mut W, permission: &str, message: &str) {
 
 #[derive(Debug, Default, Deserialize)]
 struct HookInput {
+    /// Which Cursor event this is; selects how the payload is interpreted.
+    #[serde(default)]
+    hook_event_name: String,
+    /// `beforeShellExecution`: the shell command, at the top level.
     #[serde(default)]
     command: String,
+    /// `beforeReadFile`: the file being read.
+    #[serde(default)]
+    file_path: Option<String>,
+    /// `beforeMCPExecution`: the MCP tool name (`mcp__server__tool`) and its
+    /// arguments (an object, or a JSON string per Cursor's docs).
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    tool_input: Value,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -210,5 +243,64 @@ mod tests {
                 "missing reason under {key}"
             );
         }
+    }
+
+    /// A project sandbox whose tool rule denies reading `.ssh` paths.
+    fn sandbox_with_read_deny() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(
+            dir.path().join(".allowlister.json"),
+            r#"{"rules":[{"name":"no ssh","tool":"read","action":"deny","params":{"path":["**/.ssh/**"]}}]}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    fn root(dir: &TempDir) -> String {
+        serde_json::to_string(&dir.path().to_string_lossy().into_owned()).unwrap()
+    }
+
+    #[test]
+    fn before_read_file_event_denies_secret() {
+        let dir = sandbox_with_read_deny();
+        let payload = format!(
+            r#"{{"hook_event_name":"beforeReadFile","file_path":"/home/u/.ssh/id_rsa","workspace_roots":[{}]}}"#,
+            root(&dir)
+        );
+        let (code, value) = run_payload(&payload);
+        assert_eq!(code, 0);
+        assert_eq!(permission(&value), "deny");
+    }
+
+    #[test]
+    fn before_read_file_event_outside_rule_maps_defer_to_ask() {
+        let dir = sandbox_with_read_deny();
+        let payload = format!(
+            r#"{{"hook_event_name":"beforeReadFile","file_path":"/repo/a.txt","workspace_roots":[{}]}}"#,
+            root(&dir)
+        );
+        let (code, value) = run_payload(&payload);
+        assert_eq!(code, 0);
+        // No matching rule defers; Cursor has no defer, so it escalates to ask.
+        assert_eq!(permission(&value), "ask");
+    }
+
+    #[test]
+    fn before_mcp_execution_event_denies_destructive() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(
+            dir.path().join(".allowlister.json"),
+            r#"{"rules":[{"name":"no destroy","tool":"mcp","action":"deny","params":{"mcp_tool":["delete*"]}}]}"#,
+        )
+        .unwrap();
+        let payload = format!(
+            r#"{{"hook_event_name":"beforeMCPExecution","tool_name":"mcp__linear__delete_issue","tool_input":{{}},"workspace_roots":[{}]}}"#,
+            root(&dir)
+        );
+        let (code, value) = run_payload(&payload);
+        assert_eq!(code, 0);
+        assert_eq!(permission(&value), "deny");
     }
 }
