@@ -16,7 +16,7 @@ use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
 use crate::io::{
     claude_settings, codex_settings, copilot_settings, crush_settings, cursor_settings,
-    qwen_settings,
+    goose_settings, qwen_settings,
 };
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
@@ -119,6 +119,32 @@ const QWEN_SETTINGS_SNIPPET: &str = r#"{
         "matcher": "run_shell_command",
         "hooks": [
           { "type": "command", "command": "allowlister hook qwen" }
+        ]
+      }
+    ]
+  }
+}"#;
+
+/// The `plugin.json` manifest that accompanies the Goose hooks file — Goose
+/// discovers a plugin *directory*, not a single settings file.
+const GOOSE_MANIFEST_SNIPPET: &str = r#"{
+  "name": "allowlister",
+  "version": "0.1.0",
+  "description": "Gate AI-agent shell commands through allowlister."
+}"#;
+
+/// The `hooks/hooks.json` snippet `init --harness goose --no-hooks` prints for
+/// manual wiring: register the hook on Goose's `PreToolUse` event, scoped to the
+/// shell tool (exposed as `shell` or `developer__shell` depending on how the
+/// developer extension loads). Goose has no permissions block, so there is nothing
+/// to deny here.
+const GOOSE_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "(^|__)shell$",
+        "hooks": [
+          { "type": "command", "command": "allowlister hook goose", "timeout": 10 }
         ]
       }
     ]
@@ -330,6 +356,7 @@ fn harness_label(harness: Harness) -> &'static str {
         Harness::Codex => "Codex",
         Harness::Crush => "Crush",
         Harness::Qwen => "Qwen Code",
+        Harness::Goose => "Goose",
         Harness::Copilot => "Copilot",
     }
 }
@@ -373,6 +400,12 @@ fn register_hook_for<W: Write>(
             report_qwen_hook(out, &change);
             Ok(())
         }
+        Harness::Goose => {
+            let path = goose_settings::settings_path(global, cwd, env)?;
+            let change = goose_settings::register_hook(&path)?;
+            report_goose_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => {
             let path = copilot_settings::settings_path(global, cwd, env)?;
             let change = copilot_settings::register_hook(&path)?;
@@ -390,6 +423,7 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         Harness::Codex => write_codex_hook_setup(out),
         Harness::Crush => write_crush_hook_setup(out),
         Harness::Qwen => write_qwen_hook_setup(out),
+        Harness::Goose => write_goose_hook_setup(out),
         Harness::Copilot => write_copilot_hook_setup(out),
     };
     Ok(())
@@ -523,6 +557,33 @@ fn report_qwen_hook<W: Write>(out: &mut W, change: &qwen_settings::SettingsChang
     }
 }
 
+/// Report what registering the Goose hook changed. Goose discovers a plugin
+/// directory rather than a single settings file, and has no permissions block, so
+/// there is no allow-list warning — just a note that the plugin activates on the
+/// next Goose start.
+fn report_goose_hook<W: Write>(out: &mut W, change: &goose_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the shell PreToolUse hook.",
+            change.path.display(),
+            goose_settings::hook_command()
+        );
+        let _ = writeln!(
+            out,
+            "  Goose discovers the plugin on its next start — no enable flag or trust step."
+        );
+    }
+}
+
 /// Report what registering the Copilot hook changed. Copilot's hook file has no
 /// allow list to broaden, so there is no allow-list warning to print.
 fn report_copilot_hook<W: Write>(out: &mut W, change: &copilot_settings::SettingsChange) {
@@ -610,6 +671,22 @@ fn write_qwen_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{QWEN_SETTINGS_SNIPPET}")
+}
+
+/// Write the Goose plugin snippet. Goose discovers a plugin *directory*, so this
+/// describes both files: the manifest and the hooks config. Goose has no allow
+/// list to broaden, so there is no allow-list warning to print.
+fn write_goose_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Create the plugin under ~/.agents/plugins/allowlister/ (or .agents/plugins/allowlister/ per-repo)."
+    )?;
+    writeln!(out)?;
+    writeln!(out, "plugin.json:")?;
+    writeln!(out, "{GOOSE_MANIFEST_SNIPPET}")?;
+    writeln!(out)?;
+    writeln!(out, "hooks/hooks.json (merge with any existing keys):")?;
+    writeln!(out, "{GOOSE_SETTINGS_SNIPPET}")
 }
 
 /// Write the Copilot hooks snippet. Copilot loads a directory of independent hook
@@ -1143,6 +1220,75 @@ mod tests {
         // The config still lands under XDG; only the hook wiring is harness-specific.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("home/.qwen/settings.json").is_file());
+    }
+
+    #[test]
+    fn execute_goose_local_registers_plugin() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Goose,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Goose writes a plugin directory, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let plugin = dir.path().join(".agents/plugins/allowlister");
+        assert!(
+            plugin.join("plugin.json").is_file(),
+            "the manifest is written"
+        );
+        let hooks = plugin.join("hooks/hooks.json");
+        assert!(hooks.is_file(), "the goose hook must be registered locally");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "allowlister hook goose"
+        );
+    }
+
+    #[test]
+    fn execute_goose_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Goose,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".agents").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(".agents/plugins/allowlister"));
+        assert!(text.contains("allowlister hook goose"));
+        // Goose has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_goose_global_writes_under_home_agents() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Goose,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir
+            .path()
+            .join("home/.agents/plugins/allowlister/hooks/hooks.json")
+            .is_file());
     }
 
     #[test]

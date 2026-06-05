@@ -2,7 +2,7 @@
 
 use crate::cli::Harness;
 use crate::errors::Result;
-use crate::io::harness::{claude_code, codex, copilot, crush, cursor, qwen};
+use crate::io::harness::{claude_code, codex, copilot, crush, cursor, goose, qwen};
 
 /// Run the hook adapter for the requested harness.
 pub fn run(harness: Harness) -> Result<i32> {
@@ -12,6 +12,7 @@ pub fn run(harness: Harness) -> Result<i32> {
         Harness::Codex => codex::run(),
         Harness::Crush => crush::run(),
         Harness::Qwen => qwen::run(),
+        Harness::Goose => goose::run(),
         Harness::Copilot => copilot::run(),
     }
 }
