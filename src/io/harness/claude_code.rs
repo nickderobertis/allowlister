@@ -1,19 +1,26 @@
 //! Claude Code `PreToolUse` hook adapter.
 //!
-//! Reads the hook JSON from stdin, evaluates the `Bash` command, and writes a
-//! `PreToolUse` decision JSON on stdout. Exit code is always `0` for normal
-//! operation; a malformed payload writes a stderr note and exits `1` (a
-//! non-blocking error per the hook contract — the harness proceeds). The hook
-//! never denies on a parse failure or internal error.
+//! Reads the hook JSON from stdin and writes a `PreToolUse` decision JSON on
+//! stdout. A `Bash` call goes through the structural shell engine; every other
+//! tool (built-in or `mcp__server__tool`) is normalized and gated by the
+//! tool-rule engine. Exit code is always `0` for normal operation; a malformed
+//! payload writes a stderr note and exits `1` (a non-blocking error per the hook
+//! contract — the harness proceeds). The hook never denies on a parse failure or
+//! internal error.
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::normalize;
 use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
+
+/// Claude Code's shell tool. Everything else is a non-shell tool call.
+const SHELL_TOOL: &str = "Bash";
 
 /// Wire the adapter to the process's standard streams.
 pub fn run() -> Result<i32> {
@@ -41,18 +48,23 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         }
     };
 
-    if input.tool_name != "Bash" {
-        write_decision(
-            &mut stdout,
-            "defer",
-            &format!("allowlister: tool '{}' not handled", input.tool_name),
-        );
-        return 0;
-    }
-
     let cwd = input.cwd.as_deref().unwrap_or(".");
     let loaded = config::load(Path::new(cwd));
-    let result = domain::evaluate(&input.tool_input.command, &loaded.rules);
+
+    // Bash keeps its structural path; every other tool is normalized and gated by
+    // the tool-rule engine. An unrecognized tool with no matching rule defers —
+    // exactly the behavior a non-shell tool had before tool gating existed.
+    let result = if input.tool_name == SHELL_TOOL {
+        let command = input
+            .tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        domain::evaluate(command, &loaded.rules)
+    } else {
+        let call = normalize::claude(&input.tool_name, &input.tool_input);
+        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+    };
 
     let decision = match result.verdict {
         Verdict::Allow => "allow",
@@ -90,14 +102,11 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// The tool's input object, kept as raw JSON: the shell path reads
+    /// `command`, while the tool path normalizes per-tool keys and matches any
+    /// server-defined parameter by JSON path.
     #[serde(default)]
-    tool_input: ToolInput,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct ToolInput {
-    #[serde(default)]
-    command: String,
+    tool_input: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,7 +128,9 @@ struct HookSpecificOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use serde_json::{json, Value};
+    use std::fs;
+    use tempfile::TempDir;
 
     fn run_payload(payload: &str) -> (i32, Value) {
         let mut stdout = Vec::new();
@@ -158,6 +169,59 @@ mod tests {
         let (code, value) = run_payload(
             r#"{"tool_name":"Bash","tool_input":{"command":"some_unknown_tool --x"},"cwd":"/tmp"}"#,
         );
+        assert_eq!(code, 0);
+        assert_eq!(decision(&value), "defer");
+    }
+
+    /// A project sandbox whose config gates the `Read` tool: allowed inside the
+    /// repo, denied for `.ssh` paths anywhere.
+    fn sandbox_with_read_rules() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        let allow_glob = format!("{}/**", dir.path().to_string_lossy());
+        let cfg = json!({
+            "rules": [
+                { "name": "reads in repo", "tool": "read", "action": "allow",
+                  "params": { "path": [allow_glob] } },
+                { "name": "no secrets", "tool": "read", "action": "deny",
+                  "params": { "path": ["**/.ssh/**"] } }
+            ]
+        })
+        .to_string();
+        fs::write(dir.path().join(".allowlister.json"), cfg).unwrap();
+        dir
+    }
+
+    fn read_payload(dir: &TempDir, file_path: &str) -> String {
+        json!({
+            "tool_name": "Read",
+            "tool_input": { "file_path": file_path },
+            "cwd": dir.path().to_string_lossy(),
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn read_tool_inside_repo_is_allowed() {
+        let dir = sandbox_with_read_rules();
+        let path = format!("{}/src/main.rs", dir.path().to_string_lossy());
+        let (code, value) = run_payload(&read_payload(&dir, &path));
+        assert_eq!(code, 0);
+        assert_eq!(decision(&value), "allow");
+    }
+
+    #[test]
+    fn read_tool_of_ssh_key_is_denied() {
+        let dir = sandbox_with_read_rules();
+        let (code, value) = run_payload(&read_payload(&dir, "/home/user/.ssh/id_rsa"));
+        assert_eq!(code, 0);
+        assert_eq!(decision(&value), "deny");
+    }
+
+    #[test]
+    fn read_tool_outside_any_rule_defers() {
+        let dir = sandbox_with_read_rules();
+        let (code, value) = run_payload(&read_payload(&dir, "/etc/hosts"));
         assert_eq!(code, 0);
         assert_eq!(decision(&value), "defer");
     }

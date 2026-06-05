@@ -12,7 +12,8 @@
 //! - Rule order never changes the verdict, only which rule is cited.
 
 use super::analyzer::{Analysis, Fragment};
-use super::rule::{Action, Rule};
+use super::rule::{Action, Rule, ToolRule};
+use super::toolcall::ToolCall;
 
 /// The outcome for a command or a single fragment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +245,44 @@ pub fn evaluate(command: &str, rules: &[Rule]) -> DecisionResult {
     decide(&analysis, rules)
 }
 
+/// Evaluate a single normalized tool call against the tool rules, composing a
+/// verdict the same way the shell engine does: any matching **deny** denies
+/// (supreme), else the first matching **allow** allows, else **defer**. A tool
+/// call has no fragments or redirections, so the result carries only a verdict
+/// and reason; rule order never changes the verdict, only which rule is cited.
+pub fn evaluate_tool_call(call: &ToolCall, rules: &[ToolRule]) -> DecisionResult {
+    for rule in rules {
+        if rule.action == Action::Deny && rule.matches(call) {
+            return tool_result(
+                Verdict::Deny,
+                format!("tool `{}` denied by rule '{}'", call.tool_name, rule.name),
+            );
+        }
+    }
+    for rule in rules {
+        if rule.action == Action::Allow && rule.matches(call) {
+            return tool_result(
+                Verdict::Allow,
+                format!("tool `{}` allowed by rule '{}'", call.tool_name, rule.name),
+            );
+        }
+    }
+    tool_result(
+        Verdict::Defer,
+        format!("no rule matched tool `{}`", call.tool_name),
+    )
+}
+
+fn tool_result(verdict: Verdict, reason: String) -> DecisionResult {
+    DecisionResult {
+        verdict,
+        reason,
+        fragments: Vec::new(),
+        warnings: Vec::new(),
+        unsupported: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -454,6 +493,391 @@ mod tests {
         assert_eq!(
             evaluate("echo hi > /tmp/x", &[rule]).verdict,
             Verdict::Allow
+        );
+    }
+}
+
+#[cfg(test)]
+mod tool_tests {
+    use super::evaluate_tool_call;
+    use crate::domain::rule::{Action, MatchKind, ToolRule};
+    use crate::domain::toolcall::{Capability, NormalizedParams, ParamKey, ToolCall};
+    use crate::domain::Verdict;
+    use serde_json::{json, Value};
+
+    /// Build a tool call with canonical params and a raw object for JSON-path
+    /// matching.
+    fn call(cap: Capability, name: &str, params: &[(ParamKey, &str)], raw: Value) -> ToolCall {
+        let mut np = NormalizedParams::new();
+        for (key, value) in params {
+            np.insert(*key, (*value).to_string());
+        }
+        ToolCall::new(cap, name.to_string(), np, raw)
+    }
+
+    fn read(path: &str) -> ToolCall {
+        call(
+            Capability::Read,
+            "Read",
+            &[(ParamKey::Path, path)],
+            json!({ "file_path": path }),
+        )
+    }
+
+    /// A capability rule with canonical-parameter constraints.
+    fn rule(name: &str, action: Action, tool: &str, params: &[(ParamKey, &[&str])]) -> ToolRule {
+        let params: Vec<(ParamKey, Vec<String>)> = params
+            .iter()
+            .map(|(k, globs)| (*k, globs.iter().map(|g| g.to_string()).collect()))
+            .collect();
+        ToolRule::compile(
+            name.into(),
+            action,
+            tool,
+            MatchKind::Glob,
+            &params,
+            &[],
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+    }
+
+    /// A rule with raw JSON-path constraints (for MCP / server-defined params).
+    fn rule_jsonpath(
+        name: &str,
+        action: Action,
+        tool: &str,
+        jsonpath: &[(&str, &[&str])],
+    ) -> ToolRule {
+        let jsonpath: Vec<(String, Vec<String>)> = jsonpath
+            .iter()
+            .map(|(k, globs)| (k.to_string(), globs.iter().map(|g| g.to_string()).collect()))
+            .collect();
+        ToolRule::compile(
+            name.into(),
+            action,
+            tool,
+            MatchKind::Glob,
+            &[],
+            &jsonpath,
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn read_allow_deny_defer_by_path() {
+        let rules = vec![
+            rule(
+                "repo",
+                Action::Allow,
+                "read",
+                &[(ParamKey::Path, &["/repo/**"])],
+            ),
+            rule(
+                "secrets",
+                Action::Deny,
+                "read",
+                &[(ParamKey::Path, &["**/.ssh/**", "**/*.pem"])],
+            ),
+        ];
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/a.ts"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/home/u/.ssh/id_rsa"), &rules).verdict,
+            Verdict::Deny
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/etc/hosts"), &rules).verdict,
+            Verdict::Defer
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/key.pem"), &rules).verdict,
+            Verdict::Deny
+        );
+    }
+
+    #[test]
+    fn deny_is_supreme_and_order_independent() {
+        let allow = rule(
+            "repo",
+            Action::Allow,
+            "read",
+            &[(ParamKey::Path, &["/repo/**"])],
+        );
+        let deny = rule(
+            "secret",
+            Action::Deny,
+            "read",
+            &[(ParamKey::Path, &["**/secret*"])],
+        );
+        let forward = vec![allow.clone(), deny.clone()];
+        let reversed = vec![deny, allow];
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/secret.txt"), &forward).verdict,
+            Verdict::Deny
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/secret.txt"), &reversed).verdict,
+            Verdict::Deny
+        );
+    }
+
+    #[test]
+    fn traversal_cannot_widen_an_allow_but_deny_sees_through() {
+        let rules = vec![
+            rule(
+                "repo",
+                Action::Allow,
+                "read",
+                &[(ParamKey::Path, &["/repo/**"])],
+            ),
+            rule(
+                "ssh",
+                Action::Deny,
+                "read",
+                &[(ParamKey::Path, &["**/.ssh/**"])],
+            ),
+        ];
+        // `/repo/**` would textually match, but `..` is never permitted on allow.
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/../etc/passwd"), &rules).verdict,
+            Verdict::Defer
+        );
+        // A deny still fires through `..`.
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/../home/.ssh/id_rsa"), &rules).verdict,
+            Verdict::Deny
+        );
+    }
+
+    #[test]
+    fn web_fetch_host_scoping() {
+        let rules = vec![rule(
+            "github",
+            Action::Allow,
+            "web_fetch",
+            &[(
+                ParamKey::Url,
+                &["https://github.com/**", "https://*.github.com/**"],
+            )],
+        )];
+        let fetch = |url: &str| {
+            call(
+                Capability::WebFetch,
+                "WebFetch",
+                &[(ParamKey::Url, url)],
+                json!({ "url": url }),
+            )
+        };
+        assert_eq!(
+            evaluate_tool_call(&fetch("https://github.com/foo"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&fetch("https://evil.test/x"), &rules).verdict,
+            Verdict::Defer
+        );
+        assert_eq!(
+            evaluate_tool_call(&fetch("https://raw.githubusercontent.com/x"), &rules).verdict,
+            Verdict::Defer
+        );
+    }
+
+    #[test]
+    fn capability_only_deny_fires_regardless_of_params() {
+        let rules = vec![rule("no-search", Action::Deny, "web_search", &[])];
+        let search = call(
+            Capability::WebSearch,
+            "WebSearch",
+            &[(ParamKey::Query, "anything")],
+            json!({ "query": "anything" }),
+        );
+        assert_eq!(evaluate_tool_call(&search, &rules).verdict, Verdict::Deny);
+    }
+
+    #[test]
+    fn missing_param_does_not_match() {
+        let allow = vec![rule(
+            "repo",
+            Action::Allow,
+            "read",
+            &[(ParamKey::Path, &["/repo/**"])],
+        )];
+        let deny = vec![rule(
+            "ssh",
+            Action::Deny,
+            "read",
+            &[(ParamKey::Path, &["**/.ssh/**"])],
+        )];
+        let no_path = call(Capability::Read, "Read", &[], json!({ "offset": 0 }));
+        // An allow that names a path it cannot find must not allow.
+        assert_eq!(evaluate_tool_call(&no_path, &allow).verdict, Verdict::Defer);
+        // A deny that names a path it cannot find must not fire.
+        assert_eq!(evaluate_tool_call(&no_path, &deny).verdict, Verdict::Defer);
+    }
+
+    #[test]
+    fn and_across_params() {
+        let rules = vec![rule(
+            "todos",
+            Action::Allow,
+            "grep",
+            &[
+                (ParamKey::Pattern, &["TODO*"]),
+                (ParamKey::Path, &["/repo/**"]),
+            ],
+        )];
+        let grep = |pat: &str, path: &str| {
+            call(
+                Capability::Grep,
+                "Grep",
+                &[(ParamKey::Pattern, pat), (ParamKey::Path, path)],
+                json!({ "pattern": pat, "path": path }),
+            )
+        };
+        assert_eq!(
+            evaluate_tool_call(&grep("TODO", "/repo/x"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&grep("TODO", "/etc"), &rules).verdict,
+            Verdict::Defer
+        );
+        assert_eq!(
+            evaluate_tool_call(&grep("FIXME", "/repo/x"), &rules).verdict,
+            Verdict::Defer
+        );
+    }
+
+    #[test]
+    fn mcp_raw_name_selector_with_extglob() {
+        let rules = vec![rule(
+            "linear-ro",
+            Action::Allow,
+            "mcp__linear__@(list|get)*",
+            &[],
+        )];
+        let mcp = |name: &str| call(Capability::Mcp, name, &[], json!({}));
+        assert_eq!(
+            evaluate_tool_call(&mcp("mcp__linear__list_issues"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&mcp("mcp__linear__delete_issue"), &rules).verdict,
+            Verdict::Defer
+        );
+    }
+
+    #[test]
+    fn mcp_canonical_server_tool_is_portable() {
+        let rules = vec![
+            rule(
+                "linear-ro",
+                Action::Allow,
+                "mcp",
+                &[
+                    (ParamKey::McpServer, &["linear"]),
+                    (ParamKey::McpTool, &["@(list|get)*"]),
+                ],
+            ),
+            rule(
+                "no-destroy",
+                Action::Deny,
+                "mcp",
+                &[(ParamKey::McpTool, &["delete*"])],
+            ),
+        ];
+        let mcp = |server: &str, tool: &str| {
+            call(
+                Capability::Mcp,
+                &format!("mcp__{server}__{tool}"),
+                &[(ParamKey::McpServer, server), (ParamKey::McpTool, tool)],
+                json!({}),
+            )
+        };
+        assert_eq!(
+            evaluate_tool_call(&mcp("linear", "list_issues"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&mcp("linear", "delete_issue"), &rules).verdict,
+            Verdict::Deny
+        );
+        assert_eq!(
+            evaluate_tool_call(&mcp("github", "list_repos"), &rules).verdict,
+            Verdict::Defer
+        );
+    }
+
+    #[test]
+    fn jsonpath_scalar_and_array_with_allow_all_deny_any() {
+        let allow_in_repo = rule_jsonpath(
+            "fs-allow",
+            Action::Allow,
+            "mcp__fs__write",
+            &[("paths", &["/repo/**"])],
+        );
+        let deny_ssh = rule_jsonpath(
+            "fs-deny",
+            Action::Deny,
+            "mcp__fs__write",
+            &[("paths", &["**/.ssh/**"])],
+        );
+        let rules = vec![allow_in_repo, deny_ssh];
+        let write = |paths: Value| {
+            call(
+                Capability::Mcp,
+                "mcp__fs__write",
+                &[],
+                json!({ "paths": paths }),
+            )
+        };
+
+        // deny=any: one ssh element fires the deny.
+        assert_eq!(
+            evaluate_tool_call(&write(json!(["/repo/a", "/home/.ssh/b"])), &rules).verdict,
+            Verdict::Deny
+        );
+        // allow=all: every element in repo allows.
+        assert_eq!(
+            evaluate_tool_call(&write(json!(["/repo/a", "/repo/b"])), &rules).verdict,
+            Verdict::Allow
+        );
+        // allow=all fails when one element is outside repo (and no deny applies).
+        assert_eq!(
+            evaluate_tool_call(&write(json!(["/repo/a", "/etc/x"])), &rules).verdict,
+            Verdict::Defer
+        );
+    }
+
+    #[test]
+    fn jsonpath_scalar_owner_deny() {
+        let rules = vec![rule_jsonpath(
+            "no-evilcorp",
+            Action::Deny,
+            "mcp__*",
+            &[("owner", &["evilcorp"])],
+        )];
+        let issue = |owner: &str| {
+            call(
+                Capability::Mcp,
+                "mcp__github__create_issue",
+                &[],
+                json!({ "owner": owner }),
+            )
+        };
+        assert_eq!(
+            evaluate_tool_call(&issue("evilcorp"), &rules).verdict,
+            Verdict::Deny
+        );
+        assert_eq!(
+            evaluate_tool_call(&issue("goodcorp"), &rules).verdict,
+            Verdict::Defer
         );
     }
 }

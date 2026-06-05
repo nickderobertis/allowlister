@@ -24,6 +24,15 @@ const HOOK_COMMAND: &str = "allowlister hook claude-code";
 /// returns in well under a second.
 const HOOK_TIMEOUT: u64 = 10;
 
+/// Matcher for the non-shell tools the tool-rule engine gates, kept as a separate
+/// `PreToolUse` block from `Bash` so the shell path stays byte-identical and Bash
+/// is never evaluated twice. MCP tools arrive as `mcp__<server>__<tool>`.
+const TOOL_MATCHER: &str = "Read|Edit|Write|Glob|Grep|WebFetch|WebSearch|NotebookEdit|mcp__.*";
+
+/// The `PreToolUse` matchers allowlister registers, each running the same hook
+/// command: the shell tool and the non-shell tools.
+const MATCHERS: [&str; 2] = ["Bash", TOOL_MATCHER];
+
 /// Nuclear-pattern denies added to `permissions.deny` as defense in depth. The
 /// hook is the source of allow truth; these are a backstop the harness enforces
 /// even before the hook runs. `permissions.allow`/`ask` are never touched — a
@@ -130,10 +139,10 @@ fn read_settings(path: &Path) -> Result<Value> {
     })
 }
 
-/// Ensure a `Bash` PreToolUse hook running our command is present. Returns
-/// whether it was added. Idempotency is keyed on our command appearing anywhere
-/// in `hooks.PreToolUse`, so an existing matcher block the user owns is left
-/// untouched and we append our own element beside it.
+/// Ensure a `PreToolUse` block running our command is present for every matcher
+/// in [`MATCHERS`] (the shell tool and the non-shell tools). Returns whether any
+/// was added. Idempotency is keyed per matcher: a block the user owns, or one we
+/// already wrote, is left untouched and only missing matchers are appended.
 fn ensure_hook(obj: &mut serde_json::Map<String, Value>, label: &str) -> Result<bool> {
     let hooks = obj
         .entry("hooks")
@@ -146,21 +155,33 @@ fn ensure_hook(obj: &mut serde_json::Map<String, Value>, label: &str) -> Result<
         .as_array_mut()
         .ok_or_else(|| type_error(label, "hooks.PreToolUse", "an array"))?;
 
-    if pre.iter().any(registers_our_hook) {
-        return Ok(false);
+    let mut added = false;
+    for matcher in MATCHERS {
+        if pre
+            .iter()
+            .any(|entry| registers_our_matcher(entry, matcher))
+        {
+            continue;
+        }
+        pre.push(json!({
+            "matcher": matcher,
+            "hooks": [{
+                "type": "command",
+                "command": HOOK_COMMAND,
+                "timeout": HOOK_TIMEOUT,
+            }],
+        }));
+        added = true;
     }
-    pre.push(json!({
-        "matcher": "Bash",
-        "hooks": [{
-            "type": "command",
-            "command": HOOK_COMMAND,
-            "timeout": HOOK_TIMEOUT,
-        }],
-    }));
-    Ok(true)
+    Ok(added)
 }
 
-/// True if a PreToolUse entry already runs our hook command.
+/// True if a PreToolUse entry runs our hook command under a specific matcher.
+fn registers_our_matcher(entry: &Value, matcher: &str) -> bool {
+    entry.get("matcher").and_then(Value::as_str) == Some(matcher) && registers_our_hook(entry)
+}
+
+/// True if a PreToolUse entry already runs our hook command (under any matcher).
 fn registers_our_hook(entry: &Value) -> bool {
     entry
         .get("hooks")
@@ -226,7 +247,11 @@ mod tests {
         assert_eq!(change.denies_added, NUCLEAR_DENIES.len());
 
         let doc = read(&path);
-        assert!(registers_our_hook(&doc["hooks"]["PreToolUse"][0]));
+        let pre = doc["hooks"]["PreToolUse"].as_array().unwrap();
+        // One block per matcher: the shell tool and the non-shell tools.
+        assert_eq!(pre.len(), MATCHERS.len());
+        assert!(registers_our_matcher(&pre[0], "Bash"));
+        assert!(registers_our_matcher(&pre[1], TOOL_MATCHER));
         let deny = doc["permissions"]["deny"].as_array().unwrap();
         assert_eq!(deny.len(), NUCLEAR_DENIES.len());
     }
@@ -240,8 +265,8 @@ mod tests {
         assert!(again.was_noop(), "second run must change nothing");
         assert_eq!(
             read(&path)["hooks"]["PreToolUse"].as_array().unwrap().len(),
-            1,
-            "the hook must not be duplicated"
+            MATCHERS.len(),
+            "the hooks must not be duplicated"
         );
     }
 
@@ -276,9 +301,16 @@ mod tests {
         // The user's allow list is untouched.
         assert_eq!(doc["permissions"]["allow"][0], "Bash(ls *)");
         let pre = doc["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 2, "our hook is appended beside the user's");
+        // The user's own Bash block (running "echo mine") is preserved, and both
+        // of our matcher blocks are appended beside it.
+        assert_eq!(
+            pre.len(),
+            1 + MATCHERS.len(),
+            "our hooks append beside the user's"
+        );
         assert_eq!(pre[0]["hooks"][0]["command"], "echo mine");
-        assert!(registers_our_hook(&pre[1]));
+        assert!(registers_our_matcher(&pre[1], "Bash"));
+        assert!(registers_our_matcher(&pre[2], TOOL_MATCHER));
     }
 
     #[test]

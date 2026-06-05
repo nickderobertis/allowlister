@@ -9,17 +9,21 @@
 //! A malformed config file (or a single malformed rule) is skipped with a
 //! recorded warning; loading never fails the caller. The hook must never crash.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::domain::{Action, Grant, MatchKind, RedirPolicy, Role, Rule};
+use crate::domain::{Action, Grant, MatchKind, ParamKey, RedirPolicy, Role, Rule, ToolRule};
 use crate::io::configfs::{self, Env};
 
 /// The compiled, merged configuration.
 #[derive(Debug, Default)]
 pub struct LoadedConfig {
+    /// Shell-command rules, evaluated by the structural bash engine.
     pub rules: Vec<Rule>,
+    /// Non-shell tool-call rules, evaluated by the tool engine.
+    pub tool_rules: Vec<ToolRule>,
     /// Config files that were loaded (or skipped, annotated with the reason).
     pub sources: Vec<String>,
     /// Non-fatal problems encountered while loading.
@@ -76,7 +80,8 @@ fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
     };
     for (index, raw_rule) in raw.rules.into_iter().enumerate() {
         match raw_rule.compile(display) {
-            Ok(rule) => config.rules.push(rule),
+            Ok(Compiled::Bash(rule)) => config.rules.push(rule),
+            Ok(Compiled::Tool(rule)) => config.tool_rules.push(rule),
             Err(err) => config.warnings.push(format!(
                 "{display}: skipping rule #{index} ('{name}'): {err}",
                 name = raw_rule.display_name()
@@ -110,6 +115,14 @@ struct RawRule {
     redirections: Option<RawRedir>,
     #[serde(default)]
     grants: Option<String>,
+    // Tool-rule fields. The presence of `tool` selects the non-shell engine; it
+    // is then mutually exclusive with the bash-only fields above.
+    #[serde(default)]
+    tool: Option<String>,
+    #[serde(default)]
+    params: Option<BTreeMap<String, OneOrMany>>,
+    #[serde(default)]
+    jsonpath: Option<BTreeMap<String, OneOrMany>>,
     #[serde(default)]
     description: String,
 }
@@ -124,18 +137,56 @@ struct RawRedir {
     read_glob: Option<Vec<String>>,
 }
 
+/// A glob value that accepts either a single string or an array of strings, so
+/// `"path": "/repo/**"` and `"path": ["/repo/**", "./**"]` both parse.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl OneOrMany {
+    fn to_vec(&self) -> Vec<String> {
+        match self {
+            OneOrMany::One(value) => vec![value.clone()],
+            OneOrMany::Many(values) => values.clone(),
+        }
+    }
+}
+
+/// A compiled rule, either a shell rule or a tool rule.
+enum Compiled {
+    Bash(Rule),
+    Tool(ToolRule),
+}
+
 impl RawRule {
-    fn compile(&self, source: &str) -> Result<Rule, String> {
+    fn compile(&self, source: &str) -> Result<Compiled, String> {
         let action = match self.action.as_deref() {
             None | Some("allow") => Action::Allow,
             Some("deny") => Action::Deny,
             Some(other) => return Err(format!("unknown action '{other}'")),
         };
         let kind = MatchKind::parse(self.kind.as_deref())?;
+        let name = self.display_name();
+
+        // The presence of `tool` selects the non-shell engine; everything else is
+        // the existing bash path, byte-for-byte unchanged.
+        if let Some(tool) = self.tool.as_deref() {
+            return self
+                .compile_tool(name, action, tool, kind, source)
+                .map(Compiled::Tool);
+        }
+
+        // Tool-only fields on a bash rule are a mistake, not a silent no-op.
+        if self.params.is_some() || self.jsonpath.is_some() {
+            return Err("'params' and 'jsonpath' are only valid on a 'tool' rule".to_string());
+        }
+
         let roles = self.compile_roles()?;
         let redirections = self.compile_redirections()?;
         let grant = self.compile_grant()?;
-        let name = self.display_name();
 
         // A redirection-only rule only ever widens redirection targets for an
         // already-authorized command, so a deny grant is meaningless and an
@@ -155,7 +206,7 @@ impl RawRule {
             }
         }
 
-        match (&self.match_pattern, &self.argv) {
+        let rule = match (&self.match_pattern, &self.argv) {
             (Some(_), Some(_)) => {
                 Err("rule must set exactly one of 'match' or 'argv', not both".to_string())
             }
@@ -187,7 +238,64 @@ impl RawRule {
                 )
                 .map(|rule| rule.with_grant(grant))
             }
+        }?;
+        Ok(Compiled::Bash(rule))
+    }
+
+    /// Compile the non-shell tool rule. Bash-only fields are rejected so a
+    /// `tool` rule and a shell rule never overlap.
+    fn compile_tool(
+        &self,
+        name: String,
+        action: Action,
+        tool: &str,
+        kind: MatchKind,
+        source: &str,
+    ) -> Result<ToolRule, String> {
+        if self.match_pattern.is_some() || self.argv.is_some() {
+            return Err("a 'tool' rule must not set 'match' or 'argv'".to_string());
         }
+        if self.roles.is_some() {
+            return Err("a 'tool' rule must not set 'roles' (a tool call has no role)".to_string());
+        }
+        if self.redirections.is_some() {
+            return Err("a 'tool' rule must not set 'redirections'".to_string());
+        }
+        if self.grants.is_some() {
+            return Err("a 'tool' rule must not set 'grants'".to_string());
+        }
+        let params = self.compile_params()?;
+        let jsonpath = self.compile_jsonpath();
+        ToolRule::compile(
+            name,
+            action,
+            tool,
+            kind,
+            &params,
+            &jsonpath,
+            self.description.clone(),
+            source.to_string(),
+        )
+    }
+
+    fn compile_params(&self) -> Result<Vec<(ParamKey, Vec<String>)>, String> {
+        let mut out = Vec::new();
+        if let Some(map) = &self.params {
+            for (key, globs) in map {
+                let param = ParamKey::parse(key)
+                    .ok_or_else(|| format!("unknown canonical param '{key}'"))?;
+                out.push((param, globs.to_vec()));
+            }
+        }
+        Ok(out)
+    }
+
+    fn compile_jsonpath(&self) -> Vec<(String, Vec<String>)> {
+        self.jsonpath
+            .iter()
+            .flatten()
+            .map(|(path, globs)| (path.clone(), globs.to_vec()))
+            .collect()
     }
 
     fn compile_grant(&self) -> Result<Grant, String> {
@@ -232,6 +340,9 @@ impl RawRule {
         }
         if let Some(argv) = &self.argv {
             return argv.join(" ");
+        }
+        if let Some(tool) = &self.tool {
+            return tool.clone();
         }
         "(unnamed)".to_string()
     }
@@ -358,5 +469,105 @@ mod tests {
         let config = load_from_paths(&[path]);
         assert!(config.rules.is_empty());
         assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn tool_rule_compiles_into_tool_rules() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"reads","tool":"read","action":"allow","params":{"path":["/repo/**"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert_eq!(config.tool_rules.len(), 1);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn bash_rules_still_compile_unchanged_alongside_tool_rules() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[
+                {"name":"git","match":"git status","action":"allow"},
+                {"name":"reads","tool":"read","action":"allow","params":{"path":["/repo/**"]}}
+            ]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.tool_rules.len(), 1);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn tool_and_bash_keys_are_mutually_exclusive() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"bad","tool":"read","argv":["x"],"action":"allow"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert!(config.tool_rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn params_without_tool_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"bad","match":"ls*","action":"allow","params":{"path":["/x"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn unknown_canonical_param_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"tool":"read","action":"allow","params":{"nope":["x"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.tool_rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn param_glob_accepts_string_or_array() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[
+                {"tool":"read","action":"allow","params":{"path":"/repo/**"}},
+                {"tool":"web_fetch","action":"allow","params":{"url":["https://github.com/**","https://*.github.com/**"]}}
+            ]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.tool_rules.len(), 2);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn mcp_raw_name_and_jsonpath_compile() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"tool":"mcp__github__*","action":"deny","jsonpath":{"owner":["evilcorp"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.tool_rules.len(), 1);
+        assert!(config.warnings.is_empty());
     }
 }
