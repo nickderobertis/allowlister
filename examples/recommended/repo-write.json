@@ -3,6 +3,21 @@
   "description": "Recommended profile: everything in the read-only profile PLUS the write operations an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Operations that seem destructive or irreversible are denied: force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, disk wipes, and registry publishing. This profile is permissive by design and is NOT a sandbox: allowing build/test/run tools (and interpreters like python/node) means project code can execute arbitrary commands the gate does not see. The denies are guardrails against obvious mistakes, not a containment boundary.",
   "rules": [
     {
+      "name": "scratch: any allowed command may redirect to /tmp",
+      "description": "Redirection-only grant (never authorizes a command): any command already allowed by another rule may redirect stdout/stderr to throwaway scratch under /tmp, including macOS's real /private/tmp. Source and system paths stay denied, and `..` traversal that escapes /tmp is rejected by the engine. This widens scratch targets profile-wide without repeating a redirection policy on every run/build/test rule.",
+      "argv": ["**"],
+      "action": "allow",
+      "grants": "redirections",
+      "redirections": {
+        "write_glob": [
+          "/tmp/*",
+          "/tmp/**",
+          "/private/tmp/*",
+          "/private/tmp/**"
+        ]
+      }
+    },
+    {
       "name": "read: shell inspection commands",
       "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo) or has a file-writing mode (tee, sort -o).",
       "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|xxd|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq|man|less|more)?( *)",

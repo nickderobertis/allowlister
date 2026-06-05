@@ -4,7 +4,9 @@
 //! - **Deny is supreme.** Any matching deny rule denies the fragment,
 //!   regardless of how many allow rules also match.
 //! - **Allow is any-match.** The first matching allow rule (whose redirection
-//!   policy permits the fragment's redirections) allows it.
+//!   policy permits the fragment's redirections) allows it. A redirection-only
+//!   allow rule contributes redirection targets but never authorizes a command,
+//!   so it can only widen targets for a command another rule already permitted.
 //! - **Defer means "undecided."** It is never a synonym for allow or deny; the
 //!   harness's own permission flow takes over.
 //! - Rule order never changes the verdict, only which rule is cited.
@@ -138,7 +140,12 @@ fn result(
 }
 
 fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
-    let mut matched_allows: Vec<&Rule> = Vec::new();
+    // Allow rules split by what they grant: `authorizers` permit the command
+    // itself; `redirection_grants` only widen redirection targets for a command
+    // some authorizer already permitted. A redirection-only rule never appears in
+    // `authorizers`, so it can never be what grants execution permission.
+    let mut authorizers: Vec<&Rule> = Vec::new();
+    let mut redirection_grants: Vec<&Rule> = Vec::new();
 
     for rule in rules {
         match rule.action {
@@ -157,13 +164,18 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
             }
             Action::Allow => {
                 if rule.matches(fragment) {
-                    matched_allows.push(rule);
+                    if rule.is_redirection_only() {
+                        redirection_grants.push(rule);
+                    } else {
+                        authorizers.push(rule);
+                    }
                 }
             }
         }
     }
 
-    if matched_allows.is_empty() {
+    // No rule authorizes the command — a redirection-only match is not enough.
+    if authorizers.is_empty() {
         return FragmentDecision {
             fragment: fragment.clone(),
             verdict: Verdict::Defer,
@@ -173,7 +185,7 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
     }
 
     if fragment.redirections.is_empty() {
-        let rule = matched_allows[0];
+        let rule = authorizers[0];
         return FragmentDecision {
             fragment: fragment.clone(),
             verdict: Verdict::Allow,
@@ -182,8 +194,13 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
         };
     }
 
-    // With redirections, accept the first allow rule that permits them all.
-    for rule in &matched_allows {
+    // With redirections, accept the first rule — authorizer or redirection-only
+    // grant — that permits them all. A redirection-only grant only widens targets
+    // for the command an authorizer already permitted above.
+    let first = authorizers[0];
+    let mut candidates = authorizers;
+    candidates.extend(redirection_grants);
+    for rule in &candidates {
         if fragment
             .redirections
             .iter()
@@ -198,12 +215,16 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
         }
     }
 
-    // No allow rule permits the redirections — deny, citing the offender.
-    let first = matched_allows[0];
+    // No rule permits every redirection — deny, citing a target that no candidate
+    // (authorizer or redirection-only grant) permits.
     let offender = fragment
         .redirections
         .iter()
-        .find(|redir| !first.redirections.permits(redir))
+        .find(|redir| {
+            !candidates
+                .iter()
+                .any(|rule| rule.redirections.permits(redir))
+        })
         .unwrap_or(&fragment.redirections[0]);
     FragmentDecision {
         fragment: fragment.clone(),
@@ -212,7 +233,7 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
         reason: format!(
             "redirection `{}` not permitted by any matching allow rule (checked {})",
             offender.display,
-            matched_allows.len()
+            candidates.len()
         ),
     }
 }
@@ -227,7 +248,7 @@ pub fn evaluate(command: &str, rules: &[Rule]) -> DecisionResult {
 mod tests {
     use super::*;
     use crate::domain::analyzer::analyze;
-    use crate::domain::rule::{Action, MatchKind, RedirPolicy, Rule};
+    use crate::domain::rule::{Action, Grant, MatchKind, RedirPolicy, Rule};
 
     fn allow(name: &str, pattern: &str) -> Rule {
         Rule::from_match(
@@ -255,6 +276,83 @@ mod tests {
             String::new(),
         )
         .unwrap()
+    }
+
+    /// A redirection-only allow rule: matches `pattern`, grants `writes`, and
+    /// never authorizes a command.
+    fn redir_grant(name: &str, pattern: &str, writes: &[&str]) -> Rule {
+        let globs: Vec<String> = writes.iter().map(|w| w.to_string()).collect();
+        Rule::from_match(
+            name.into(),
+            Action::Allow,
+            pattern,
+            MatchKind::Glob,
+            None,
+            RedirPolicy::from_globs(false, Some(&globs), None).unwrap(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+        .with_grant(Grant::Redirections)
+    }
+
+    #[test]
+    fn redirection_only_rule_does_not_authorize_a_command() {
+        // A redirection-only `**` rule matches argv but must not allow the bare
+        // command — only a real authorizer can.
+        let rules = vec![redir_grant("scratch", "**", &["/tmp/**"])];
+        assert_eq!(evaluate("just dev", &rules).verdict, Verdict::Defer);
+    }
+
+    #[test]
+    fn redirection_only_rule_widens_targets_for_authorized_command() {
+        let rules = vec![
+            allow("just", "just *"),
+            redir_grant("scratch", "**", &["/tmp/*", "/tmp/**"]),
+        ];
+        assert_eq!(
+            evaluate("just dev > /tmp/dev-server.log", &rules).verdict,
+            Verdict::Allow
+        );
+        // The stderr dup rides along; the file write is the only gated redirection.
+        assert_eq!(
+            evaluate("just dev > /tmp/dev-server.log 2>&1", &rules).verdict,
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn redirection_only_grant_does_not_widen_beyond_its_globs() {
+        let rules = vec![
+            allow("just", "just *"),
+            redir_grant("scratch", "**", &["/tmp/**"]),
+        ];
+        // `./out.log` is outside the scratch glob and `just` grants no writes.
+        assert_eq!(
+            evaluate("just dev > ./out.log", &rules).verdict,
+            Verdict::Deny
+        );
+    }
+
+    #[test]
+    fn deny_still_beats_a_redirection_only_grant() {
+        let rules = vec![
+            allow("just", "just *"),
+            deny("rm", "rm -rf*"),
+            redir_grant("scratch", "**", &["/tmp/**"]),
+        ];
+        assert_eq!(evaluate("rm -rf / > /tmp/x", &rules).verdict, Verdict::Deny);
+    }
+
+    #[test]
+    fn redirect_denied_without_a_grant() {
+        // Baseline: with no redirection-only rule, an authorized command carrying
+        // a file redirect is denied exactly as before.
+        let rules = vec![allow("just", "just *")];
+        assert_eq!(
+            evaluate("just dev > /tmp/dev-server.log", &rules).verdict,
+            Verdict::Deny
+        );
     }
 
     #[test]
