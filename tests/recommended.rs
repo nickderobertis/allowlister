@@ -270,6 +270,31 @@ fn repo_write_allows_scratch_and_build_redirection() {
 }
 
 #[test]
+fn repo_write_lets_any_allowed_command_redirect_to_tmp() {
+    let r = load("repo-write");
+    // The motivating case: a backgrounded dev server logging to /tmp.
+    check(&r, "just dev > /tmp/dev-server.log 2>&1", Verdict::Allow);
+    // Interpreters and other non-text-filter commands get the same scratch grant,
+    // including macOS's real /private/tmp.
+    check(&r, "node server.js > /tmp/out.log", Verdict::Allow);
+    check(
+        &r,
+        "python app.py > /private/tmp/app.log 2>&1",
+        Verdict::Allow,
+    );
+    // The grant only widens /tmp scratch: non-scratch targets, in-tree source, and
+    // `..` escapes stay denied.
+    check(&r, "just dev > ./out.log", Verdict::Deny);
+    check(&r, "node server.js > src/main.rs", Verdict::Deny);
+    check(&r, "just dev > /tmp/../etc/x", Verdict::Deny);
+    // Deny is still supreme over the scratch grant.
+    check(&r, "rm -rf / > /tmp/x", Verdict::Deny);
+    // A command the profile does not authorize still defers, redirect or not — the
+    // redirection-only rule never authorizes a command on its own.
+    check(&r, "frobnicate > /tmp/x", Verdict::Defer);
+}
+
+#[test]
 fn repo_write_denies_destructive_operations() {
     let r = load("repo-write");
     for cmd in [

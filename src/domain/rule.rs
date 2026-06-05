@@ -17,6 +17,21 @@ pub enum Action {
     Deny,
 }
 
+/// What an allow rule grants the commands it matches.
+///
+/// `Command` (the default) authorizes the command itself. `Redirections` grants
+/// only this rule's redirection targets to a command **another** rule already
+/// authorized — it never authorizes a command on its own. This keeps the engine
+/// invariant that a redirection can never be what grants execution permission,
+/// while letting a profile widen scratch-write targets (e.g. `/tmp`) for every
+/// already-allowed command without repeating the policy on each rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Grant {
+    #[default]
+    Command,
+    Redirections,
+}
+
 /// How a pattern string is interpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MatchKind {
@@ -136,6 +151,8 @@ pub struct Rule {
     /// Roles this rule applies to; `None` means every role.
     roles: Option<Vec<Role>>,
     pub redirections: RedirPolicy,
+    /// Whether this rule authorizes the command or only its redirections.
+    pub grant: Grant,
     pub description: String,
     /// Config file the rule came from, for diagnostics.
     pub source: String,
@@ -162,6 +179,7 @@ impl Rule {
             matcher: ArgvMatcher::Joined(build_matcher(pattern, kind)?),
             roles,
             redirections,
+            grant: Grant::Command,
             description,
             source,
         })
@@ -195,9 +213,24 @@ impl Rule {
             matcher: ArgvMatcher::PerElement { head, tail },
             roles,
             redirections,
+            grant: Grant::Command,
             description,
             source,
         })
+    }
+
+    /// Set what this rule grants, consuming and returning the rule. Keeps the
+    /// `grant` slot out of the already-long constructors; `Grant::Command` is the
+    /// default a freshly built rule carries.
+    pub fn with_grant(mut self, grant: Grant) -> Self {
+        self.grant = grant;
+        self
+    }
+
+    /// Whether this rule only grants redirection targets and never authorizes the
+    /// command itself.
+    pub fn is_redirection_only(&self) -> bool {
+        self.grant == Grant::Redirections
     }
 
     /// Whether this rule applies to a fragment's role.

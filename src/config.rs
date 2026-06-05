@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::domain::{Action, MatchKind, RedirPolicy, Role, Rule};
+use crate::domain::{Action, Grant, MatchKind, RedirPolicy, Role, Rule};
 use crate::io::configfs::{self, Env};
 
 /// The compiled, merged configuration.
@@ -109,6 +109,8 @@ struct RawRule {
     #[serde(default)]
     redirections: Option<RawRedir>,
     #[serde(default)]
+    grants: Option<String>,
+    #[serde(default)]
     description: String,
 }
 
@@ -132,7 +134,26 @@ impl RawRule {
         let kind = MatchKind::parse(self.kind.as_deref())?;
         let roles = self.compile_roles()?;
         let redirections = self.compile_redirections()?;
+        let grant = self.compile_grant()?;
         let name = self.display_name();
+
+        // A redirection-only rule only ever widens redirection targets for an
+        // already-authorized command, so a deny grant is meaningless and an
+        // absent redirection block makes it a silent no-op; reject both.
+        if grant == Grant::Redirections {
+            if action != Action::Allow {
+                return Err(
+                    "a redirection-only rule (grants 'redirections') must use action 'allow'"
+                        .to_string(),
+                );
+            }
+            if self.redirections.is_none() {
+                return Err(
+                    "a redirection-only rule (grants 'redirections') must define a 'redirections' block"
+                        .to_string(),
+                );
+            }
+        }
 
         match (&self.match_pattern, &self.argv) {
             (Some(_), Some(_)) => {
@@ -148,7 +169,8 @@ impl RawRule {
                 redirections,
                 self.description.clone(),
                 source.to_string(),
-            ),
+            )
+            .map(|rule| rule.with_grant(grant)),
             (None, Some(argv)) => {
                 if argv.is_empty() {
                     return Err("'argv' must not be empty".to_string());
@@ -163,7 +185,16 @@ impl RawRule {
                     self.description.clone(),
                     source.to_string(),
                 )
+                .map(|rule| rule.with_grant(grant))
             }
+        }
+    }
+
+    fn compile_grant(&self) -> Result<Grant, String> {
+        match self.grants.as_deref() {
+            None | Some("command") => Ok(Grant::Command),
+            Some("redirections") => Ok(Grant::Redirections),
+            Some(other) => Err(format!("unknown grant '{other}'")),
         }
     }
 
@@ -274,5 +305,58 @@ mod tests {
         let config = load_from_paths(&[PathBuf::from("/nonexistent/allowlister.json")]);
         assert!(config.rules.is_empty());
         assert_eq!(config.sources.len(), 1);
+    }
+
+    #[test]
+    fn redirection_only_grant_compiles() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"scratch","argv":["**"],"action":"allow","grants":"redirections","redirections":{"write_glob":["/tmp/**"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.warnings.is_empty());
+        assert!(config.rules[0].is_redirection_only());
+    }
+
+    #[test]
+    fn unknown_grant_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"r","match":"x","action":"allow","grants":"bogus"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn redirection_only_grant_requires_allow_action() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"r","match":"x","action":"deny","grants":"redirections","redirections":{"write_glob":["/tmp/**"]}}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn redirection_only_grant_requires_redirections_block() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"r","match":"x","action":"allow","grants":"redirections"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
+        assert_eq!(config.warnings.len(), 1);
     }
 }

@@ -14,4 +14,4 @@ pub mod rule;
 
 pub use analyzer::{analyze, Analysis, Fragment, RedirClass, Redirection, Role};
 pub use decision::{decide, evaluate, DecisionResult, FragmentDecision, Verdict};
-pub use rule::{Action, MatchKind, RedirPolicy, Rule};
+pub use rule::{Action, Grant, MatchKind, RedirPolicy, Rule};
