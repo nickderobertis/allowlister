@@ -102,6 +102,10 @@ test-claude:
 test-cursor:
     @bash scripts/e2e-cursor.sh
 
+# Live check against the real `codex` CLI (needs Codex CLI + auth + network; opt-in, not in full-check).
+test-codex:
+    @bash scripts/e2e-codex.sh
+
 # Enforce line, function, and region coverage across all tests; a miss in any
 # one fails the command.
 test-cov:

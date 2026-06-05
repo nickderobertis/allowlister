@@ -83,6 +83,16 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// A Codex `PreToolUse` payload whose `cwd` points at the sandbox project dir.
+    /// The shell command rides under `tool_input.command`, like Claude Code.
+    fn codex_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -271,6 +281,64 @@ fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn codex_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Codex shares Claude Code's PreToolUse decision shape for a deny.
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn codex_hook_allow_emits_empty_stdout() {
+    // Codex rejects a bare `allow`, so an allow verdict is a no-op: empty stdout
+    // hands the call back to Codex's normal approval flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn codex_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through, no `defer`
+    // token (which Codex's PreToolUse does not accept).
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn codex_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion from Claude/Cursor: Codex treats exit 2 as a block,
+    // so a parse failure must exit 0 (not 1/2) with empty stdout — never a deny.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "codex"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
     sandbox
@@ -405,6 +473,48 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
     assert!(dir.path().join(".allowlister.json").is_file());
     assert!(
         !dir.path().join(".cursor/hooks.json").exists(),
+        "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_codex_local_registers_hooks_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "codex"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook codex"))
+        // Codex has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Codex wires .codex/hooks.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let hooks = dir.path().join(".codex/hooks.json");
+    assert!(hooks.is_file(), "the codex hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook codex"
+    );
+}
+
+#[test]
+fn init_codex_no_hooks_prints_codex_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "codex", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Add this to ~/.codex/hooks.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".codex/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
     );
 }

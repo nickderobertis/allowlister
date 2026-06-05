@@ -14,7 +14,7 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings};
+use crate::io::{claude_settings, codex_settings, cursor_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -74,6 +74,22 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "beforeShellExecution": [
       { "command": "allowlister hook cursor" }
+    ]
+  }
+}"#;
+
+/// The hooks snippet `init --harness codex --no-hooks` prints for manual wiring:
+/// register the hook on Codex's `PreToolUse` event, scoped to the `Bash` tool.
+/// Codex has no permissions block, so there is nothing to deny here.
+const CODEX_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          { "type": "command", "command": "allowlister hook codex" }
+        ]
+      }
     ]
   }
 }"#;
@@ -263,6 +279,7 @@ fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Cursor => "Cursor",
+        Harness::Codex => "Codex",
         Harness::Copilot => "Copilot",
     }
 }
@@ -289,6 +306,12 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
+        Harness::Codex => {
+            let path = codex_settings::settings_path(global, cwd, env)?;
+            let change = codex_settings::register_hook(&path)?;
+            report_codex_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
     }
 }
@@ -302,6 +325,10 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         }
         Harness::Cursor => {
             let _ = write_cursor_hook_setup(out);
+            Ok(())
+        }
+        Harness::Codex => {
+            let _ = write_codex_hook_setup(out);
             Ok(())
         }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
@@ -368,6 +395,32 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what registering the Codex hook changed. Codex's `hooks.json` has no
+/// permissions block to broaden, so there is no allow-list warning — but Codex
+/// reviews new hooks on startup, so note that the gate activates once trusted.
+fn report_codex_hook<W: Write>(out: &mut W, change: &codex_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the Bash PreToolUse hook.",
+            change.path.display(),
+            codex_settings::hook_command()
+        );
+        let _ = writeln!(
+            out,
+            "  Codex reviews new hooks on startup — approve it when prompted to activate the gate."
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -395,6 +448,23 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
+/// Write the `~/.codex/hooks.json` snippet. Codex has no allow list to broaden, so
+/// there is no allow-list warning; it does review new hooks on startup, so the
+/// snippet is followed by a one-line trust reminder.
+fn write_codex_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to ~/.codex/hooks.json (or .codex/hooks.json per-repo; merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{CODEX_SETTINGS_SNIPPET}")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Codex reviews new hooks on startup — approve it when prompted to activate the gate."
+    )
 }
 
 #[cfg(test)]
@@ -723,6 +793,67 @@ mod tests {
         // The config still lands under XDG; only the hook wiring is harness-specific.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("home/.cursor/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_codex_local_registers_hooks_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Codex,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Codex writes .codex/hooks.json, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let hooks = dir.path().join(".codex/hooks.json");
+        assert!(hooks.is_file(), "the codex hook must be registered locally");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "allowlister hook codex"
+        );
+    }
+
+    #[test]
+    fn execute_codex_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Codex,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".codex/hooks.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("~/.codex/hooks.json"));
+        assert!(text.contains("allowlister hook codex"));
+        // Codex has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_codex_global_writes_under_home_codex() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Codex,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("home/.codex/hooks.json").is_file());
     }
 
     #[test]
