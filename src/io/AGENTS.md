@@ -9,3 +9,6 @@
   shared decision pipeline; only the I/O shape differs between them.
 - A harness without an undecided/defer state maps defer to its safest escalation
   (ask the user), never to allow.
+- When a harness treats a non-zero hook exit as a deny (fail-closed), signal our
+  own read/parse failure through its no-decision fall-through, never a non-zero
+  exit — an internal error must never become a deny.

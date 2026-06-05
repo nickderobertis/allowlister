@@ -1,8 +1,8 @@
 # allowlister
 
-A small, fast Rust CLI that hooks into AI coding agents (Claude Code and Cursor;
-Copilot next) and decides whether to **allow**, **deny**, or **defer** each shell
-command the agent wants to run.
+A small, fast Rust CLI that hooks into AI coding agents (Claude Code, Cursor, and
+GitHub Copilot CLI) and decides whether to **allow**, **deny**, or **defer** each
+shell command the agent wants to run.
 
 It replaces the simplistic string-prefix allow lists that current agents ship
 with. Instead of classifying a command as safe or unsafe in the abstract,
@@ -133,11 +133,19 @@ into `~/.cursor/hooks.json` (or `./.cursor/hooks.json` for a project), just as
 idempotently. Cursor has no allow list to broaden, so there is no allow-list
 warning — the hook is the sole gate.
 
+For **GitHub Copilot CLI** (`--harness copilot`) it writes the `preToolUse` hook
+to `./.github/hooks/allowlister.json` for a project (or
+`~/.copilot/hooks/allowlister.json` globally). Copilot loads a directory of hook
+files, so allowlister owns its own rather than merging a shared one. The hook is
+consulted before Copilot's permission service, so its `deny` blocks a command even
+when the agent runs with `--allow-all-tools`.
+
 Every choice is also a flag, so the same command scripts cleanly in CI:
 
 ```sh
 allowlister init --global --profile read-only   # user config, curated reads, Claude hook registered
 allowlister init --local  --harness cursor      # project config, Cursor hook registered
+allowlister init --local  --harness copilot     # project config, Copilot hook registered
 allowlister init --local  --no-hooks            # print the snippet instead of registering
 allowlister init -y                              # take all defaults, no prompts
 ```
@@ -158,19 +166,20 @@ config later, use [`install`](#recommended-profiles).
 
 ```text
 allowlister hook <harness>        Read hook JSON on stdin, write a decision on stdout.
-                                  Harnesses: claude-code, cursor (copilot is a stub).
+                                  Harnesses: claude-code, cursor, copilot.
 allowlister check '<cmd>' [--cwd P] [--json]
                                   Evaluate one command. Exit 0 for allow/defer, 2 for deny.
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local] [--profile SOURCE]
-                 [--harness claude-code|cursor]
+                 [--harness claude-code|cursor|copilot]
                  [--hooks | --no-hooks] [-i | -y] [--force]
                                   Set up: write a config from a ruleset (starter,
                                   read-only, repo-write, or a file) and register
                                   the hook in the chosen harness's settings
-                                  (claude-code: settings.json; cursor: hooks.json).
+                                  (claude-code: settings.json; cursor: hooks.json;
+                                  copilot: .github/hooks/allowlister.json).
                                   Interactive on a terminal; flags drive it in CI.
 allowlister install <source> [--global | --local | --output P]
                                   Merge an allowlist (a built-in profile name —
@@ -307,6 +316,13 @@ security-critical verdicts.
 | `check` | allow / defer | usage/internal error | deny |
 | `explain`, `init` | success | error | — |
 
+The `hook` verb never denies on its own error. For Claude Code and Cursor a
+non-zero exit fails *open* (the agent proceeds), so a malformed payload exits `1`.
+Copilot's `preToolUse` hook is the opposite — fail-*closed*, where a non-zero exit
+would deny — so the Copilot adapter instead exits `0` with empty stdout, which
+Copilot reads as "no decision" and falls through to its normal permission flow. A
+deny is always expressed in the decision JSON, never via the exit code.
+
 ## Development
 
 Requires [`rustup`](https://rustup.rs) and [`just`](https://just.systems).
@@ -354,11 +370,14 @@ without a prompt:
 ```sh
 just test-claude     # drives `claude`; writes/reads .claude/settings.json
 just test-cursor     # drives `cursor-agent`; writes/reads .cursor/hooks.json
+just test-copilot    # drives `copilot`; writes/reads .github/hooks/allowlister.json
 ```
 
-Each needs its harness binary, network, and a model call, so neither is part of
-`just full-check` or CI. Both skip cleanly (exit 0) when their CLI is not on
-`PATH`.
+Each needs its harness binary, network, and a model call, so none is part of
+`just full-check` or CI. All skip cleanly (exit 0) when their CLI is not on
+`PATH`. The Copilot check additionally proves the `deny` blocks a command even
+while the agent runs with `--allow-all-tools`, since its `preToolUse` hook is
+consulted before the permission service.
 
 ## Releasing
 
