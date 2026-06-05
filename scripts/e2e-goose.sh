@@ -73,17 +73,21 @@ export HOME="$sandbox/home"
 mkdir -p "$HOME"
 export GOOSE_MODE=auto
 export GOOSE_DISABLE_SESSION_NAMING=true
+# Goose needs an explicit model: with GOOSE_PROVIDER=openai and no GOOSE_MODEL it
+# errors ("you must provide a model parameter"). Default to a small current model.
+export GOOSE_MODEL="${GOOSE_MODEL:-gpt-5.4-mini}"
 
-# Deterministic, sandbox-scoped rules: deny `touch`, allow `echo` redirecting
-# anywhere under the sandbox. write_glob is pinned to the temp dir so the allow
-# case always matches its redirection target.
+# Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
+# redirect-free command so a headless model reproduces it verbatim — some models
+# silently drop a `> file` redirection, which would make the allow case flaky for
+# reasons unrelated to the gate. (Redirection policy is covered hermetically in
+# the unit and tests/e2e suites.)
 rules="$sandbox/rules.json"
 cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
-    { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
-      "redirections": { "write_glob": ["$sandbox/*"] } }
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
   ]
 }
 JSON
@@ -118,11 +122,11 @@ run_agent() {
 # render the block differently, so this is a bonus signal, not a gate.
 reason_surfaced_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
-# Diagnostic: print the deny transcript so a CI run reveals exactly how Goose
-# surfaces a hook denial, used to harden the reason assertion above.
-dump_deny_diagnostic() {
-    local stream="$1"
-    note "  ── deny transcript diagnostic ──────────────────────────"
+# Diagnostic: print a transcript so a CI run reveals exactly how Goose handled the
+# turn — a hook block on deny, or what the model actually ran on allow.
+dump_transcript() {
+    local stream="$1" label="$2"
+    note "  ── $label transcript diagnostic ─────────────────────────"
     note "  stdout (<=200 lines):"
     head -200 "$stream" | sed 's/^/    /'
     note "  stderr tail:"
@@ -136,7 +140,7 @@ rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
     "$sandbox/deny.stream"
 [ -e "$deny_sentinel" ] && {
-    dump_deny_diagnostic "$sandbox/deny.stream"
+    dump_transcript "$sandbox/deny.stream" deny
     fail "denied command executed: $deny_sentinel was created (the PreToolUse block did not hold)"
 }
 note "  ok: command blocked — the sentinel was never created"
@@ -146,14 +150,15 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Goose rendered its own block)"
 fi
 
-note "» case 2/2: allow — \`echo\` must run"
-allow_sentinel="$sandbox/sentinel-allow.txt"
-rm -f "$allow_sentinel"
-marker="allowed-by-allowlister"
-run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
+note "» case 2/2: allow — \`mkdir\` must run"
+allow_sentinel="$proj/sentinel-allow.d"
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
-grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
+[ -d "$allow_sentinel" ] || {
+    dump_transcript "$sandbox/allow.stream" allow
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
 note "  ok: command executed (allow fell through to Goose's normal flow)"
 
 note "✓ goose live e2e passed (deny blocked under GOOSE_MODE=auto, allow ran)"
