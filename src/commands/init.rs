@@ -80,13 +80,14 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
 
 /// The `hooks/hooks.json` snippet `init --harness goose --no-hooks` prints for
 /// manual wiring: register the hook on Goose's `PreToolUse` event, scoped to the
-/// `developer__shell` tool. Goose has no permissions block, so there is nothing to
-/// deny here.
+/// shell tool (exposed as `shell` or `developer__shell` depending on how the
+/// developer extension loads). Goose has no permissions block, so there is nothing
+/// to deny here.
 const GOOSE_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "developer__shell",
+        "matcher": "(^|__)shell$",
         "hooks": [
           { "type": "command", "command": "allowlister hook goose", "timeout": 10 }
         ]
@@ -420,7 +421,7 @@ fn report_goose_hook<W: Write>(out: &mut W, change: &goose_settings::SettingsCha
         let verb = if change.created { "Created" } else { "Updated" };
         let _ = writeln!(
             out,
-            "{verb} {}: registered '{}' as the developer__shell PreToolUse hook.",
+            "{verb} {}: registered '{}' as the shell PreToolUse hook.",
             change.path.display(),
             goose_settings::hook_command()
         );
@@ -827,7 +828,7 @@ mod tests {
         assert!(hooks.is_file(), "the goose hook must be registered locally");
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "developer__shell");
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "allowlister hook goose"

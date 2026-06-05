@@ -23,7 +23,8 @@
 //!
 //! The command arrives under `tool_input.command`; the working directory is the
 //! top-level `working_dir`. Goose's shell tool is the developer extension's
-//! `developer__shell`; any other tool emits nothing.
+//! shell, exposed as a bare `shell` (builtin) or `developer__shell` (namespaced);
+//! any other tool emits nothing.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -35,10 +36,13 @@ use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
 
-/// The canonical tool name Goose uses for shell commands (the developer
-/// extension's `shell`, namespaced `developer__shell`). Any other tool is not one
-/// we gate, so it emits nothing.
-const SHELL_TOOL: &str = "developer__shell";
+/// True for Goose's shell tool. The developer extension exposes it as a bare
+/// `shell` when loaded as a builtin (e.g. `--with-builtin developer`) and as
+/// `developer__shell` when namespaced, so gate on both (and any `<ext>__shell`).
+/// Any other tool is not one we gate, so it emits nothing.
+fn is_shell_tool(name: &str) -> bool {
+    name == "shell" || name.ends_with("__shell")
+}
 
 /// Wire the adapter to the process's standard streams.
 pub fn run() -> Result<i32> {
@@ -71,7 +75,7 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         }
     };
 
-    if input.tool_name != SHELL_TOOL {
+    if !is_shell_tool(&input.tool_name) {
         // Not a shell command — let Goose's normal flow handle it (emit nothing).
         return 0;
     }
@@ -240,6 +244,19 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("allowlister:"));
+    }
+
+    #[test]
+    fn bare_shell_tool_name_is_gated() {
+        // Goose's builtin developer extension names the tool `shell` (no
+        // `developer__` prefix); the gate must still fire on it.
+        let dir = sandbox_with_deny();
+        let (code, stdout) = run_payload(&format!(
+            r#"{{"event":"PreToolUse","tool_name":"shell","tool_input":{{"command":"touch /tmp/x"}},"working_dir":{}}}"#,
+            serde_json::to_string(&dir.path().to_string_lossy().into_owned()).unwrap()
+        ));
+        assert_eq!(code, 0);
+        assert_eq!(decision(&stdout), "block");
     }
 
     #[test]

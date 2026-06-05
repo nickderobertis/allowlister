@@ -85,8 +85,9 @@ impl Sandbox {
     }
 
     /// A Goose `PreToolUse` payload whose `working_dir` points at the sandbox
-    /// project dir. Goose names its shell tool `developer__shell` and carries the
-    /// cwd under `working_dir` (not `cwd`).
+    /// project dir. Goose names its shell tool `shell` (builtin) or
+    /// `developer__shell` (namespaced) — both are gated; this exercises the
+    /// namespaced form — and carries the cwd under `working_dir` (not `cwd`).
     fn goose_payload(&self, command: &str) -> String {
         format!(
             r#"{{"event":"PreToolUse","tool_name":"developer__shell","tool_input":{{"command":{}}},"working_dir":{}}}"#,
@@ -506,7 +507,7 @@ fn init_goose_local_registers_plugin() {
     let hooks = plugin.join("hooks/hooks.json");
     assert!(hooks.is_file(), "the goose hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "developer__shell");
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "allowlister hook goose"

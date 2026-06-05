@@ -12,9 +12,10 @@
 //!
 //! `hooks.json` carries Claude Code's nested hook shape: event groups under a
 //! top-level `hooks` object, each `PreToolUse` group a tool-name `matcher` plus a
-//! list of command hooks. Goose's shell tool is the developer extension's
-//! `developer__shell`, so that is the matcher. A discovered plugin is active on
-//! the next `goose` start with no enable flag or trust step.
+//! list of command hooks. Goose's shell tool is the developer extension's shell,
+//! exposed as `shell` (builtin) or `developer__shell` (namespaced), so the matcher
+//! catches both. A discovered plugin is active on the next `goose` start with no
+//! enable flag or trust step.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,9 +36,12 @@ const HOOK_COMMAND: &str = "allowlister hook goose";
 /// fired before the tool executes in every approval mode.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex) scoping the hook to shell commands, which Goose
-/// exposes as the developer extension's `developer__shell`.
-const MATCHER: &str = "developer__shell";
+/// The tool-name matcher (a regex, tested unanchored against the tool name). Goose
+/// exposes the developer extension's shell tool as a bare `shell` when it is a
+/// builtin (e.g. `--with-builtin developer`) and as `developer__shell` when
+/// namespaced, so match both (and any `<ext>__shell`) without catching unrelated
+/// tools.
+const MATCHER: &str = "(^|__)shell$";
 
 /// Seconds Goose waits for the hook before giving up (and failing open). Goose's
 /// own default is 30; a tight value keeps a slow gate from stalling the agent.
@@ -245,7 +249,7 @@ mod tests {
 
         let doc = read(&plugin.join("hooks/hooks.json"));
         let group = &doc["hooks"]["PreToolUse"][0];
-        assert_eq!(group["matcher"], "developer__shell");
+        assert_eq!(group["matcher"], "(^|__)shell$");
         assert_eq!(group["hooks"][0]["timeout"], 10);
         assert!(group_registers_our_hook(group));
     }
