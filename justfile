@@ -102,6 +102,10 @@ test-claude:
 test-cursor:
     @bash scripts/e2e-cursor.sh
 
+# Live check against the real `codex` CLI (needs Codex CLI + auth + network; opt-in, not in full-check).
+test-codex:
+    @bash scripts/e2e-codex.sh
+
 # Live check against the real `copilot` CLI (needs Copilot CLI + auth + network; opt-in, not in full-check).
 test-copilot:
     @bash scripts/e2e-copilot.sh

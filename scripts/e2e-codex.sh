@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+#
+# Live end-to-end check: drive the real OpenAI Codex CLI against allowlister
+# wired as a `PreToolUse` hook, and assert that a denied command is blocked and
+# an allowed command runs.
+#
+# This is deliberately NOT part of `just full-check` or CI: it needs the `codex`
+# binary, network access, an `OPENAI_API_KEY`, and a (cheap) model call, so it is
+# neither hermetic nor deterministic the way the `tests/` suite is. Run it by hand
+# (or via `just test-codex`) to verify the integration against a real harness
+# after changing the hook adapter or the hooks snippet.
+#
+# What it proves, using the command's side effect (a sentinel):
+#   * deny  -> the command never runs (sentinel absent) when Codex runs the turn
+#              unattended: the PreToolUse hook blocks it. This is the core security
+#              claim.
+#   * allow -> the command runs (the directory is created): an allow verdict emits
+#              nothing, so Codex's normal flow runs it.
+# IMPORTANT: `codex exec` does NOT load hooks into its session (the exec/app-server
+# path never wires them), so this check drives the INTERACTIVE `codex` TUI in a
+# pseudo-terminal (see run_agent) — that is the entry point that consults hooks.
+# The TUI uses the alternate screen, so the outcome is judged purely by the
+# sentinel side effect, not the (escape-laden) transcript.
+#
+# `defer` is not asserted: it hands control back to Codex's normal approval flow,
+# which has no deterministic headless outcome. That path is covered hermetically
+# in tests/e2e.
+#
+# Environment overrides:
+#   ALLOWLISTER_E2E_MODEL   model passed to `codex --model` (default: unset)
+#   ALLOWLISTER_E2E_KEEP    set to 1 to keep the temp sandbox for inspection
+#   CODEX_BIN               codex binary name/path (default: codex)
+#   OPENAI_API_KEY          API key used to authenticate the headless run
+
+set -euo pipefail
+
+agent_bin="${CODEX_BIN:-codex}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bin="$repo_root/target/release/allowlister"
+
+note() { printf '%s\n' "$*"; }
+fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
+
+# A missing `codex` is a skip, not a failure: this script is opt-in and the rest
+# of the project must build and test on machines without the harness.
+if ! command -v "$agent_bin" >/dev/null 2>&1; then
+    note "SKIP: \`$agent_bin\` not found on PATH (install the Codex CLI to run this check)."
+    exit 0
+fi
+
+note "» building release binary"
+( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || fail "release binary not found at $bin"
+
+# allowlister must be on PATH so the hook command `init` writes into hooks.json —
+# `allowlister hook codex` — resolves when `codex` runs it.
+bindir="$repo_root/target/release"
+export PATH="$bindir:$PATH"
+
+sandbox="$(mktemp -d)"
+cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
+trap cleanup EXIT
+
+proj="$sandbox/project"
+mkdir -p "$proj"
+git init -q "$proj"
+
+# Isolate Codex's user state under the sandbox HOME (CODEX_HOME defaults to
+# $HOME/.codex). NOTE: `codex exec` does NOT load hooks into its session — the
+# exec/app-server path never wires them — so this check drives the INTERACTIVE
+# `codex` TUI (in a pseudo-terminal), which is the entry point that consults hooks.
+export HOME="$sandbox/home"
+mkdir -p "$HOME/.codex"
+
+# Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
+# redirect-free command so a headless model reproduces it verbatim — some models
+# silently drop a `> file` redirection, which would make the allow case flaky for
+# reasons unrelated to the gate. (Redirection policy is covered hermetically in
+# the unit and tests/e2e suites.)
+rules="$sandbox/rules.json"
+cat > "$rules" <<JSON
+{
+  "rules": [
+    { "name": "deny touch", "match": "touch *", "action": "deny" },
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
+  ]
+}
+JSON
+
+# Register at BOTH user and project scope so the hook loads however the interactive
+# session resolves config, and pre-trust the project so Codex's folder-trust gate
+# (which also gates project-local hooks) can't stall a headless run.
+note "» wiring user + project with \`allowlister init --harness codex\`"
+"$bin" init --global --profile "$rules" --harness codex --hooks --force >/dev/null \
+    || fail "allowlister init --global failed"
+( cd "$proj" && "$bin" init --local --profile "$rules" --harness codex --hooks --force ) >/dev/null \
+    || fail "allowlister init --local failed"
+grep -q 'allowlister hook codex' "$HOME/.codex/hooks.json" \
+    || fail "init did not register the user hook in ~/.codex/hooks.json"
+grep -q 'allowlister hook codex' "$proj/.codex/hooks.json" \
+    || fail "init did not register the project hook in .codex/hooks.json"
+cat >> "$HOME/.codex/config.toml" <<TOML
+[projects."$proj"]
+trust_level = "trusted"
+TOML
+
+# Authenticate non-interactively from the API key (writes creds under $HOME/.codex).
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+    note "» authenticating codex with OPENAI_API_KEY"
+    printf '%s' "$OPENAI_API_KEY" | "$agent_bin" login --with-api-key >/dev/null 2>&1 \
+        || note "  (codex login --with-api-key failed; relying on ambient credentials)"
+else
+    note "  (OPENAI_API_KEY unset; relying on ambient codex credentials)"
+fi
+
+# A pseudo-terminal driver: run a TUI command in a pty, drain its output to
+# PTY_LOG, never forward stdin, and kill it after PTY_TIMEOUT. `codex exec` never
+# loads hooks into its session, so the deny can only be exercised through the
+# interactive `codex` TUI — which needs a terminal. The CLI prompt arg auto-submits
+# (create_initial_user_message), so the turn runs on its own; we then kill the
+# lingering TUI.
+cat > "$sandbox/run_pty.py" <<'PYEOF'
+import os, pty, sys, time, signal, select, struct, fcntl, termios
+
+argv = sys.argv[1:]
+timeout = float(os.environ.get("PTY_TIMEOUT", "90"))
+log_path = os.environ.get("PTY_LOG", "/dev/null")
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+    os._exit(127)
+
+try:
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+except OSError:
+    pass
+
+deadline = time.time() + timeout
+with open(log_path, "wb") as out:
+    while time.time() < deadline:
+        try:
+            r, _, _ = select.select([fd], [], [], 1.0)
+        except OSError:
+            break
+        if r:
+            try:
+                data = os.read(fd, 8192)
+            except OSError:
+                break
+            if not data:
+                break
+            out.write(data)
+            out.flush()
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                break
+        except ChildProcessError:
+            break
+
+for sig in (signal.SIGTERM, signal.SIGKILL):
+    try:
+        os.kill(pid, sig)
+        time.sleep(0.2)
+    except ProcessLookupError:
+        break
+try:
+    os.waitpid(pid, 0)
+except Exception:
+    pass
+sys.exit(0)
+PYEOF
+
+# Run one interactive turn steered toward a single exact command.
+#  * interactive `codex` (NOT `exec`) is the entry point that consults hooks.
+#  * the prompt arg auto-submits; `-a never` + `--sandbox danger-full-access` run
+#    it unattended with no OS sandbox (no bubblewrap, which a CI runner can't set
+#    up); the project is pre-trusted so no folder-trust dialog blocks the run.
+#  * the TUI uses the alternate screen, so the outcome is judged by the sentinel
+#    file, not the transcript. The pty driver kills the lingering TUI after the
+#    turn (PTY_TIMEOUT), so a non-zero/SIGKILL exit is expected and ignored.
+run_agent() {
+    local prompt="$1" stream="$2"
+    local model_args=()
+    [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    ( cd "$proj" && PTY_TIMEOUT=90 PTY_LOG="$stream" timeout --signal=KILL 120 \
+        python3 "$sandbox/run_pty.py" "$agent_bin" \
+            --sandbox danger-full-access \
+            -a never \
+            --dangerously-bypass-hook-trust \
+            "${model_args[@]}" \
+            "$prompt" ) >"$stream.err" 2>&1 || true
+}
+
+# True if allowlister's own reason text reached the Codex transcript. Codex may
+# render the block differently, so this is a bonus signal, not a gate.
+reason_surfaced_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
+
+# Diagnostic: print a transcript so a CI run reveals exactly how Codex handled the
+# turn — a hook deny, or what the model actually ran on allow.
+dump_transcript() {
+    local stream="$1" label="$2"
+    note "  ── $label transcript diagnostic (TUI, control chars stripped) ──"
+    sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\x1b[][()=>][0-9;?]*//g; s/\r/\\n/g' "$stream" 2>/dev/null \
+        | grep -avE '^[[:space:]]*$' | tail -40 | sed 's/^/    /'
+    note "  stderr tail:"
+    tail -12 "$stream.err" 2>/dev/null | sed 's/^/    /'
+    note "  ────────────────────────────────────────────────────────"
+}
+
+note "» case 1/2: deny — \`touch\` must be blocked even running unattended"
+deny_sentinel="$proj/sentinel-deny.txt"
+rm -f "$deny_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
+    "$sandbox/deny.stream"
+[ -e "$deny_sentinel" ] && {
+    dump_transcript "$sandbox/deny.stream" deny
+    fail "denied command executed: $deny_sentinel was created (the PreToolUse deny did not hold)"
+}
+note "  ok: command blocked — the sentinel was never created"
+if reason_surfaced_in "$sandbox/deny.stream"; then
+    note "  bonus: allowlister's reason text reached the Codex transcript"
+else
+    note "  note: allowlister's reason was not surfaced in the transcript (Codex rendered its own block)"
+fi
+
+note "» case 2/2: allow — \`mkdir\` must run"
+allow_sentinel="$proj/sentinel-allow.d"
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+    "$sandbox/allow.stream"
+[ -d "$allow_sentinel" ] || {
+    dump_transcript "$sandbox/allow.stream" allow
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
+note "  ok: command executed (allow fell through to Codex's normal flow)"
+
+note "✓ codex live e2e passed (deny blocked unattended, allow ran)"
