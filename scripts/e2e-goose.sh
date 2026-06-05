@@ -192,7 +192,7 @@ forbidden="$proj/blocked-by-allowlister.txt"
 rm -f "$forbidden"
 run_agent "Use the developer text-editor/write tool (not the shell) to create the file $forbidden containing the word blocked. If the write is blocked, stop and do not use the shell." \
     "$sandbox/write.stream"
-al_write_conclude "$forbidden"
+al_write_conclude "$forbidden" "$sandbox/write.stream"
 
 if [ "$have_mcp" = 1 ]; then
     note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
