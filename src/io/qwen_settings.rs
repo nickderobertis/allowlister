@@ -30,9 +30,12 @@ const HOOK_COMMAND: &str = "allowlister hook qwen";
 /// tool call, in every approval mode.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex) scoping the hook to shell commands, which Qwen
-/// names `run_shell_command` (Gemini-style, not `Bash`).
-const MATCHER: &str = "run_shell_command";
+/// The tool-name matcher (a regex). It covers the shell (`run_shell_command`,
+/// Gemini-style), the gateable built-in tools, and MCP tools (`mcp__…`); the
+/// adapter routes each to the shell or tool engine, so one block fires once per
+/// tool.
+const MATCHER: &str =
+    "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__";
 
 /// Where Qwen reads settings: `~/.qwen/settings.json` for the user (global) scope,
 /// or `<cwd>/.qwen/settings.json` for a project (local) scope. Like Claude Code's
@@ -195,7 +198,7 @@ mod tests {
 
         let doc = read(&path);
         let group = &doc["hooks"]["PreToolUse"][0];
-        assert_eq!(group["matcher"], "run_shell_command");
+        assert_eq!(group["matcher"], MATCHER);
         assert!(group_registers_our_hook(group));
     }
 

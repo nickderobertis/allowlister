@@ -28,9 +28,10 @@ const HOOK_COMMAND: &str = "allowlister hook codex";
 /// tool call, in every approval mode.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex) scoping the hook to shell commands, which Codex
-/// reports under the canonical name `Bash`.
-const MATCHER: &str = "^Bash$";
+/// The tool-name matcher (a regex). It covers the shell (`Bash`), the gateable
+/// non-shell write tool (`apply_patch`), and MCP tools (`mcp__…`); the adapter
+/// routes each to the shell or tool engine, so one block fires once per tool.
+const MATCHER: &str = "^(Bash|apply_patch)$|^mcp__";
 
 /// Where Codex reads hooks: `~/.codex/hooks.json` for the user (global) scope, or
 /// `<cwd>/.codex/hooks.json` for a project (local) scope.
@@ -191,7 +192,7 @@ mod tests {
 
         let doc = read(&path);
         let group = &doc["hooks"]["PreToolUse"][0];
-        assert_eq!(group["matcher"], "^Bash$");
+        assert_eq!(group["matcher"], MATCHER);
         assert!(group_registers_our_hook(group));
     }
 

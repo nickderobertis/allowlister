@@ -45,18 +45,29 @@ pub struct InitArgs {
 }
 
 /// The settings snippet `install` (and `init --no-hooks`) print for manual
-/// wiring: register the hook for the `Bash` matcher, keep `permissions.allow`
-/// and `permissions.ask` empty, and add a tiny nuclear-pattern deny.
+/// wiring: register the hook for the `Bash` matcher and a second matcher for the
+/// non-shell tools (built-ins + `mcp__…`), keep `permissions.allow` and
+/// `permissions.ask` empty, and add a tiny nuclear-pattern deny.
 const SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
-    "PreToolUse": [{
-      "matcher": "Bash",
-      "hooks": [{
-        "type": "command",
-        "command": "allowlister hook claude-code",
-        "timeout": 10
-      }]
-    }]
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{
+          "type": "command",
+          "command": "allowlister hook claude-code",
+          "timeout": 10
+        }]
+      },
+      {
+        "matcher": "Read|Edit|Write|Glob|Grep|WebFetch|WebSearch|NotebookEdit|mcp__.*",
+        "hooks": [{
+          "type": "command",
+          "command": "allowlister hook claude-code",
+          "timeout": 10
+        }]
+      }
+    ]
   },
   "permissions": {
     "allow": [],
@@ -82,13 +93,13 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
 }"#;
 
 /// The hooks snippet `init --harness codex --no-hooks` prints for manual wiring:
-/// register the hook on Codex's `PreToolUse` event, scoped to the `Bash` tool.
-/// Codex has no permissions block, so there is nothing to deny here.
+/// register the hook on Codex's `PreToolUse` event, covering the shell, the
+/// `apply_patch` write tool, and MCP tools. Codex has no permissions block.
 const CODEX_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^Bash$",
+        "matcher": "^(Bash|apply_patch)$|^mcp__",
         "hooks": [
           { "type": "command", "command": "allowlister hook codex" }
         ]
@@ -98,25 +109,24 @@ const CODEX_SETTINGS_SNIPPET: &str = r#"{
 }"#;
 
 /// The config snippet `init --harness crush --no-hooks` prints for manual wiring:
-/// register the hook on Crush's `PreToolUse` event, scoped to the `bash` tool with
-/// a regex matcher. Crush has no permissions block, so there is nothing to deny.
+/// register the hook on Crush's `PreToolUse` event, covering the shell, the
+/// gateable built-ins, and MCP tools. Crush has no permissions block.
 const CRUSH_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
-      { "matcher": "^bash$", "command": "allowlister hook crush", "timeout": 30 }
+      { "matcher": "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_", "command": "allowlister hook crush", "timeout": 30 }
     ]
   }
 }"#;
 
 /// The settings snippet `init --harness qwen --no-hooks` prints for manual wiring:
-/// register the hook on Qwen Code's `PreToolUse` event, scoped to the
-/// `run_shell_command` tool. Qwen has no permissions block, so there is nothing to
-/// deny here.
+/// register the hook on Qwen Code's `PreToolUse` event, covering the shell, the
+/// gateable built-ins, and MCP tools. Qwen has no permissions block.
 const QWEN_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "run_shell_command",
+        "matcher": "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__",
         "hooks": [
           { "type": "command", "command": "allowlister hook qwen" }
         ]
@@ -134,15 +144,15 @@ const GOOSE_MANIFEST_SNIPPET: &str = r#"{
 }"#;
 
 /// The `hooks/hooks.json` snippet `init --harness goose --no-hooks` prints for
-/// manual wiring: register the hook on Goose's `PreToolUse` event, scoped to the
-/// shell tool (exposed as `shell` or `developer__shell` depending on how the
-/// developer extension loads). Goose has no permissions block, so there is nothing
-/// to deny here.
+/// manual wiring: register the hook on Goose's `PreToolUse` event, covering the
+/// shell (`shell` or `<ext>__shell`) and every namespaced tool — the developer
+/// extension's `__write`/`__edit` and any `<server>__<tool>` MCP call — via `__`.
+/// Goose has no permissions block, so there is nothing to deny here.
 const GOOSE_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "(^|__)shell$",
+        "matcher": "^shell$|__",
         "hooks": [
           { "type": "command", "command": "allowlister hook goose", "timeout": 10 }
         ]
@@ -1093,7 +1103,10 @@ mod tests {
         assert!(hooks.is_file(), "the codex hook must be registered locally");
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["matcher"],
+            "^(Bash|apply_patch)$|^mcp__"
+        );
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "allowlister hook codex"
@@ -1157,7 +1170,10 @@ mod tests {
         );
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
-        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["matcher"],
+            "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_"
+        );
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["command"],
             "allowlister hook crush"
@@ -1223,7 +1239,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["matcher"],
-            "run_shell_command"
+            "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__"
         );
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
@@ -1290,7 +1306,7 @@ mod tests {
         assert!(hooks.is_file(), "the goose hook must be registered locally");
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^shell$|__");
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "allowlister hook goose"

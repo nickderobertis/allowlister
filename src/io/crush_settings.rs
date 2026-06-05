@@ -28,9 +28,11 @@ const HOOK_COMMAND: &str = "allowlister hook crush";
 /// tool call, ahead of its permission check.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex) scoping the hook to shell commands, which Crush
-/// names with the lowercase canonical `bash`.
-const MATCHER: &str = "^bash$";
+/// The tool-name matcher (a regex). It covers the shell (`bash`), the gateable
+/// built-in tools, and MCP tools (Crush's single-underscore `mcp_…`); the adapter
+/// routes each to the shell or tool engine, so one block fires once per tool.
+const MATCHER: &str =
+    "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_";
 
 /// Seconds Crush waits for the hook before giving up (and failing open). Matches
 /// Crush's own default, made explicit so the registered entry is self-describing.
@@ -200,7 +202,7 @@ mod tests {
 
         let doc = read(&path);
         let entry = &doc["hooks"]["PreToolUse"][0];
-        assert_eq!(entry["matcher"], "^bash$");
+        assert_eq!(entry["matcher"], MATCHER);
         assert_eq!(entry["timeout"], 30);
         assert!(registers_our_command(entry));
     }

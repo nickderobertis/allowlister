@@ -29,6 +29,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::normalize;
 use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
@@ -67,15 +68,18 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         }
     };
 
-    if input.tool_name != SHELL_TOOL {
-        // Not a shell command — defer to Copilot's normal flow (emit nothing).
-        return 0;
-    }
-
     let dir = discovery_dir(&input);
     let loaded = config::load(Path::new(dir));
-    let command = command_from(&input.tool_args);
-    let result = domain::evaluate(&command, &loaded.rules);
+    // The shell tool keeps its structural path; every other tool is normalized
+    // and gated by the tool-rule engine. Copilot's `preToolUse` already fires for
+    // every tool, so no settings change is needed; an unrecognized tool with no
+    // matching rule defers, emitting nothing — exactly the prior non-shell flow.
+    let result = if input.tool_name == SHELL_TOOL {
+        domain::evaluate(&command_from(&input.tool_args), &loaded.rules)
+    } else {
+        let call = normalize::copilot(&input.tool_name, &input.tool_args);
+        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+    };
 
     if matches!(result.verdict, Verdict::Defer) {
         // Emit nothing: Copilot's native fall-through runs its normal permission

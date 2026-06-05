@@ -31,6 +31,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::normalize;
 use crate::config;
 use crate::domain::{self, Verdict};
 use crate::errors::Result;
@@ -70,15 +71,17 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         }
     };
 
-    if input.tool_name != SHELL_TOOL {
-        // Not a shell command — let Qwen's normal flow handle it (emit nothing).
-        return 0;
-    }
-
     let dir = discovery_dir(&input);
     let loaded = config::load(Path::new(dir));
-    let command = command_from(&input.tool_input);
-    let result = domain::evaluate(&command, &loaded.rules);
+    // The shell tool keeps its structural path; every other tool is normalized
+    // and gated by the tool-rule engine. An unrecognized tool with no matching
+    // rule defers, emitting nothing — exactly the prior non-shell behavior.
+    let result = if input.tool_name == SHELL_TOOL {
+        domain::evaluate(&command_from(&input.tool_input), &loaded.rules)
+    } else {
+        let call = normalize::qwen(&input.tool_name, &input.tool_input);
+        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+    };
 
     // Only `deny` is asserted. An allow or defer verdict emits nothing — a true
     // fall-through to Qwen's own approval flow — because an explicit `allow` would

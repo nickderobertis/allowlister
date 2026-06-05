@@ -862,7 +862,10 @@ fn init_codex_local_registers_hooks_json() {
     let hooks = dir.path().join(".codex/hooks.json");
     assert!(hooks.is_file(), "the codex hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["matcher"],
+        "^(Bash|apply_patch)$|^mcp__"
+    );
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "allowlister hook codex"
@@ -904,7 +907,10 @@ fn init_crush_local_registers_crush_json() {
     let config = dir.path().join("crush.json");
     assert!(config.is_file(), "the crush hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
-    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["matcher"],
+        "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_"
+    );
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["command"],
         "allowlister hook crush"
@@ -948,7 +954,7 @@ fn init_qwen_local_registers_settings_json() {
     let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["matcher"],
-        "run_shell_command"
+        "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__"
     );
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
@@ -998,7 +1004,7 @@ fn init_goose_local_registers_plugin() {
     let hooks = plugin.join("hooks/hooks.json");
     assert!(hooks.is_file(), "the goose hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^shell$|__");
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "allowlister hook goose"
@@ -1575,4 +1581,53 @@ fn claude_hook_read_tool_allows_inside_repo_via_stdin() {
         .stdout
         .clone();
     assert_eq!(decision_of(&output), "allow");
+}
+
+#[test]
+fn qwen_hook_read_tool_denies_secret_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // Qwen's read tool is `read_file` with `file_path`, args as an object.
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "read_file",
+        "tool_input": { "file_path": "/home/u/.ssh/id_rsa" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "qwen"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn copilot_hook_read_tool_denies_secret_with_stringified_args() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // Copilot's read tool is `view` with `path`, and `toolArgs` is a JSON *string*.
+    let tool_args = serde_json::to_string(&serde_json::json!({
+        "path": "/home/u/.ssh/id_rsa"
+    }))
+    .unwrap();
+    let payload = serde_json::json!({
+        "toolName": "view",
+        "toolArgs": tool_args,
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "copilot"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "deny");
 }
