@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/nickderobertis/allowlister/compare/v0.2.1...v0.3.0) - 2026-06-05
+
+### Added
+
+- *(opencode)* add OpenCode support via a tool.execute.before plugin shim ([#28](https://github.com/nickderobertis/allowlister/pull/28))
+- *(goose)* add full Goose support via the PreToolUse hook plugin ([#27](https://github.com/nickderobertis/allowlister/pull/27))
+- *(qwen)* add full Qwen Code support via the PreToolUse hook ([#26](https://github.com/nickderobertis/allowlister/pull/26))
+- *(crush)* add full Crush support via the PreToolUse hook ([#25](https://github.com/nickderobertis/allowlister/pull/25))
+- *(codex)* add full OpenAI Codex CLI support via the PreToolUse hook ([#24](https://github.com/nickderobertis/allowlister/pull/24))
+- *(copilot)* [**breaking**] add full GitHub Copilot CLI support via the preToolUse hook ([#23](https://github.com/nickderobertis/allowlister/pull/23))
+- *(cursor)* add full Cursor support via the beforeShellExecution hook ([#21](https://github.com/nickderobertis/allowlister/pull/21))
+
+### Documentation
+
+- advertise the cross-platform allowlist with a support matrix ([#29](https://github.com/nickderobertis/allowlister/pull/29))
+
 ## [0.2.1](https://github.com/nickderobertis/allowlister/compare/v0.2.0...v0.2.1) - 2026-06-04
 
 ### Added
