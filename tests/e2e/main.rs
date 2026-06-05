@@ -84,6 +84,16 @@ impl Sandbox {
         )
     }
 
+    /// A Copilot `preToolUse` payload for the `bash` tool whose `cwd` points at
+    /// the sandbox project dir.
+    fn copilot_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"toolName":"bash","toolArgs":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
     /// A Codex `PreToolUse` payload whose `cwd` points at the sandbox project dir.
     /// The shell command rides under `tool_input.command`, like Claude Code.
     fn codex_payload(&self, command: &str) -> String {
@@ -107,6 +117,12 @@ fn decision_of(stdout: &[u8]) -> String {
 fn permission_of(stdout: &[u8]) -> String {
     let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
     value["permission"].as_str().unwrap().to_string()
+}
+
+/// Read the `permissionDecision` field Copilot's hook adapter writes.
+fn copilot_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["permissionDecision"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -339,6 +355,65 @@ fn codex_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn copilot_hook_allow_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "allow");
+}
+
+#[test]
+fn copilot_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "deny");
+}
+
+#[test]
+fn copilot_hook_defer_emits_empty_stdout() {
+    // Copilot has a native fall-through: an undecided command emits nothing, so
+    // Copilot runs its own permission flow (a true defer, not an escalation).
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn copilot_hook_invalid_json_defers_via_exit_zero_and_empty_stdout() {
+    // Copilot's preToolUse is fail-CLOSED: a non-zero exit would DENY. So unlike
+    // the Claude/Cursor adapters, a parse failure here must exit 0 with empty
+    // stdout (defer to Copilot's normal flow), never deny on our own error.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "copilot"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
     sandbox
@@ -520,6 +595,49 @@ fn init_codex_no_hooks_prints_codex_snippet() {
 }
 
 #[test]
+fn init_copilot_local_registers_github_hooks_file() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "copilot"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook copilot"))
+        // Copilot has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Copilot wires its own file under .github/hooks, never the other harnesses'.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    assert!(!dir.path().join(".cursor/hooks.json").exists());
+    let hooks = dir.path().join(".github/hooks/allowlister.json");
+    assert!(hooks.is_file(), "the copilot hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+    assert_eq!(
+        doc["hooks"]["preToolUse"][0]["bash"],
+        "allowlister hook copilot"
+    );
+}
+
+#[test]
+fn init_copilot_no_hooks_prints_copilot_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "copilot", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".github/hooks/allowlister.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".github/hooks/allowlister.json").exists(),
+        "--no-hooks must not write the hooks file"
+    );
+}
+
+#[test]
 fn init_profile_installs_a_curated_ruleset() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("allowlister")
@@ -665,17 +783,6 @@ fn init_global_falls_back_to_home_config() {
         .join(".config/allowlister/config.json")
         .is_file());
     assert!(home.path().join(".claude/settings.json").is_file());
-}
-
-#[test]
-fn hook_copilot_is_unimplemented() {
-    Command::cargo_bin("allowlister")
-        .unwrap()
-        .args(["hook", "copilot"])
-        .write_stdin("{}")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not yet implemented"));
 }
 
 #[test]

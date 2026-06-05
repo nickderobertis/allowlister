@@ -22,7 +22,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run as a harness hook: read the hook JSON on stdin, write a decision on
-    /// stdout. `claude-code`, `cursor`, and `codex` are implemented.
+    /// stdout. `claude-code`, `cursor`, `copilot`, and `codex` are implemented.
     Hook {
         /// The coding harness whose hook protocol to speak.
         #[arg(value_enum)]
@@ -69,7 +69,7 @@ enum Command {
         #[arg(long, value_name = "SOURCE")]
         profile: Option<String>,
         /// Which coding harness to wire the hook into (`claude-code`, `cursor`,
-        /// or `codex`). Defaults to `claude-code`. Run `init` again per harness
+        /// `copilot`, or `codex`). Defaults to `claude-code`. Run `init` again per harness
         /// to set up more than one.
         #[arg(long, value_enum, default_value = "claude-code")]
         harness: Harness,
@@ -120,7 +120,7 @@ pub enum Harness {
     Cursor,
     /// OpenAI Codex CLI (`PreToolUse` hook).
     Codex,
-    /// GitHub Copilot (stub).
+    /// GitHub Copilot CLI (`preToolUse` hook).
     Copilot,
 }
 

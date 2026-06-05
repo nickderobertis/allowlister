@@ -1,8 +1,8 @@
 # allowlister
 
 A small, fast Rust CLI that hooks into AI coding agents (Claude Code, Cursor, and
-the OpenAI Codex CLI; Copilot next) and decides whether to **allow**, **deny**, or
-**defer** each shell command the agent wants to run.
+the OpenAI Codex CLI, and the GitHub Copilot CLI) and decides whether to
+**allow**, **deny**, or **defer** each shell command the agent wants to run.
 
 It replaces the simplistic string-prefix allow lists that current agents ship
 with. Instead of classifying a command as safe or unsafe in the abstract,
@@ -135,11 +135,17 @@ warning — the hook is the sole gate.
 
 For the **OpenAI Codex CLI** (`--harness codex`) it merges the `PreToolUse` hook
 into `~/.codex/hooks.json` (or `./.codex/hooks.json` for a project), scoped to the
-`Bash` tool. `PreToolUse` fires in every approval mode, so a **deny** is
-authoritative even under `--ask-for-approval never` and the bypass modes. Codex's
-hook honors only a deny (it rejects a bare `allow`), so an allow or defer verdict
-emits nothing and hands the call back to Codex's normal flow. Codex reviews new
-hooks on startup — approve allowlister's hook when prompted to activate the gate.
+`Bash` tool. Codex's hook honors only a deny (it rejects a bare `allow`), so an
+allow or defer verdict emits nothing and hands the call back to Codex's normal
+flow. Codex reviews new hooks on startup — approve allowlister's hook when
+prompted to activate the gate.
+
+For **GitHub Copilot CLI** (`--harness copilot`) it writes the `preToolUse` hook
+to `./.github/hooks/allowlister.json` for a project (or
+`~/.copilot/hooks/allowlister.json` globally). Copilot loads a directory of hook
+files, so allowlister owns its own rather than merging a shared one. The hook is
+consulted before Copilot's permission service, so its `deny` blocks a command even
+when the agent runs with `--allow-all-tools`.
 
 Every choice is also a flag, so the same command scripts cleanly in CI:
 
@@ -147,6 +153,7 @@ Every choice is also a flag, so the same command scripts cleanly in CI:
 allowlister init --global --profile read-only   # user config, curated reads, Claude hook registered
 allowlister init --local  --harness cursor      # project config, Cursor hook registered
 allowlister init --local  --harness codex       # project config, Codex hook registered
+allowlister init --local  --harness copilot     # project config, Copilot hook registered
 allowlister init --local  --no-hooks            # print the snippet instead of registering
 allowlister init -y                              # take all defaults, no prompts
 ```
@@ -167,21 +174,22 @@ config later, use [`install`](#recommended-profiles).
 
 ```text
 allowlister hook <harness>        Read hook JSON on stdin, write a decision on stdout.
-                                  Harnesses: claude-code, cursor, codex (copilot is a stub).
+                                  Harnesses: claude-code, cursor, codex, copilot.
 allowlister check '<cmd>' [--cwd P] [--json]
                                   Evaluate one command. Exit 0 for allow/defer, 2 for deny.
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local] [--profile SOURCE]
-                 [--harness claude-code|cursor|codex]
+                 [--harness claude-code|cursor|codex|copilot]
                  [--hooks | --no-hooks] [-i | -y] [--force]
                                   Set up: write a config from a ruleset (starter,
                                   read-only, repo-write, or a file) and register
                                   the hook in the chosen harness's settings
                                   (claude-code: settings.json; cursor/codex:
-                                  hooks.json). Interactive on a terminal; flags
-                                  drive it in CI.
+                                  hooks.json; copilot:
+                                  .github/hooks/allowlister.json). Interactive on
+                                  a terminal; flags drive it in CI.
 allowlister install <source> [--global | --local | --output P]
                                   Merge an allowlist (a built-in profile name —
                                   read-only or repo-write — or a path to a JSON
@@ -317,11 +325,14 @@ security-critical verdicts.
 | `check` | allow / defer | usage/internal error | deny |
 | `explain`, `init` | success | error | — |
 
-The `hook` row covers the `claude-code` and `cursor` adapters. The `codex` adapter
-inverts it: Codex's `PreToolUse` treats exit `2` (with a stderr message) as a
-block, so the adapter **always exits `0`** — a deny is carried only in its JSON,
-and a malformed payload exits `0` with empty stdout (a no-op), never a non-zero
-exit that could turn an internal error into a deny.
+The `hook` verb never denies on its own error, but *how* it signals that differs
+by harness. For Claude Code and Cursor a non-zero exit fails *open* (the agent
+proceeds), so a malformed payload exits `1`. Codex's `PreToolUse` and Copilot's
+`preToolUse` are the opposite — fail-*closed*, where a non-zero exit would deny —
+so those adapters **always exit `0`** and carry a deny only in their decision JSON;
+a malformed payload exits `0` with empty stdout, which the harness reads as "no
+decision" and falls through to its normal flow. A deny is never expressed via the
+exit code.
 
 ## Development
 
@@ -369,14 +380,16 @@ while an allowed command runs:
 ```sh
 just test-claude     # drives `claude`;       writes/reads .claude/settings.json
 just test-cursor     # drives `cursor-agent`; writes/reads .cursor/hooks.json
-just test-codex      # drives `codex exec`;   writes/reads .codex/hooks.json
+just test-codex      # drives `codex`;   writes/reads .codex/hooks.json
+just test-copilot    # drives `copilot`; writes/reads .github/hooks/allowlister.json
 ```
 
-The Codex check runs under `--dangerously-bypass-approvals-and-sandbox`, so it
-proves the deny holds even when Codex's own approvals and sandbox are off — the
-`PreToolUse` hook is the sole gate. Each needs its harness binary, network, and a
-model call, so none is part of `just full-check` or CI. All skip cleanly (exit 0)
-when their CLI is not on `PATH`.
+Each needs its harness binary, network, and a model call, so none is part of
+`just full-check` or CI. All skip cleanly (exit 0) when their CLI is not on
+`PATH`. The Codex and Copilot checks additionally prove the `deny` holds even when
+the agent's own approvals are relaxed — Codex under its no-approval/bypass modes
+and Copilot under `--allow-all-tools` — since the hook is consulted before the
+harness's permission service.
 
 ## Releasing
 

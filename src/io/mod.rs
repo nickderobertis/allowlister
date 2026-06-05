@@ -5,5 +5,6 @@
 pub mod claude_settings;
 pub mod codex_settings;
 pub mod configfs;
+pub mod copilot_settings;
 pub mod cursor_settings;
 pub mod harness;
