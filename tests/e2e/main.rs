@@ -103,6 +103,17 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// A Crush `PreToolUse` payload whose `cwd` points at the sandbox project dir.
+    /// Crush names its shell tool `bash` (lowercase) and rides the command under
+    /// `tool_input.command`.
+    fn crush_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"event":"PreToolUse","tool_name":"bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -123,6 +134,12 @@ fn permission_of(stdout: &[u8]) -> String {
 fn copilot_decision_of(stdout: &[u8]) -> String {
     let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
     value["permissionDecision"].as_str().unwrap().to_string()
+}
+
+/// Read the flat `decision` field Crush's hook adapter writes.
+fn crush_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["decision"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -347,6 +364,64 @@ fn codex_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
     Command::cargo_bin("allowlister")
         .unwrap()
         .args(["hook", "codex"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn crush_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Crush's native deny shape is a flat `{"decision":"deny",...}`.
+    assert_eq!(crush_decision_of(&output), "deny");
+}
+
+#[test]
+fn crush_hook_allow_emits_empty_stdout() {
+    // An explicit `allow` would pre-approve and skip Crush's prompt, so an allow
+    // verdict is a no-op: empty stdout hands the call back to Crush's normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn crush_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — Crush treats empty stdout as "no
+    // opinion" and falls through to its normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn crush_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // Like Codex, Crush blocks on exit 2 and fails open otherwise, so a parse
+    // failure must exit 0 (not 1/2) with empty stdout — never a block.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "crush"])
         .write_stdin("{ this is not json")
         .assert()
         .code(0)
@@ -591,6 +666,48 @@ fn init_codex_no_hooks_prints_codex_snippet() {
     assert!(
         !dir.path().join(".codex/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_crush_local_registers_crush_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "crush"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook crush"))
+        // Crush has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Crush wires crush.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let config = dir.path().join("crush.json");
+    assert!(config.is_file(), "the crush hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["command"],
+        "allowlister hook crush"
+    );
+}
+
+#[test]
+fn init_crush_no_hooks_prints_crush_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "crush", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Add this to crush.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join("crush.json").exists(),
+        "--no-hooks must not write crush.json"
     );
 }
 
