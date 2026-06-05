@@ -42,6 +42,10 @@ bin="$repo_root/target/release/allowlister"
 note() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# Shared helpers for the built-in-tool and MCP tool-use cases (rules + assertions).
+# shellcheck source=scripts/e2e-lib.sh
+. "$repo_root/scripts/e2e-lib.sh"
+
 # A missing `goose` is a skip, not a failure: this script is opt-in and the rest
 # of the project must build and test on machines without the harness.
 if ! command -v "$agent_bin" >/dev/null 2>&1; then
@@ -87,7 +91,8 @@ cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
-    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
+${AL_TOOL_RULES}
   ]
 }
 JSON
@@ -103,16 +108,35 @@ note "» wiring the project with \`allowlister init --harness goose\`"
 grep -q 'allowlister hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
     || fail "init did not register the hook in the plugin's hooks.json"
 
+# Plant the write fixture target and wire the shared stdio MCP server as a Goose
+# stdio extension (`--with-extension`). Goose has no built-in read tool, so the
+# built-in case below exercises the gateable `developer__write` instead. The MCP
+# tools arrive namespaced as `<ext>__deletewidget`; the hook matcher (`__`) covers
+# them and the deny matches by tool name regardless of the extension's name.
+al_plant_read_fixtures "$proj"
+mcp_server="$(al_mcp_server "$repo_root")"
+mcp_sentinel="$sandbox/mcp-deleted.sentinel"
+mcp_log="$sandbox/mcp-requests.log"
+mcp_token="ALLOWTOKEN-${RANDOM}${RANDOM}"
+goose_ext_args=()
+have_mcp=0
+if al_have_python; then
+    goose_ext_args=(--with-extension "python3 $mcp_server $mcp_sentinel $mcp_token $mcp_log")
+    have_mcp=1
+fi
+
 # Run one headless turn steered toward a single exact command.
 #  * `goose run -t` is the non-interactive entry point.
-#  * --with-builtin developer guarantees the developer__shell tool is loaded.
+#  * --with-builtin developer guarantees the developer__shell/developer__write
+#    tools are loaded; --with-extension adds the MCP server fixture when present.
 #  * GOOSE_MODE=auto auto-approves every tool call, so the ONLY thing that can
 #    block a command is our PreToolUse hook — making the deny case a true test of
 #    the hook's authority in a full-auto run.
 #  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
 run_agent() {
     local prompt="$1" stream="$2"
-    ( cd "$proj" && timeout 180 "$agent_bin" run --with-builtin developer -t "$prompt" \
+    ( cd "$proj" && timeout 180 "$agent_bin" run --with-builtin developer \
+        "${goose_ext_args[@]}" -t "$prompt" \
         </dev/null ) >"$stream" 2>"$stream.err" || {
         note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
     }
@@ -134,7 +158,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/2: deny — \`touch\` must be blocked even under GOOSE_MODE=auto"
+note "» case 1/4: shell deny — \`touch\` must be blocked even under GOOSE_MODE=auto"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -150,7 +174,7 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Goose rendered its own block)"
 fi
 
-note "» case 2/2: allow — \`mkdir\` must run"
+note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 rm -rf "$allow_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
@@ -161,4 +185,23 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed (allow fell through to Goose's normal flow)"
 
-note "✓ goose live e2e passed (deny blocked under GOOSE_MODE=auto, allow ran)"
+# Goose has no built-in read tool, so the built-in case exercises the gateable
+# `developer__write` instead: creating the forbidden path must be blocked.
+note "» case 3/4: built-in write tool — creating the forbidden file must be blocked"
+forbidden="$proj/blocked-by-allowlister.txt"
+rm -f "$forbidden"
+run_agent "Use the developer text-editor/write tool (not the shell) to create the file $forbidden containing the word blocked. If the write is blocked, stop and do not use the shell." \
+    "$sandbox/write.stream"
+al_write_conclude "$forbidden"
+
+if [ "$have_mcp" = 1 ]; then
+    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    rm -f "$mcp_sentinel" "$mcp_log"
+    run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
+        "$sandbox/mcp.stream"
+    al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
+else
+    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+fi
+
+note "✓ goose live e2e passed (shell deny+allow, built-in write deny, MCP deny)"
