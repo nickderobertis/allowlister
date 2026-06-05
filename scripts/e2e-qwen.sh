@@ -39,6 +39,10 @@
 set -euo pipefail
 
 agent_bin="${QWEN_BIN:-qwen}"
+# Headless OpenAI auth needs an explicit model: with the `openai` auth type Qwen
+# reads the model from `-m`, and env inference otherwise falls back to a Qwen-only
+# id that a real OpenAI key cannot serve. Default to a small, current OpenAI model.
+model="${ALLOWLISTER_E2E_MODEL:-${OPENAI_MODEL:-gpt-4.1-mini}}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="$repo_root/target/release/allowlister"
 
@@ -66,7 +70,8 @@ cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
 proj="$sandbox/project"
-mkdir -p "$proj/.git"
+mkdir -p "$proj"
+git init -q "$proj"
 
 # Isolate Qwen's user state and allowlister's user config under the sandbox: HOME
 # roots `~/.qwen/settings.json` (the user-scope hook), XDG_CONFIG_HOME roots the
@@ -76,17 +81,22 @@ export HOME="$sandbox/home"
 export XDG_CONFIG_HOME="$sandbox/xdg"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 export QWEN_CODE_SUPPRESS_YOLO_WARNING=1
+# Point Qwen's OpenAI-compatible client at real OpenAI: with the `openai` auth
+# type and no base URL, Qwen defaults to Alibaba's DashScope endpoint, which a
+# real OPENAI_API_KEY cannot authenticate against (401).
+export OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
 
-# Deterministic, sandbox-scoped rules: deny `touch`, allow `echo` redirecting
-# anywhere under the sandbox. write_glob is pinned to the temp dir so the allow
-# case always matches its redirection target.
+# Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
+# redirect-free command so a headless model reproduces it verbatim — some models
+# silently drop a `> file` redirection, which would make the allow case flaky for
+# reasons unrelated to the gate. (Redirection policy is covered hermetically in
+# the unit and tests/e2e suites.)
 rules="$sandbox/rules.json"
 cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
-    { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
-      "redirections": { "write_glob": ["$sandbox/*"] } }
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
   ]
 }
 JSON
@@ -103,16 +113,18 @@ grep -q 'allowlister hook qwen' "$HOME/.qwen/settings.json" \
 
 # Run one headless turn steered toward a single exact command.
 #  * `qwen -p` is the non-interactive entry point.
+#  * --auth-type openai + -m select the provider/model non-interactively; without
+#    an explicit auth type Qwen refuses to run in `-p` mode ("No auth type is
+#    selected") unless all three OPENAI_* env vars are set.
 #  * --yolo auto-approves every tool call, so the ONLY thing that can block a
 #    command is our PreToolUse hook — making the deny case a true test of the
 #    hook's authority in a full-auto run.
 #  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
 run_agent() {
     local prompt="$1" stream="$2"
-    local model_args=()
-    [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(-m "$ALLOWLISTER_E2E_MODEL")
     ( cd "$proj" && timeout 180 "$agent_bin" --yolo \
-        "${model_args[@]}" \
+        --auth-type openai \
+        -m "$model" \
         -p "$prompt" \
         </dev/null ) >"$stream" 2>"$stream.err" || {
         note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
@@ -123,11 +135,11 @@ run_agent() {
 # render the block differently, so this is a bonus signal, not a gate.
 reason_surfaced_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
-# Diagnostic: print the deny transcript so a CI run reveals exactly how Qwen
-# surfaces a hook denial, used to harden the reason assertion above.
-dump_deny_diagnostic() {
-    local stream="$1"
-    note "  ── deny transcript diagnostic ──────────────────────────"
+# Diagnostic: print a transcript so a CI run reveals exactly how Qwen handled the
+# turn — a hook block on deny, or what the model actually ran on allow.
+dump_transcript() {
+    local stream="$1" label="$2"
+    note "  ── $label transcript diagnostic ─────────────────────────"
     note "  stdout (<=200 lines):"
     head -200 "$stream" | sed 's/^/    /'
     note "  stderr tail:"
@@ -141,7 +153,7 @@ rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
     "$sandbox/deny.stream"
 [ -e "$deny_sentinel" ] && {
-    dump_deny_diagnostic "$sandbox/deny.stream"
+    dump_transcript "$sandbox/deny.stream" deny
     fail "denied command executed: $deny_sentinel was created (the PreToolUse deny did not hold)"
 }
 note "  ok: command blocked — the sentinel was never created"
@@ -151,14 +163,15 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Qwen rendered its own block)"
 fi
 
-note "» case 2/2: allow — \`echo\` must run"
-allow_sentinel="$sandbox/sentinel-allow.txt"
-rm -f "$allow_sentinel"
-marker="allowed-by-allowlister"
-run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
+note "» case 2/2: allow — \`mkdir\` must run"
+allow_sentinel="$proj/sentinel-allow.d"
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
-grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
+[ -d "$allow_sentinel" ] || {
+    dump_transcript "$sandbox/allow.stream" allow
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
 note "  ok: command executed (allow fell through to Qwen's normal flow)"
 
 note "✓ qwen live e2e passed (deny blocked under --yolo, allow ran)"
