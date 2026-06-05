@@ -14,7 +14,7 @@
 use std::io::{Read, Write};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::config;
 use crate::domain::{self, Verdict};
@@ -81,16 +81,18 @@ fn discovery_dir(input: &HookInput) -> &str {
 }
 
 fn write_decision<W: Write>(stdout: &mut W, permission: &str, message: &str) {
-    let output = HookOutput {
-        permission,
-        agent_message: message.to_string(),
-    };
-    // Serialization of this small fixed shape cannot fail; if writing fails Cursor
-    // treats the missing output as a fail-open (the command proceeds), which is
-    // the safe fallback.
-    if let Ok(json) = serde_json::to_string(&output) {
-        let _ = writeln!(stdout, "{json}");
-    }
+    // Carry the reason under both `agentMessage` (camelCase, per Cursor's published
+    // hook type definitions) and `agent_message` (snake_case, per Cursor's hooks
+    // docs). Cursor ignores unknown keys, so emitting both delivers the reason
+    // whichever the running build reads. `permission` is the field that gates and
+    // is unambiguous. If writing fails Cursor treats the missing output as a
+    // fail-open (the command proceeds), which is the safe fallback.
+    let output = serde_json::json!({
+        "permission": permission,
+        "agentMessage": message,
+        "agent_message": message,
+    });
+    let _ = writeln!(stdout, "{output}");
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -101,16 +103,6 @@ struct HookInput {
     cwd: Option<String>,
     #[serde(default)]
     workspace_roots: Vec<String>,
-}
-
-/// Cursor's response envelope. Field names are camelCase per Cursor's hook types
-/// (`permission`, `agentMessage`). The `permission` field is the only key that
-/// gates; `agentMessage` carries our reason back to the model.
-#[derive(Debug, Serialize)]
-struct HookOutput<'a> {
-    permission: &'a str,
-    #[serde(rename = "agentMessage")]
-    agent_message: String,
 }
 
 #[cfg(test)]
@@ -205,9 +197,16 @@ mod tests {
         let (code, value) = run_payload(&payload);
         assert_eq!(code, 0);
         assert_eq!(permission(&value), "deny");
-        assert!(value["agentMessage"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("allowlister:"));
+        // The reason is carried under both casings so whichever key Cursor reads
+        // delivers it.
+        for key in ["agentMessage", "agent_message"] {
+            assert!(
+                value[key]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("allowlister:"),
+                "missing reason under {key}"
+            );
+        }
     }
 }
