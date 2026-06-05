@@ -1,0 +1,69 @@
+name: E2E (Codex)
+
+# Live end-to-end check that drives the real OpenAI Codex CLI against allowlister
+# wired as a PreToolUse hook (scripts/e2e-codex.sh). Unlike ci.yml this needs
+# network, a model call, and the OPENAI_API_KEY secret, so it lives in its own
+# workflow gated to trusted contexts only.
+#
+# Security: a secret in a public repo must never be reachable by untrusted code.
+# GitHub already withholds secrets from fork pull requests; the job `if` below is
+# defense in depth — it runs only in the canonical repo and never for a PR whose
+# head is a fork, so this workflow can be edited in a fork PR without exposing
+# the key.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-codex-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: codex live e2e
+    if: >-
+      github.repository == 'nickderobertis/allowlister' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the API key is present
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set. Create a key at https://platform.openai.com/api-keys and add it: gh secret set OPENAI_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Codex CLI
+        run: |
+          npm install -g @openai/codex
+          codex --version
+
+      - name: Live hook e2e against the real CLI
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: just test-codex

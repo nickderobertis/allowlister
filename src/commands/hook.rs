@@ -2,13 +2,14 @@
 
 use crate::cli::Harness;
 use crate::errors::Result;
-use crate::io::harness::{claude_code, copilot, crush, cursor};
+use crate::io::harness::{claude_code, codex, copilot, crush, cursor};
 
 /// Run the hook adapter for the requested harness.
 pub fn run(harness: Harness) -> Result<i32> {
     match harness {
         Harness::ClaudeCode => claude_code::run(),
         Harness::Cursor => cursor::run(),
+        Harness::Codex => codex::run(),
         Harness::Crush => crush::run(),
         Harness::Copilot => copilot::run(),
     }
