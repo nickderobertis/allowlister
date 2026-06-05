@@ -1,0 +1,38 @@
+{
+  "rules": [
+    { "name": "never read secrets",
+      "tool": "read",
+      "action": "deny",
+      "params": { "path": ["**/.ssh/**", "**/*.pem", "**/.env", "**/.env.*"] } },
+
+    { "name": "reads and writes stay inside the repo",
+      "tool": "write",
+      "action": "allow",
+      "params": { "path": ["./**", "/tmp/**"] } },
+
+    { "name": "web fetch only to github",
+      "tool": "web_fetch",
+      "action": "allow",
+      "params": { "url": ["https://github.com/**", "https://*.github.com/**"] } },
+
+    { "name": "no web search at all",
+      "tool": "web_search",
+      "action": "deny" },
+
+    { "name": "deny destructive MCP tools everywhere",
+      "tool": "mcp",
+      "action": "deny",
+      "params": { "mcp_tool": ["delete*", "*destroy*", "drop*"] } },
+
+    { "name": "allow only read-only linear MCP tools",
+      "tool": "mcp",
+      "action": "allow",
+      "params": { "mcp_server": ["linear"], "mcp_tool": ["@(list|get|search)*"] } },
+
+    { "name": "an MCP deploy may only target staging (server-specific param)",
+      "tool": "mcp",
+      "action": "allow",
+      "params": { "mcp_tool": ["deploy"] },
+      "jsonpath": { "target": ["staging/**"] } }
+  ]
+}
