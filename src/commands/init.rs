@@ -159,7 +159,7 @@ const GOOSE_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^shell$|__",
+        "matcher": "^(shell|read|write|edit|text_editor)$|__",
         "hooks": [
           { "type": "command", "command": "allowlister hook goose", "timeout": 10 }
         ]
@@ -1313,7 +1313,10 @@ mod tests {
         assert!(hooks.is_file(), "the goose hook must be registered locally");
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^shell$|__");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["matcher"],
+            "^(shell|read|write|edit|text_editor)$|__"
+        );
         assert_eq!(
             doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
             "allowlister hook goose"

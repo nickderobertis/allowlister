@@ -36,13 +36,15 @@ const HOOK_COMMAND: &str = "allowlister hook goose";
 /// fired before the tool executes in every approval mode.
 const HOOK_EVENT: &str = "PreToolUse";
 
-/// The tool-name matcher (a regex, tested unanchored against the tool name). It
-/// covers the shell (bare `shell` or any `<ext>__shell`) plus every namespaced
-/// tool — the developer extension's `__write`/`__edit` and any `<server>__<tool>`
-/// MCP call — via the `__` substring. The adapter routes each to the shell or
-/// tool engine, so one block fires once per tool. (Goose's RE2 matcher has no
-/// look-ahead, so the shell is matched and then re-routed rather than excluded.)
-const MATCHER: &str = "^shell$|__";
+/// The tool-name matcher (a regex Goose tests against each call's tool name). It
+/// must fire for every tool allowlister can gate. Goose delivers its developer
+/// file tools to the hook under BARE names — `shell`, and `read`/`write`/`edit`
+/// (older Goose: the multi-purpose `text_editor`) — and namespaces the rest
+/// (`<server>__<tool>` MCP calls, `todo__…`). So the matcher lists those bare file
+/// tools and also matches any `__` name. The adapter routes each to the shell, the
+/// tool engine, or (for a tool it doesn't recognize) the deferring path, so an
+/// over-broad match is harmless.
+const MATCHER: &str = "^(shell|read|write|edit|text_editor)$|__";
 
 /// Seconds Goose waits for the hook before giving up (and failing open). Goose's
 /// own default is 30; a tight value keeps a slow gate from stalling the agent.

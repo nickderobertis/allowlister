@@ -1011,7 +1011,10 @@ fn init_goose_local_registers_plugin() {
     let hooks = plugin.join("hooks/hooks.json");
     assert!(hooks.is_file(), "the goose hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
-    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^shell$|__");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["matcher"],
+        "^(shell|read|write|edit|text_editor)$|__"
+    );
     assert_eq!(
         doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
         "allowlister hook goose"

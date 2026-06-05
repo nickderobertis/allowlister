@@ -108,37 +108,12 @@ note "» wiring the project with \`allowlister init --harness goose\`"
 grep -q 'allowlister hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
     || fail "init did not register the hook in the plugin's hooks.json"
 
-# >>> TEMPORARY DIAGNOSTIC: capture the exact hook payloads Goose sends, under a
-# match-all matcher, to learn the tool_name format for the editor and MCP tools.
-goose_hooks_json="$proj/.agents/plugins/allowlister/hooks/hooks.json"
-goose_capture="$sandbox/hook-payloads.jsonl"
-goose_wrapper="$sandbox/goose-hook-capture.sh"
-cat > "$goose_wrapper" <<SH
-#!/usr/bin/env bash
-tee -a "$goose_capture" | allowlister hook goose
-SH
-chmod +x "$goose_wrapper"
-python3 - "$goose_hooks_json" "$goose_wrapper" <<'PY'
-import json, sys
-path, wrapper = sys.argv[1], sys.argv[2]
-doc = json.load(open(path))
-for group in doc["hooks"]["PreToolUse"]:
-    group["matcher"] = ".*"
-    for hook in group.get("hooks", []):
-        hook["command"] = wrapper
-json.dump(doc, open(path, "w"), indent=2)
-PY
-dump_goose_capture() {
-    note "  ── captured Goose hook payloads (tool_name + tool_input) ──"
-    [ -f "$goose_capture" ] && sed 's/^/    /' "$goose_capture" || note "    (no payloads captured)"
-}
-# <<< END TEMPORARY DIAGNOSTIC
-
 # Plant the write fixture target and wire the shared stdio MCP server as a Goose
-# stdio extension (`--with-extension`). Goose has no built-in read tool, so the
-# built-in case below exercises the gateable `developer__write` instead. The MCP
-# tools arrive namespaced as `<ext>__deletewidget`; the hook matcher (`__`) covers
-# them and the deny matches by tool name regardless of the extension's name.
+# stdio extension (`--with-extension`). Goose delivers its developer file tools to
+# the hook under bare names (e.g. `write` with `path`/`content`), so the built-in
+# case below exercises the gateable `write` tool. The MCP tools arrive namespaced
+# as `<ext>__deletewidget`; the matcher's `__` branch covers them and the deny
+# matches by tool name regardless of the extension's name.
 al_plant_read_fixtures "$proj"
 mcp_server="$(al_mcp_server "$repo_root")"
 mcp_sentinel="$sandbox/mcp-deleted.sentinel"
@@ -218,7 +193,6 @@ forbidden="$proj/blocked-by-allowlister.txt"
 rm -f "$forbidden"
 run_agent "Use the developer text-editor/write tool (not the shell) to create the file $forbidden containing the word blocked. If the write is blocked, stop and do not use the shell." \
     "$sandbox/write.stream"
-dump_goose_capture   # TEMPORARY DIAGNOSTIC: show every tool_name Goose sent
 al_write_conclude "$forbidden" "$sandbox/write.stream"
 
 if [ "$have_mcp" = 1 ]; then
