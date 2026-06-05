@@ -84,6 +84,60 @@ impl Sandbox {
         )
     }
 
+    /// A Copilot `preToolUse` payload for the `bash` tool whose `cwd` points at
+    /// the sandbox project dir.
+    fn copilot_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"toolName":"bash","toolArgs":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
+    /// A Codex `PreToolUse` payload whose `cwd` points at the sandbox project dir.
+    /// The shell command rides under `tool_input.command`, like Claude Code.
+    fn codex_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
+    /// A Crush `PreToolUse` payload whose `cwd` points at the sandbox project dir.
+    /// Crush names its shell tool `bash` (lowercase) and rides the command under
+    /// `tool_input.command`.
+    fn crush_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"event":"PreToolUse","tool_name":"bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
+    /// A Qwen Code `PreToolUse` payload whose `cwd` points at the sandbox project
+    /// dir. Qwen names its shell tool `run_shell_command` (Gemini-style) and rides
+    /// the command under `tool_input.command`.
+    fn qwen_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"run_shell_command","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
+    /// A Goose `PreToolUse` payload whose `working_dir` points at the sandbox
+    /// project dir. Goose names its shell tool `shell` (builtin) or
+    /// `developer__shell` (namespaced) — both are gated; this exercises the
+    /// namespaced form — and carries the cwd under `working_dir` (not `cwd`).
+    fn goose_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"event":"PreToolUse","tool_name":"developer__shell","tool_input":{{"command":{}}},"working_dir":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
     /// An OpenCode shim payload whose `cwd` points at the sandbox project dir. The
     /// shim labels every shell command `bash` and rides it under
     /// `tool_input.command`.
@@ -108,6 +162,24 @@ fn decision_of(stdout: &[u8]) -> String {
 fn permission_of(stdout: &[u8]) -> String {
     let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
     value["permission"].as_str().unwrap().to_string()
+}
+
+/// Read the `permissionDecision` field Copilot's hook adapter writes.
+fn copilot_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["permissionDecision"].as_str().unwrap().to_string()
+}
+
+/// Read the flat `decision` field Crush's hook adapter writes.
+fn crush_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["decision"].as_str().unwrap().to_string()
+}
+
+/// Read the top-level `decision` field Goose's hook adapter writes for a block.
+fn goose_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["decision"].as_str().unwrap().to_string()
 }
 
 /// Read the top-level `decision` field OpenCode's hook adapter writes for a deny.
@@ -288,6 +360,237 @@ fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn codex_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Codex shares Claude Code's PreToolUse decision shape for a deny.
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn codex_hook_allow_emits_empty_stdout() {
+    // Codex rejects a bare `allow`, so an allow verdict is a no-op: empty stdout
+    // hands the call back to Codex's normal approval flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn codex_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through, no `defer`
+    // token (which Codex's PreToolUse does not accept).
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn codex_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion from Claude/Cursor: Codex treats exit 2 as a block,
+    // so a parse failure must exit 0 (not 1/2) with empty stdout — never a deny.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "codex"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn crush_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Crush's native deny shape is a flat `{"decision":"deny",...}`.
+    assert_eq!(crush_decision_of(&output), "deny");
+}
+
+#[test]
+fn crush_hook_allow_emits_empty_stdout() {
+    // An explicit `allow` would pre-approve and skip Crush's prompt, so an allow
+    // verdict is a no-op: empty stdout hands the call back to Crush's normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn crush_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — Crush treats empty stdout as "no
+    // opinion" and falls through to its normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn crush_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // Like Codex, Crush blocks on exit 2 and fails open otherwise, so a parse
+    // failure must exit 0 (not 1/2) with empty stdout — never a block.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "crush"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn qwen_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Qwen shares Claude Code's PreToolUse decision shape for a deny.
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn qwen_hook_allow_emits_empty_stdout() {
+    // A non-deny verdict is a no-op: empty stdout hands the call back to Qwen's
+    // normal approval flow rather than auto-approving via an explicit allow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn qwen_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through to Qwen's own
+    // approval flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn qwen_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion: Qwen treats exit 2 as a block, so a parse failure
+    // must exit 0 (not 1/2) with empty stdout — never a deny.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "qwen"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn goose_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // Goose's native block keyword is `block`, not `deny`.
+    assert_eq!(goose_decision_of(&output), "block");
+}
+
+#[test]
+fn goose_hook_allow_emits_empty_stdout() {
+    // A non-block verdict is a no-op: empty stdout hands the call back to Goose's
+    // normal flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn goose_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — a true fall-through to Goose's flow.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn goose_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The fail-open inversion: Goose treats exit 2 as a block, so a parse failure
+    // must exit 0 (not 1/2) with empty stdout — never a block.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "goose"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn opencode_hook_deny_routes_through_stdin_stdout() {
     let sandbox = Sandbox::new();
     let output = sandbox
@@ -339,6 +642,65 @@ fn opencode_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
         .write_stdin("{ this is not json")
         .assert()
         .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn copilot_hook_allow_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "allow");
+}
+
+#[test]
+fn copilot_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "deny");
+}
+
+#[test]
+fn copilot_hook_defer_emits_empty_stdout() {
+    // Copilot has a native fall-through: an undecided command emits nothing, so
+    // Copilot runs its own permission flow (a true defer, not an escalation).
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn copilot_hook_invalid_json_defers_via_exit_zero_and_empty_stdout() {
+    // Copilot's preToolUse is fail-CLOSED: a non-zero exit would DENY. So unlike
+    // the Claude/Cursor adapters, a parse failure here must exit 0 with empty
+    // stdout (defer to Copilot's normal flow), never deny on our own error.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "copilot"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .success()
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("invalid hook JSON"));
 }
@@ -483,6 +845,184 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
 }
 
 #[test]
+fn init_codex_local_registers_hooks_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "codex"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook codex"))
+        // Codex has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Codex wires .codex/hooks.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let hooks = dir.path().join(".codex/hooks.json");
+    assert!(hooks.is_file(), "the codex hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook codex"
+    );
+}
+
+#[test]
+fn init_codex_no_hooks_prints_codex_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "codex", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Add this to ~/.codex/hooks.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".codex/hooks.json").exists(),
+        "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_crush_local_registers_crush_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "crush"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook crush"))
+        // Crush has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Crush wires crush.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let config = dir.path().join("crush.json");
+    assert!(config.is_file(), "the crush hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["command"],
+        "allowlister hook crush"
+    );
+}
+
+#[test]
+fn init_crush_no_hooks_prints_crush_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "crush", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Add this to crush.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join("crush.json").exists(),
+        "--no-hooks must not write crush.json"
+    );
+}
+
+#[test]
+fn init_qwen_local_registers_settings_json() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "qwen"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook qwen"))
+        // Qwen has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Qwen wires .qwen/settings.json, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let settings = dir.path().join(".qwen/settings.json");
+    assert!(settings.is_file(), "the qwen hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["matcher"],
+        "run_shell_command"
+    );
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook qwen"
+    );
+}
+
+#[test]
+fn init_qwen_no_hooks_prints_qwen_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "qwen", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Add this to ~/.qwen/settings.json",
+        ));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".qwen/settings.json").exists(),
+        "--no-hooks must not write settings.json"
+    );
+}
+
+#[test]
+fn init_goose_local_registers_plugin() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "goose"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook goose"))
+        // Goose has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Goose wires a plugin directory, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let plugin = dir.path().join(".agents/plugins/allowlister");
+    assert!(
+        plugin.join("plugin.json").is_file(),
+        "the manifest is written"
+    );
+    let hooks = plugin.join("hooks/hooks.json");
+    assert!(hooks.is_file(), "the goose hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "(^|__)shell$");
+    assert_eq!(
+        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+        "allowlister hook goose"
+    );
+}
+
+#[test]
+fn init_goose_no_hooks_prints_goose_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "goose", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".agents/plugins/allowlister"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".agents").exists(),
+        "--no-hooks must not write the plugin directory"
+    );
+}
+
+#[test]
 fn init_opencode_local_writes_plugin() {
     let dir = TempDir::new().unwrap();
     Command::cargo_bin("allowlister")
@@ -518,6 +1058,49 @@ fn init_opencode_no_hooks_prints_opencode_plugin() {
     assert!(
         !dir.path().join(".opencode").exists(),
         "--no-hooks must not write the plugin"
+    );
+}
+
+#[test]
+fn init_copilot_local_registers_github_hooks_file() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "copilot"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook copilot"))
+        // Copilot has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // Copilot wires its own file under .github/hooks, never the other harnesses'.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    assert!(!dir.path().join(".cursor/hooks.json").exists());
+    let hooks = dir.path().join(".github/hooks/allowlister.json");
+    assert!(hooks.is_file(), "the copilot hook must be auto-registered");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+    assert_eq!(doc["version"], 1);
+    assert_eq!(
+        doc["hooks"]["preToolUse"][0]["bash"],
+        "allowlister hook copilot"
+    );
+}
+
+#[test]
+fn init_copilot_no_hooks_prints_copilot_snippet() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "copilot", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".github/hooks/allowlister.json"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".github/hooks/allowlister.json").exists(),
+        "--no-hooks must not write the hooks file"
     );
 }
 
@@ -667,17 +1250,6 @@ fn init_global_falls_back_to_home_config() {
         .join(".config/allowlister/config.json")
         .is_file());
     assert!(home.path().join(".claude/settings.json").is_file());
-}
-
-#[test]
-fn hook_copilot_is_unimplemented() {
-    Command::cargo_bin("allowlister")
-        .unwrap()
-        .args(["hook", "copilot"])
-        .write_stdin("{}")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("not yet implemented"));
 }
 
 #[test]

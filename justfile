@@ -102,6 +102,26 @@ test-claude:
 test-cursor:
     @bash scripts/e2e-cursor.sh
 
+# Live check against the real `codex` CLI (needs Codex CLI + auth + network; opt-in, not in full-check).
+test-codex:
+    @bash scripts/e2e-codex.sh
+
+# Live check against the real `copilot` CLI (needs Copilot CLI + auth + network; opt-in, not in full-check).
+test-copilot:
+    @bash scripts/e2e-copilot.sh
+
+# Live check against the real `crush` CLI (needs Crush + a provider key + network; opt-in, not in full-check).
+test-crush:
+    @bash scripts/e2e-crush.sh
+
+# Live check against the real `qwen` CLI (needs Qwen Code + a provider key + network; opt-in, not in full-check).
+test-qwen:
+    @bash scripts/e2e-qwen.sh
+
+# Live check against the real `goose` CLI (needs Goose + a provider key + network; opt-in, not in full-check).
+test-goose:
+    @bash scripts/e2e-goose.sh
+
 # Live check against the real `opencode` CLI (needs OpenCode + a provider key + network; opt-in, not in full-check).
 test-opencode:
     @bash scripts/e2e-opencode.sh
