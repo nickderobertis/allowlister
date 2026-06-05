@@ -290,26 +290,44 @@ pub(crate) fn codex(tool_name: &str, tool_input: &Value) -> ToolCall {
     normalize(tool_name, tool_input, CODEX, parse_mcp_dunder)
 }
 
-// Goose's developer extension exposes a single `developer__text_editor` tool whose
-// `command` arg (view/write/str_replace/insert) decides the capability, so it is
-// handled below rather than by a static table entry. The table is left empty; any
-// non-`developer` `<server>__<tool>` is MCP.
-const GOOSE: &[ToolSpec] = &[];
+// Goose's developer extension delivers its file tools to the hook under BARE
+// names (verified from a live payload: `write` carries `path`/`content`), not the
+// `developer__`-namespaced names the docs use. Map those bare tools here; the
+// multi-purpose `text_editor` (older Goose) is handled by `goose` below. Any
+// `<server>__<tool>` that isn't a developer builtin is MCP.
+const GOOSE: &[ToolSpec] = &[
+    ToolSpec {
+        name: "write",
+        capability: Capability::Write,
+        params: &[("path", ParamKey::Path), ("content", ParamKey::Content)],
+    },
+    ToolSpec {
+        name: "read",
+        capability: Capability::Read,
+        params: &[("path", ParamKey::Path)],
+    },
+    ToolSpec {
+        name: "edit",
+        capability: Capability::Edit,
+        params: &[("path", ParamKey::Path)],
+    },
+];
 
-/// Normalize a Goose `PreToolUse` tool call. The developer extension's
-/// `text_editor` tool is multi-purpose (its `command` selects read/write/edit), so
-/// it is mapped by command; any non-`developer` `<server>__<tool>` is MCP.
+/// Normalize a Goose `PreToolUse` tool call. Developer file tools arrive under bare
+/// names (`write`/`read`/`edit`) or, on older Goose, the multi-purpose
+/// `text_editor` whose `command` selects the capability; any non-developer
+/// `<server>__<tool>` is MCP.
 pub(crate) fn goose(tool_name: &str, tool_input: &Value) -> ToolCall {
-    if tool_name == "developer__text_editor" {
-        return goose_text_editor(tool_input);
+    if tool_name == "text_editor" || tool_name == "developer__text_editor" {
+        return goose_text_editor(tool_name, tool_input);
     }
     normalize(tool_name, tool_input, GOOSE, parse_mcp_namespaced)
 }
 
-/// Map Goose's `developer__text_editor` to a capability by its `command`: `view`
-/// is a read, `write` a write, and `str_replace`/`insert`/anything else an edit.
-/// The file is at `path`; new content (for `write`) is at `file_text`.
-fn goose_text_editor(tool_input: &Value) -> ToolCall {
+/// Map Goose's `text_editor` to a capability by its `command`: `view` is a read,
+/// `write` a write, and `str_replace`/`insert`/anything else an edit. The file is
+/// at `path`; new content (for `write`) is at `file_text`.
+fn goose_text_editor(tool_name: &str, tool_input: &Value) -> ToolCall {
     let capability = match tool_input.get("command").and_then(Value::as_str) {
         Some("view") => Capability::Read,
         Some("write") => Capability::Write,
@@ -324,7 +342,7 @@ fn goose_text_editor(tool_input: &Value) -> ToolCall {
     }
     ToolCall::new(
         capability,
-        "developer__text_editor".to_string(),
+        tool_name.to_string(),
         params,
         tool_input.clone(),
     )
@@ -535,6 +553,19 @@ mod tests {
             &json!({ "command": "str_replace", "path": "/r/a" }),
         );
         assert_eq!(edit.capability, Capability::Edit);
+    }
+
+    #[test]
+    fn goose_bare_developer_tools_map_to_capabilities() {
+        // Goose delivers its developer file tools to the hook under bare names.
+        let write = goose("write", &json!({ "path": "/r/a", "content": "x" }));
+        assert_eq!(write.capability, Capability::Write);
+        assert_eq!(write.params.get(ParamKey::Path), Some("/r/a"));
+        assert_eq!(write.params.get(ParamKey::Content), Some("x"));
+
+        let read = goose("read", &json!({ "path": "/r/a" }));
+        assert_eq!(read.capability, Capability::Read);
+        assert_eq!(read.params.get(ParamKey::Path), Some("/r/a"));
     }
 
     #[test]
