@@ -14,7 +14,7 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings};
+use crate::io::{claude_settings, copilot_settings, cursor_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -74,6 +74,23 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "beforeShellExecution": [
       { "command": "allowlister hook cursor" }
+    ]
+  }
+}"#;
+
+/// The hooks snippet `init --harness copilot --no-hooks` prints for manual wiring:
+/// register the hook on Copilot's `preToolUse` event. The same command is written
+/// under `bash` and `powershell` so it runs on every OS; Copilot has no allow list
+/// to broaden, so there is nothing to warn about.
+const COPILOT_SETTINGS_SNIPPET: &str = r#"{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "allowlister hook copilot",
+        "powershell": "allowlister hook copilot"
+      }
     ]
   }
 }"#;
@@ -267,8 +284,7 @@ fn harness_label(harness: Harness) -> &'static str {
     }
 }
 
-/// Register the chosen harness's hook and report what changed. Copilot is not yet
-/// implemented, so selecting it is a typed error rather than a half-wired setup.
+/// Register the chosen harness's hook and report what changed.
 fn register_hook_for<W: Write>(
     harness: Harness,
     global: bool,
@@ -289,23 +305,23 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
-        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
+        Harness::Copilot => {
+            let path = copilot_settings::settings_path(global, cwd, env)?;
+            let change = copilot_settings::register_hook(&path)?;
+            report_copilot_hook(out, &change);
+            Ok(())
+        }
     }
 }
 
 /// Print the manual-wiring snippet for the chosen harness (the `--no-hooks` path).
 fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
-    match harness {
-        Harness::ClaudeCode => {
-            let _ = write_hook_setup(out);
-            Ok(())
-        }
-        Harness::Cursor => {
-            let _ = write_cursor_hook_setup(out);
-            Ok(())
-        }
-        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
-    }
+    let _ = match harness {
+        Harness::ClaudeCode => write_hook_setup(out),
+        Harness::Cursor => write_cursor_hook_setup(out),
+        Harness::Copilot => write_copilot_hook_setup(out),
+    };
+    Ok(())
 }
 
 /// The config path for the chosen scope.
@@ -368,6 +384,27 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what registering the Copilot hook changed. Copilot's hook file has no
+/// allow list to broaden, so there is no allow-list warning to print.
+fn report_copilot_hook<W: Write>(out: &mut W, change: &copilot_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the preToolUse hook.",
+            change.path.display(),
+            copilot_settings::hook_command()
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -395,6 +432,19 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
+/// Write the Copilot hooks snippet. Copilot loads a directory of independent hook
+/// files, so allowlister owns its own; drop it in the repo (`.github/hooks/`) or
+/// globally (`~/.copilot/hooks/`). There is no allow list to broaden.
+fn write_copilot_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Save this as .github/hooks/allowlister.json (per-repo) or \
+         ~/.copilot/hooks/allowlister.json (all repos):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{COPILOT_SETTINGS_SNIPPET}")
 }
 
 #[cfg(test)]
@@ -726,22 +776,70 @@ mod tests {
     }
 
     #[test]
-    fn execute_copilot_harness_is_unimplemented() {
+    fn execute_copilot_local_registers_github_hooks_file() {
         let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Copilot,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Copilot wires its own file under .github/hooks, not the other harnesses'.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(!dir.path().join(".cursor/hooks.json").exists());
+        let hooks = dir.path().join(".github/hooks/allowlister.json");
+        assert!(
+            hooks.is_file(),
+            "the copilot hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["version"], 1);
+        assert_eq!(
+            doc["hooks"]["preToolUse"][0]["bash"],
+            "allowlister hook copilot"
+        );
+    }
+
+    #[test]
+    fn execute_copilot_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
             harness: Harness::Copilot,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".github/hooks/allowlister.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(".github/hooks/allowlister.json"));
+        assert!(text.contains("allowlister hook copilot"));
+        // Copilot has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_copilot_global_writes_under_home_copilot() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Copilot,
             hooks: true,
         };
-        let err = execute(
-            &plan,
-            false,
-            dir.path(),
-            &sandbox_env(dir.path()),
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::HarnessUnimplemented(_)));
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir
+            .path()
+            .join("home/.copilot/hooks/allowlister.json")
+            .is_file());
     }
 }
