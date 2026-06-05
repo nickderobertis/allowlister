@@ -1,8 +1,8 @@
 # allowlister
 
-A small, fast Rust CLI that hooks into AI coding agents (Claude Code first;
-Cursor/Copilot next) and decides whether to **allow**, **deny**, or **defer**
-each shell command the agent wants to run.
+A small, fast Rust CLI that hooks into AI coding agents (Claude Code and Cursor;
+Copilot next) and decides whether to **allow**, **deny**, or **defer** each shell
+command the agent wants to run.
 
 It replaces the simplistic string-prefix allow lists that current agents ship
 with. Instead of classifying a command as safe or unsafe in the abstract,
@@ -107,7 +107,7 @@ cd allowlister
 just build-release   # or: cargo build --release --locked
 ```
 
-## Quick start (Claude Code)
+## Quick start
 
 ```sh
 allowlister init            # interactive setup on a terminal
@@ -116,45 +116,61 @@ allowlister init            # interactive setup on a terminal
 Run on a terminal, `init` walks you through a short setup: where the config
 lives (user-global or project-local), which starting ruleset to write (the
 minimal `starter`, or a curated [recommended profile](#recommended-profiles) —
-`read-only` / `repo-write`), and whether to register the Claude Code hook now.
-It then writes the config and — by default — **registers the hook for you** by
-merging it into `~/.claude/settings.json` (or `./.claude/settings.json` for a
-project). The merge is non-destructive and idempotent: it preserves your other
-settings, never duplicates the hook, and adds a tiny nuclear-pattern
-`permissions.deny` as defense in depth. `permissions.allow` / `permissions.ask`
-are left untouched so the hook stays the source of allow truth.
+`read-only` / `repo-write`), and whether to register the harness hook now. It
+then writes the config and — by default — **registers the hook for you**. The
+config itself is harness-agnostic; only the hook wiring differs per harness, so
+`--harness` picks which one to set up (default `claude-code`).
+
+For **Claude Code** it merges the hook into `~/.claude/settings.json` (or
+`./.claude/settings.json` for a project). The merge is non-destructive and
+idempotent: it preserves your other settings, never duplicates the hook, and adds
+a tiny nuclear-pattern `permissions.deny` as defense in depth.
+`permissions.allow` / `permissions.ask` are left untouched so the hook stays the
+source of allow truth.
+
+For **Cursor** (`--harness cursor`) it merges the `beforeShellExecution` hook
+into `~/.cursor/hooks.json` (or `./.cursor/hooks.json` for a project), just as
+idempotently. Cursor has no allow list to broaden, so there is no allow-list
+warning — the hook is the sole gate.
 
 Every choice is also a flag, so the same command scripts cleanly in CI:
 
 ```sh
-allowlister init --global --profile read-only   # user config, curated reads, hook registered
-allowlister init --local  --no-hooks            # project config, print the snippet instead
+allowlister init --global --profile read-only   # user config, curated reads, Claude hook registered
+allowlister init --local  --harness cursor      # project config, Cursor hook registered
+allowlister init --local  --no-hooks            # print the snippet instead of registering
 allowlister init -y                              # take all defaults, no prompts
 ```
 
-`--no-hooks` falls back to printing the exact `~/.claude/settings.json` snippet
-to paste by hand. To layer another profile onto an existing config later, use
-[`install`](#recommended-profiles).
+`--no-hooks` falls back to printing the exact settings snippet for the chosen
+harness to paste by hand. Run `init` once per harness to wire more than one; the
+config is written on the first run, so the second run needs `--force` to re-write
+it alongside the new hook (e.g. `allowlister init --local --harness cursor
+--force` after a Claude Code setup). To layer another profile onto an existing
+config later, use [`install`](#recommended-profiles).
 
-> **Do not** add `"Bash"` or `"Bash(*)"` to `permissions.allow`. A broad allow
-> makes the agent skip its prompt on its own, which short-circuits the hook's
-> per-fragment allow analysis — the entire point of allowlister.
+> **Claude Code only:** do **not** add `"Bash"` or `"Bash(*)"` to
+> `permissions.allow`. A broad allow makes the agent skip its prompt on its own,
+> which short-circuits the hook's per-fragment allow analysis — the entire point
+> of allowlister.
 
 ## Usage
 
 ```text
 allowlister hook <harness>        Read hook JSON on stdin, write a decision on stdout.
-                                  Harnesses: claude-code (cursor, copilot are stubs).
+                                  Harnesses: claude-code, cursor (copilot is a stub).
 allowlister check '<cmd>' [--cwd P] [--json]
                                   Evaluate one command. Exit 0 for allow/defer, 2 for deny.
 allowlister explain '<cmd>' [--cwd P]
                                   Verbose trace: config sources, fragments, per-fragment
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local] [--profile SOURCE]
+                 [--harness claude-code|cursor]
                  [--hooks | --no-hooks] [-i | -y] [--force]
                                   Set up: write a config from a ruleset (starter,
                                   read-only, repo-write, or a file) and register
-                                  the Bash hook in Claude Code's settings.json.
+                                  the hook in the chosen harness's settings
+                                  (claude-code: settings.json; cursor: hooks.json).
                                   Interactive on a terminal; flags drive it in CI.
 allowlister install <source> [--global | --local | --output P]
                                   Merge an allowlist (a built-in profile name —
@@ -329,20 +345,20 @@ platform.
 ### Live harness check (opt-in)
 
 The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
-To verify the wiring against a *real* harness, `just test-claude` runs
-[`scripts/e2e-claude.sh`](scripts/e2e-claude.sh). It sets a sandbox project up
-with `allowlister init` — exercising the real hook-registration path that writes
-`.claude/settings.json` — then drives the actual `claude` CLI headless and
-asserts that a denied command is blocked (and its reason is reported back to the
-model) while an allowed command runs without a prompt:
+To verify the wiring against a *real* harness, two opt-in scripts set a sandbox
+project up with `allowlister init` — exercising the real hook-registration path —
+then drive the actual agent headless and assert that a denied command is blocked
+(and its reason is reported back to the model) while an allowed command runs
+without a prompt:
 
 ```sh
-just test-claude     # needs Claude Code installed, authenticated, and online
+just test-claude     # drives `claude`; writes/reads .claude/settings.json
+just test-cursor     # drives `cursor-agent`; writes/reads .cursor/hooks.json
 ```
 
-Because it needs the `claude` binary, network, and a model call, it is **not**
-part of `just full-check` or CI. It skips cleanly (exit 0) when `claude` is not
-on `PATH`.
+Each needs its harness binary, network, and a model call, so neither is part of
+`just full-check` or CI. Both skip cleanly (exit 0) when their CLI is not on
+`PATH`.
 
 ## Releasing
 

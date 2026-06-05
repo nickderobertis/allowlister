@@ -98,6 +98,10 @@ test-e2e:
 test-claude:
     @bash scripts/e2e-claude.sh
 
+# Live check against the real `cursor-agent` CLI (needs Cursor CLI + auth + network; opt-in, not in full-check).
+test-cursor:
+    @bash scripts/e2e-cursor.sh
+
 # Enforce line, function, and region coverage across all tests; a miss in any
 # one fails the command.
 test-cov:

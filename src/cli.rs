@@ -22,7 +22,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run as a harness hook: read the hook JSON on stdin, write a decision on
-    /// stdout. Only `claude-code` is implemented.
+    /// stdout. `claude-code` and `cursor` are implemented.
     Hook {
         /// The coding harness whose hook protocol to speak.
         #[arg(value_enum)]
@@ -55,7 +55,7 @@ enum Command {
     },
 
     /// Set allowlister up: write a config from a chosen ruleset and register the
-    /// Bash hook in Claude Code's settings. Runs an interactive flow on a
+    /// hook in the selected harness's settings. Runs an interactive flow on a
     /// terminal, or non-interactively from these flags.
     Init {
         /// Write the user-level config (the default).
@@ -68,10 +68,15 @@ enum Command {
         /// or a path to an allowlist JSON file. Defaults to `starter`.
         #[arg(long, value_name = "SOURCE")]
         profile: Option<String>,
-        /// Register the Bash hook in Claude Code's settings.json (the default).
+        /// Which coding harness to wire the hook into (`claude-code` or
+        /// `cursor`). Defaults to `claude-code`. Run `init` again per harness to
+        /// set up more than one.
+        #[arg(long, value_enum, default_value = "claude-code")]
+        harness: Harness,
+        /// Register the hook in the selected harness's settings (the default).
         #[arg(long, overrides_with = "no_hooks")]
         hooks: bool,
-        /// Do not touch Claude Code settings; just print the snippet to wire by
+        /// Do not touch the harness settings; just print the snippet to wire by
         /// hand.
         #[arg(long = "no-hooks")]
         no_hooks: bool,
@@ -111,7 +116,7 @@ pub enum Harness {
     /// Anthropic Claude Code (`PreToolUse` hook).
     #[value(name = "claude-code")]
     ClaudeCode,
-    /// Cursor (stub).
+    /// Cursor (`beforeShellExecution` hook).
     Cursor,
     /// GitHub Copilot (stub).
     Copilot,
@@ -130,6 +135,7 @@ impl Cli {
                 global,
                 local,
                 profile,
+                harness,
                 hooks,
                 no_hooks,
                 interactive,
@@ -150,6 +156,7 @@ impl Cli {
                     global,
                     local,
                     profile,
+                    harness,
                     hooks,
                     interactive,
                     yes,
