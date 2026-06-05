@@ -126,6 +126,9 @@ pub enum Harness {
     Qwen,
     /// Goose (`PreToolUse` hook).
     Goose,
+    /// OpenCode (`tool.execute.before` plugin shim).
+    #[value(name = "opencode")]
+    OpenCode,
     /// GitHub Copilot CLI (`preToolUse` hook).
     Copilot,
 }

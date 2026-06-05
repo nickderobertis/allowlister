@@ -11,4 +11,5 @@ pub mod copilot;
 pub mod crush;
 pub mod cursor;
 pub mod goose;
+pub mod opencode;
 pub mod qwen;
