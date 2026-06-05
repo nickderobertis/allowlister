@@ -62,18 +62,33 @@ cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
 proj="$sandbox/project"
-mkdir -p "$proj/.git" "$sandbox/xdg"
+mkdir -p "$proj" "$sandbox/xdg"
+git init -q "$proj"
 
-# Deterministic, sandbox-scoped rules: deny `touch`, allow `echo` redirecting
-# anywhere under the sandbox. write_glob is pinned to the temp dir so the allow
-# case always matches its redirection target.
+# Copilot gates project (`.github/hooks`) discovery behind three things in a
+# headless run: (1) a real git repository so it can resolve the repo root (an
+# empty `mkdir .git` does NOT count), (2) folder trust, and (3) a prompt-mode
+# opt-in. Satisfy all three so the freshly registered hook actually loads.
+# COPILOT_HOME isolates Copilot's config under the sandbox; credentials still come
+# from COPILOT_GITHUB_TOKEN in the environment.
+export COPILOT_HOME="$sandbox/copilot-home"
+mkdir -p "$COPILOT_HOME"
+cat > "$COPILOT_HOME/config.json" <<JSON
+{ "trustedFolders": ["$proj"] }
+JSON
+export GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=true
+
+# Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
+# redirect-free command so a headless model reproduces it verbatim — some models
+# silently drop a `> file` redirection, which would make the allow case flaky for
+# reasons unrelated to the gate. (Redirection policy is covered hermetically in
+# the unit and tests/e2e suites.)
 rules="$sandbox/rules.json"
 cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
-    { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
-      "redirections": { "write_glob": ["$sandbox/*"] } }
+    { "name": "allow mkdir", "match": "mkdir *", "action": "allow" }
   ]
 }
 JSON
@@ -90,13 +105,14 @@ grep -q 'allowlister hook copilot' "$proj/.github/hooks/allowlister.json" \
     || fail "init did not register the hook in .github/hooks/allowlister.json"
 
 # Run one headless turn steered toward a single exact command.
-#  * --allow-all-tools: no human approver exists in a headless run, so this stops
-#    Copilot from blocking on its own confirmation. The preToolUse hook still runs
-#    and a hook `deny` still blocks (it is consulted before the permission
-#    service), so the hook remains the sole decider for the cases we assert.
+#  * --allow-all-tools / --allow-all-paths: no human approver exists in a headless
+#    run, so these stop Copilot blocking on its own confirmation and let it write
+#    the sentinel paths absent our gate. The preToolUse hook still runs and a hook
+#    `deny` still blocks (it is consulted before the permission service), so the
+#    hook remains the sole decider for the cases we assert.
 #  * --no-ask-user: never pause for input in a non-interactive run.
 #  * XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user config
-#    leaks in; HOME is left intact so `copilot` keeps its credentials.
+#    leaks in; COPILOT_HOME (set above) isolates Copilot's own config.
 #  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
 run_agent() {
     local prompt="$1" stream="$2"
@@ -105,6 +121,7 @@ run_agent() {
     ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
         timeout 180 "$agent_bin" -p "$prompt" \
             --allow-all-tools \
+            --allow-all-paths \
             --no-ask-user \
             "${model_args[@]}" \
             </dev/null ) >"$stream" 2>"$stream.err" || {
@@ -116,11 +133,11 @@ run_agent() {
 # render its own block message instead, so this is a bonus signal, not a gate.
 reason_surfaced_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
-# Diagnostic: dump the deny transcript so a CI run reveals exactly how Copilot
-# surfaces a hook denial, used to harden assertions later.
-dump_deny_diagnostic() {
-    local stream="$1"
-    note "  ── deny transcript diagnostic ──────────────────────────"
+# Diagnostic: dump a transcript so a CI run reveals exactly how Copilot handled
+# the turn — a hook denial, or what the model actually ran on allow.
+dump_transcript() {
+    local stream="$1" label="$2"
+    note "  ── $label transcript diagnostic ─────────────────────────"
     note "  stdout (<=200 lines):"
     head -200 "$stream" | sed 's/^/    /'
     note "  stderr tail:"
@@ -129,12 +146,12 @@ dump_deny_diagnostic() {
 }
 
 note "» case 1/2: deny — \`touch\` must be blocked even under --allow-all-tools"
-deny_sentinel="$sandbox/sentinel-deny.txt"
+deny_sentinel="$proj/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
     "$sandbox/deny.stream"
 if [ -e "$deny_sentinel" ]; then
-    dump_deny_diagnostic "$sandbox/deny.stream"
+    dump_transcript "$sandbox/deny.stream" deny
     fail "denied command executed: $deny_sentinel was created (the hook did not block it)"
 fi
 note "  ok: command blocked (sentinel absent despite --allow-all-tools)"
@@ -144,14 +161,15 @@ else
     note "  note: Copilot showed its own block message; allowlister's reason was not surfaced"
 fi
 
-note "» case 2/2: allow — \`echo\` must run"
-allow_sentinel="$sandbox/sentinel-allow.txt"
-rm -f "$allow_sentinel"
-marker="allowed-by-allowlister"
-run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
+note "» case 2/2: allow — \`mkdir\` must run"
+allow_sentinel="$proj/sentinel-allow.d"
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
-grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
+[ -d "$allow_sentinel" ] || {
+    dump_transcript "$sandbox/allow.stream" allow
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
 note "  ok: command executed"
 
 note "✓ copilot live e2e passed (deny blocked, allow ran)"
