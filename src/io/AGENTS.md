@@ -9,7 +9,7 @@
   shared decision pipeline; only the I/O shape differs between them.
 - A harness without an undecided/defer state maps defer to its safest escalation
   (ask the user), never to allow.
-- When a harness's pre-execution hook honors only a deny (treating a non-deny as
-  no-opinion) or reads a blocking exit code, express every non-deny verdict — and
-  any internal read/parse failure — through its no-decision fall-through, so an
-  internal error can never become a deny.
+- When a harness's pre-execution hook honors only a deny (rejecting a bare allow)
+  or reads a blocking exit code, express every non-deny verdict — and any internal
+  read/parse failure — through its no-decision fall-through, so an internal error
+  can never become a deny.

@@ -14,7 +14,10 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings, qwen_settings};
+use crate::io::{
+    claude_settings, codex_settings, copilot_settings, crush_settings, cursor_settings,
+    qwen_settings,
+};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -78,6 +81,33 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
   }
 }"#;
 
+/// The hooks snippet `init --harness codex --no-hooks` prints for manual wiring:
+/// register the hook on Codex's `PreToolUse` event, scoped to the `Bash` tool.
+/// Codex has no permissions block, so there is nothing to deny here.
+const CODEX_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          { "type": "command", "command": "allowlister hook codex" }
+        ]
+      }
+    ]
+  }
+}"#;
+
+/// The config snippet `init --harness crush --no-hooks` prints for manual wiring:
+/// register the hook on Crush's `PreToolUse` event, scoped to the `bash` tool with
+/// a regex matcher. Crush has no permissions block, so there is nothing to deny.
+const CRUSH_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "^bash$", "command": "allowlister hook crush", "timeout": 30 }
+    ]
+  }
+}"#;
+
 /// The settings snippet `init --harness qwen --no-hooks` prints for manual wiring:
 /// register the hook on Qwen Code's `PreToolUse` event, scoped to the
 /// `run_shell_command` tool. Qwen has no permissions block, so there is nothing to
@@ -90,6 +120,23 @@ const QWEN_SETTINGS_SNIPPET: &str = r#"{
         "hooks": [
           { "type": "command", "command": "allowlister hook qwen" }
         ]
+      }
+    ]
+  }
+}"#;
+
+/// The hooks snippet `init --harness copilot --no-hooks` prints for manual wiring:
+/// register the hook on Copilot's `preToolUse` event. The same command is written
+/// under `bash` and `powershell` so it runs on every OS; Copilot has no allow list
+/// to broaden, so there is nothing to warn about.
+const COPILOT_SETTINGS_SNIPPET: &str = r#"{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "allowlister hook copilot",
+        "powershell": "allowlister hook copilot"
       }
     ]
   }
@@ -280,13 +327,14 @@ fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Cursor => "Cursor",
+        Harness::Codex => "Codex",
+        Harness::Crush => "Crush",
         Harness::Qwen => "Qwen Code",
         Harness::Copilot => "Copilot",
     }
 }
 
-/// Register the chosen harness's hook and report what changed. Copilot is not yet
-/// implemented, so selecting it is a typed error rather than a half-wired setup.
+/// Register the chosen harness's hook and report what changed.
 fn register_hook_for<W: Write>(
     harness: Harness,
     global: bool,
@@ -307,33 +355,44 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
+        Harness::Codex => {
+            let path = codex_settings::settings_path(global, cwd, env)?;
+            let change = codex_settings::register_hook(&path)?;
+            report_codex_hook(out, &change);
+            Ok(())
+        }
+        Harness::Crush => {
+            let path = crush_settings::settings_path(global, cwd, env)?;
+            let change = crush_settings::register_hook(&path)?;
+            report_crush_hook(out, &change);
+            Ok(())
+        }
         Harness::Qwen => {
             let path = qwen_settings::settings_path(global, cwd, env)?;
             let change = qwen_settings::register_hook(&path)?;
             report_qwen_hook(out, &change);
             Ok(())
         }
-        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
+        Harness::Copilot => {
+            let path = copilot_settings::settings_path(global, cwd, env)?;
+            let change = copilot_settings::register_hook(&path)?;
+            report_copilot_hook(out, &change);
+            Ok(())
+        }
     }
 }
 
 /// Print the manual-wiring snippet for the chosen harness (the `--no-hooks` path).
 fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
-    match harness {
-        Harness::ClaudeCode => {
-            let _ = write_hook_setup(out);
-            Ok(())
-        }
-        Harness::Cursor => {
-            let _ = write_cursor_hook_setup(out);
-            Ok(())
-        }
-        Harness::Qwen => {
-            let _ = write_qwen_hook_setup(out);
-            Ok(())
-        }
-        Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
-    }
+    let _ = match harness {
+        Harness::ClaudeCode => write_hook_setup(out),
+        Harness::Cursor => write_cursor_hook_setup(out),
+        Harness::Codex => write_codex_hook_setup(out),
+        Harness::Crush => write_crush_hook_setup(out),
+        Harness::Qwen => write_qwen_hook_setup(out),
+        Harness::Copilot => write_copilot_hook_setup(out),
+    };
+    Ok(())
 }
 
 /// The config path for the chosen scope.
@@ -396,6 +455,53 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what registering the Codex hook changed. Codex's `hooks.json` has no
+/// permissions block to broaden, so there is no allow-list warning — but Codex
+/// reviews new hooks on startup, so note that the gate activates once trusted.
+fn report_codex_hook<W: Write>(out: &mut W, change: &codex_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the Bash PreToolUse hook.",
+            change.path.display(),
+            codex_settings::hook_command()
+        );
+        let _ = writeln!(
+            out,
+            "  Codex reviews new hooks on startup — approve it when prompted to activate the gate."
+        );
+    }
+}
+
+/// Report what registering the Crush hook changed. Crush's `crush.json` has no
+/// permissions block to broaden, so there is no allow-list warning to print.
+fn report_crush_hook<W: Write>(out: &mut W, change: &crush_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the bash PreToolUse hook.",
+            change.path.display(),
+            crush_settings::hook_command()
+        );
+    }
+}
+
 /// Report what registering the Qwen Code hook changed. Qwen's `settings.json` has
 /// no permissions block to broaden, so there is no allow-list warning to print.
 fn report_qwen_hook<W: Write>(out: &mut W, change: &qwen_settings::SettingsChange) {
@@ -413,6 +519,27 @@ fn report_qwen_hook<W: Write>(out: &mut W, change: &qwen_settings::SettingsChang
             "{verb} {}: registered '{}' as the run_shell_command PreToolUse hook.",
             change.path.display(),
             qwen_settings::hook_command()
+        );
+    }
+}
+
+/// Report what registering the Copilot hook changed. Copilot's hook file has no
+/// allow list to broaden, so there is no allow-list warning to print.
+fn report_copilot_hook<W: Write>(out: &mut W, change: &copilot_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the preToolUse hook.",
+            change.path.display(),
+            copilot_settings::hook_command()
         );
     }
 }
@@ -446,6 +573,34 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
 }
 
+/// Write the `~/.codex/hooks.json` snippet. Codex has no allow list to broaden, so
+/// there is no allow-list warning; it does review new hooks on startup, so the
+/// snippet is followed by a one-line trust reminder.
+fn write_codex_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to ~/.codex/hooks.json (or .codex/hooks.json per-repo; merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{CODEX_SETTINGS_SNIPPET}")?;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "Codex reviews new hooks on startup — approve it when prompted to activate the gate."
+    )
+}
+
+/// Write the Crush `crush.json` snippet. Crush has no allow list to broaden, so
+/// there is no allow-list warning to print.
+fn write_crush_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to crush.json (project root, or ~/.config/crush/crush.json; merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{CRUSH_SETTINGS_SNIPPET}")
+}
+
 /// Write the Qwen Code `settings.json` snippet. Qwen has no allow list to broaden,
 /// so there is no allow-list warning to print.
 fn write_qwen_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
@@ -455,6 +610,19 @@ fn write_qwen_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{QWEN_SETTINGS_SNIPPET}")
+}
+
+/// Write the Copilot hooks snippet. Copilot loads a directory of independent hook
+/// files, so allowlister owns its own; drop it in the repo (`.github/hooks/`) or
+/// globally (`~/.copilot/hooks/`). There is no allow list to broaden.
+fn write_copilot_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Save this as .github/hooks/allowlister.json (per-repo) or \
+         ~/.copilot/hooks/allowlister.json (all repos):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{COPILOT_SETTINGS_SNIPPET}")
 }
 
 #[cfg(test)]
@@ -786,6 +954,131 @@ mod tests {
     }
 
     #[test]
+    fn execute_codex_local_registers_hooks_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Codex,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Codex writes .codex/hooks.json, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let hooks = dir.path().join(".codex/hooks.json");
+        assert!(hooks.is_file(), "the codex hook must be registered locally");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^Bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "allowlister hook codex"
+        );
+    }
+
+    #[test]
+    fn execute_codex_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Codex,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".codex/hooks.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("~/.codex/hooks.json"));
+        assert!(text.contains("allowlister hook codex"));
+        // Codex has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_codex_global_writes_under_home_codex() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Codex,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("home/.codex/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_crush_local_registers_crush_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Crush,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Crush writes crush.json at the project root, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let config = dir.path().join("crush.json");
+        assert!(
+            config.is_file(),
+            "the crush hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["command"],
+            "allowlister hook crush"
+        );
+    }
+
+    #[test]
+    fn execute_crush_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Crush,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join("crush.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("crush.json"));
+        assert!(text.contains("allowlister hook crush"));
+        // Crush has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_crush_global_writes_under_config_crush() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Crush,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; Crush's global config is XDG-aware too.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/crush/crush.json").is_file());
+    }
+
+    #[test]
     fn execute_qwen_local_registers_settings_json() {
         let dir = TempDir::new().unwrap();
         let mut out = Vec::new();
@@ -853,22 +1146,70 @@ mod tests {
     }
 
     #[test]
-    fn execute_copilot_harness_is_unimplemented() {
+    fn execute_copilot_local_registers_github_hooks_file() {
         let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Copilot,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Copilot wires its own file under .github/hooks, not the other harnesses'.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        assert!(!dir.path().join(".cursor/hooks.json").exists());
+        let hooks = dir.path().join(".github/hooks/allowlister.json");
+        assert!(
+            hooks.is_file(),
+            "the copilot hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
+        assert_eq!(doc["version"], 1);
+        assert_eq!(
+            doc["hooks"]["preToolUse"][0]["bash"],
+            "allowlister hook copilot"
+        );
+    }
+
+    #[test]
+    fn execute_copilot_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
             harness: Harness::Copilot,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".github/hooks/allowlister.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(".github/hooks/allowlister.json"));
+        assert!(text.contains("allowlister hook copilot"));
+        // Copilot has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_copilot_global_writes_under_home_copilot() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Copilot,
             hooks: true,
         };
-        let err = execute(
-            &plan,
-            false,
-            dir.path(),
-            &sandbox_env(dir.path()),
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::HarnessUnimplemented(_)));
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; only the hook wiring is harness-specific.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir
+            .path()
+            .join("home/.copilot/hooks/allowlister.json")
+            .is_file());
     }
 }
