@@ -83,6 +83,17 @@ impl Sandbox {
             serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
         )
     }
+
+    /// An OpenCode shim payload whose `cwd` points at the sandbox project dir. The
+    /// shim labels every shell command `bash` and rides it under
+    /// `tool_input.command`.
+    fn opencode_payload(&self, command: &str) -> String {
+        format!(
+            r#"{{"tool_name":"bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+            serde_json::to_string(command).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
 }
 
 fn decision_of(stdout: &[u8]) -> String {
@@ -97,6 +108,12 @@ fn decision_of(stdout: &[u8]) -> String {
 fn permission_of(stdout: &[u8]) -> String {
     let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
     value["permission"].as_str().unwrap().to_string()
+}
+
+/// Read the top-level `decision` field OpenCode's hook adapter writes for a deny.
+fn opencode_decision_of(stdout: &[u8]) -> String {
+    let value: Value = serde_json::from_slice(stdout).expect("hook stdout must be valid JSON");
+    value["decision"].as_str().unwrap().to_string()
 }
 
 #[test]
@@ -271,6 +288,62 @@ fn cursor_hook_invalid_json_exits_one_and_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn opencode_hook_deny_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "opencode"])
+        .write_stdin(sandbox.opencode_payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // The shim throws on a flat `{"decision":"deny",...}`.
+    assert_eq!(opencode_decision_of(&output), "deny");
+}
+
+#[test]
+fn opencode_hook_allow_emits_empty_stdout() {
+    // A non-deny verdict is a no-op: empty stdout tells the shim not to throw.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "opencode"])
+        .write_stdin(sandbox.opencode_payload("gh pr list | head -20"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn opencode_hook_defer_emits_empty_stdout() {
+    // A deferred verdict also emits nothing — the shim lets the call run.
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "opencode"])
+        .write_stdin(sandbox.opencode_payload("some_unknown_tool --flag"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn opencode_hook_invalid_json_exits_zero_and_writes_nothing_to_stdout() {
+    // The shim blocks only on a deny JSON, so a parse failure must exit 0 with
+    // empty stdout — never a block.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "opencode"])
+        .write_stdin("{ this is not json")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
     sandbox
@@ -406,6 +479,45 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
     assert!(
         !dir.path().join(".cursor/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
+    );
+}
+
+#[test]
+fn init_opencode_local_writes_plugin() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "opencode"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister hook opencode"))
+        // OpenCode has no allow list, so the Claude-specific warning must not show.
+        .stdout(predicate::str::contains("do NOT add").not());
+    assert!(dir.path().join(".allowlister.json").is_file());
+    // OpenCode writes a plugin file, never Claude Code's settings.json.
+    assert!(!dir.path().join(".claude/settings.json").exists());
+    let plugin = dir.path().join(".opencode/plugin/allowlister.js");
+    assert!(plugin.is_file(), "the opencode plugin must be auto-written");
+    let text = fs::read_to_string(plugin).unwrap();
+    assert!(text.contains("tool.execute.before"));
+    assert!(text.contains("allowlister hook opencode"));
+}
+
+#[test]
+fn init_opencode_no_hooks_prints_opencode_plugin() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "opencode", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(".opencode/plugin/allowlister.js"));
+    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(
+        !dir.path().join(".opencode").exists(),
+        "--no-hooks must not write the plugin"
     );
 }
 

@@ -22,7 +22,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run as a harness hook: read the hook JSON on stdin, write a decision on
-    /// stdout. `claude-code` and `cursor` are implemented.
+    /// stdout. `claude-code`, `cursor`, and `opencode` are implemented.
     Hook {
         /// The coding harness whose hook protocol to speak.
         #[arg(value_enum)]
@@ -68,9 +68,9 @@ enum Command {
         /// or a path to an allowlist JSON file. Defaults to `starter`.
         #[arg(long, value_name = "SOURCE")]
         profile: Option<String>,
-        /// Which coding harness to wire the hook into (`claude-code` or
-        /// `cursor`). Defaults to `claude-code`. Run `init` again per harness to
-        /// set up more than one.
+        /// Which coding harness to wire the hook into (`claude-code`, `cursor`,
+        /// or `opencode`). Defaults to `claude-code`. Run `init` again per harness
+        /// to set up more than one.
         #[arg(long, value_enum, default_value = "claude-code")]
         harness: Harness,
         /// Register the hook in the selected harness's settings (the default).
@@ -118,6 +118,9 @@ pub enum Harness {
     ClaudeCode,
     /// Cursor (`beforeShellExecution` hook).
     Cursor,
+    /// OpenCode (`tool.execute.before` plugin shim).
+    #[value(name = "opencode")]
+    OpenCode,
     /// GitHub Copilot (stub).
     Copilot,
 }

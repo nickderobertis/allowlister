@@ -14,7 +14,7 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings};
+use crate::io::{claude_settings, cursor_settings, opencode_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -263,6 +263,7 @@ fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Cursor => "Cursor",
+        Harness::OpenCode => "OpenCode",
         Harness::Copilot => "Copilot",
     }
 }
@@ -289,6 +290,12 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
+        Harness::OpenCode => {
+            let path = opencode_settings::settings_path(global, cwd, env)?;
+            let change = opencode_settings::register_hook(&path)?;
+            report_opencode_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
     }
 }
@@ -302,6 +309,10 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         }
         Harness::Cursor => {
             let _ = write_cursor_hook_setup(out);
+            Ok(())
+        }
+        Harness::OpenCode => {
+            let _ = write_opencode_hook_setup(out);
             Ok(())
         }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
@@ -368,6 +379,32 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what writing the OpenCode plugin changed. OpenCode gates only via an
+/// in-process plugin, so this writes a shim file rather than merging settings;
+/// there is no allow list to broaden, just a note that it loads on the next start.
+fn report_opencode_hook<W: Write>(out: &mut W, change: &opencode_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Plugin already up to date in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: wrote the OpenCode plugin that gates bash via '{}'.",
+            change.path.display(),
+            opencode_settings::hook_command()
+        );
+        let _ = writeln!(
+            out,
+            "  OpenCode loads it on its next start — no opencode.json entry needed."
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -395,6 +432,17 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
+/// Write the OpenCode plugin shim. OpenCode gates only via an in-process plugin,
+/// so this is a full file to drop in (auto-loaded, no opencode.json entry needed).
+fn write_opencode_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Write this file to .opencode/plugin/allowlister.js (or ~/.config/opencode/plugin/allowlister.js; OpenCode auto-loads it):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{}", opencode_settings::plugin_source())
 }
 
 #[cfg(test)]
@@ -723,6 +771,69 @@ mod tests {
         // The config still lands under XDG; only the hook wiring is harness-specific.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("home/.cursor/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_opencode_local_writes_plugin() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::OpenCode,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // OpenCode writes a plugin file, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let plugin = dir.path().join(".opencode/plugin/allowlister.js");
+        assert!(
+            plugin.is_file(),
+            "the opencode plugin must be written locally"
+        );
+        let text = fs::read_to_string(plugin).unwrap();
+        assert!(text.contains("allowlister hook opencode"));
+        assert!(text.contains("tool.execute.before"));
+    }
+
+    #[test]
+    fn execute_opencode_no_hooks_prints_plugin_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::OpenCode,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join(".opencode").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(".opencode/plugin/allowlister.js"));
+        assert!(text.contains("allowlister hook opencode"));
+        // OpenCode has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_opencode_global_writes_under_config_opencode() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::OpenCode,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; OpenCode's plugin dir is XDG-aware too.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir
+            .path()
+            .join("xdg/opencode/plugin/allowlister.js")
+            .is_file());
     }
 
     #[test]

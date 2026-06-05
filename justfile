@@ -102,6 +102,10 @@ test-claude:
 test-cursor:
     @bash scripts/e2e-cursor.sh
 
+# Live check against the real `opencode` CLI (needs OpenCode + a provider key + network; opt-in, not in full-check).
+test-opencode:
+    @bash scripts/e2e-opencode.sh
+
 # Enforce line, function, and region coverage across all tests; a miss in any
 # one fails the command.
 test-cov:
