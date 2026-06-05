@@ -1,0 +1,69 @@
+name: E2E (Crush)
+
+# Live end-to-end check that drives the real Crush CLI against allowlister wired
+# as a PreToolUse hook (scripts/e2e-crush.sh). Unlike ci.yml this needs network,
+# a model call, and an LLM provider key (ANTHROPIC_API_KEY), so it lives in its
+# own workflow gated to trusted contexts only.
+#
+# Security: a secret in a public repo must never be reachable by untrusted code.
+# GitHub already withholds secrets from fork pull requests; the job `if` below is
+# defense in depth — it runs only in the canonical repo and never for a PR whose
+# head is a fork, so this workflow can be edited in a fork PR without exposing
+# the key.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-crush-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  live:
+    name: crush live e2e
+    if: >-
+      github.repository == 'nickderobertis/allowlister' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the provider key is present
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set. Create a key at https://console.anthropic.com/ and add it: gh secret set ANTHROPIC_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Crush CLI
+        run: |
+          npm install -g @charmland/crush
+          crush --version
+
+      - name: Live hook e2e against the real CLI
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: just test-crush

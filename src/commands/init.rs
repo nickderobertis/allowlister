@@ -14,7 +14,7 @@ use crate::cli::Harness;
 use crate::commands::profile;
 use crate::errors::{Error, Result};
 use crate::io::configfs::{self, Env};
-use crate::io::{claude_settings, cursor_settings};
+use crate::io::{claude_settings, crush_settings, cursor_settings};
 
 /// Parsed `init` inputs. Scope/profile/hooks are each optional so the
 /// interactive flow only fills in what the user did not already pin on the
@@ -74,6 +74,17 @@ const CURSOR_SETTINGS_SNIPPET: &str = r#"{
   "hooks": {
     "beforeShellExecution": [
       { "command": "allowlister hook cursor" }
+    ]
+  }
+}"#;
+
+/// The config snippet `init --harness crush --no-hooks` prints for manual wiring:
+/// register the hook on Crush's `PreToolUse` event, scoped to the `bash` tool with
+/// a regex matcher. Crush has no permissions block, so there is nothing to deny.
+const CRUSH_SETTINGS_SNIPPET: &str = r#"{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "^bash$", "command": "allowlister hook crush", "timeout": 30 }
     ]
   }
 }"#;
@@ -263,6 +274,7 @@ fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "Claude Code",
         Harness::Cursor => "Cursor",
+        Harness::Crush => "Crush",
         Harness::Copilot => "Copilot",
     }
 }
@@ -289,6 +301,12 @@ fn register_hook_for<W: Write>(
             report_cursor_hook(out, &change);
             Ok(())
         }
+        Harness::Crush => {
+            let path = crush_settings::settings_path(global, cwd, env)?;
+            let change = crush_settings::register_hook(&path)?;
+            report_crush_hook(out, &change);
+            Ok(())
+        }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
     }
 }
@@ -302,6 +320,10 @@ fn write_hook_setup_for<W: Write>(harness: Harness, out: &mut W) -> Result<()> {
         }
         Harness::Cursor => {
             let _ = write_cursor_hook_setup(out);
+            Ok(())
+        }
+        Harness::Crush => {
+            let _ = write_crush_hook_setup(out);
             Ok(())
         }
         Harness::Copilot => Err(Error::HarnessUnimplemented("copilot".to_string())),
@@ -368,6 +390,27 @@ fn report_cursor_hook<W: Write>(out: &mut W, change: &cursor_settings::SettingsC
     }
 }
 
+/// Report what registering the Crush hook changed. Crush's `crush.json` has no
+/// permissions block to broaden, so there is no allow-list warning to print.
+fn report_crush_hook<W: Write>(out: &mut W, change: &crush_settings::SettingsChange) {
+    let _ = writeln!(out);
+    if change.was_noop() {
+        let _ = writeln!(
+            out,
+            "Hook already registered in {} (nothing to change).",
+            change.path.display()
+        );
+    } else {
+        let verb = if change.created { "Created" } else { "Updated" };
+        let _ = writeln!(
+            out,
+            "{verb} {}: registered '{}' as the bash PreToolUse hook.",
+            change.path.display(),
+            crush_settings::hook_command()
+        );
+    }
+}
+
 /// Print the manual-wiring snippet to stdout. Shared with `install`, which lands
 /// a fresh config but does not touch harness settings itself.
 pub(crate) fn print_hook_setup() {
@@ -395,6 +438,17 @@ fn write_cursor_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
     )?;
     writeln!(out)?;
     writeln!(out, "{CURSOR_SETTINGS_SNIPPET}")
+}
+
+/// Write the Crush `crush.json` snippet. Crush has no allow list to broaden, so
+/// there is no allow-list warning to print.
+fn write_crush_hook_setup<W: Write>(out: &mut W) -> io::Result<()> {
+    writeln!(
+        out,
+        "Add this to crush.json (project root, or ~/.config/crush/crush.json; merge with any existing keys):"
+    )?;
+    writeln!(out)?;
+    writeln!(out, "{CRUSH_SETTINGS_SNIPPET}")
 }
 
 #[cfg(test)]
@@ -723,6 +777,70 @@ mod tests {
         // The config still lands under XDG; only the hook wiring is harness-specific.
         assert!(dir.path().join("xdg/allowlister/config.json").is_file());
         assert!(dir.path().join("home/.cursor/hooks.json").is_file());
+    }
+
+    #[test]
+    fn execute_crush_local_registers_crush_json() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::Crush,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(dir.path().join(".allowlister.json").is_file());
+        // Crush writes crush.json at the project root, not Claude Code's settings.json.
+        assert!(!dir.path().join(".claude/settings.json").exists());
+        let config = dir.path().join("crush.json");
+        assert!(
+            config.is_file(),
+            "the crush hook must be registered locally"
+        );
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(config).unwrap()).unwrap();
+        assert_eq!(doc["hooks"]["PreToolUse"][0]["matcher"], "^bash$");
+        assert_eq!(
+            doc["hooks"]["PreToolUse"][0]["command"],
+            "allowlister hook crush"
+        );
+    }
+
+    #[test]
+    fn execute_crush_no_hooks_prints_snippet_without_allow_guidance() {
+        let dir = TempDir::new().unwrap();
+        let mut out = Vec::new();
+        let plan = Plan {
+            global: false,
+            source: "starter".to_string(),
+            harness: Harness::Crush,
+            hooks: false,
+        };
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert!(!dir.path().join("crush.json").exists());
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("crush.json"));
+        assert!(text.contains("allowlister hook crush"));
+        // Crush has no allow list, so the Claude-specific warning must not appear.
+        assert!(!text.contains("permissions.allow"));
+        assert!(!text.contains("do NOT add"));
+    }
+
+    #[test]
+    fn execute_crush_global_writes_under_config_crush() {
+        let dir = TempDir::new().unwrap();
+        let env = sandbox_env(dir.path());
+        let plan = Plan {
+            global: true,
+            source: "starter".to_string(),
+            harness: Harness::Crush,
+            hooks: true,
+        };
+        execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
+        // The config still lands under XDG; Crush's global config is XDG-aware too.
+        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/crush/crush.json").is_file());
     }
 
     #[test]
