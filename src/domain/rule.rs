@@ -12,11 +12,16 @@ use super::analyzer::{Fragment, RedirClass, Redirection, Role};
 use super::glob::{compile_glob, compile_glob_matcher, compile_regex, Matcher};
 use super::toolcall::{Capability, ParamKey, ToolCall};
 
-/// Whether a rule grants or blocks a matching fragment.
+/// Whether a rule grants, blocks, or surfaces a matching fragment for approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Allow,
     Deny,
+    /// Surface the command for human approval. Sits between deny and allow: a
+    /// matching `Ask` (absent any deny) out-prioritizes a broad `Allow`, so it
+    /// carves a "confirm first" hole in an otherwise-permissive rule without the
+    /// hard wall of a deny.
+    Ask,
 }
 
 /// What an allow rule grants the commands it matches.
@@ -273,9 +278,9 @@ impl Rule {
     /// A sensitive-path deny rule (`cat ~/.ssh/id_rsa`) is written against argv,
     /// but `cat < ~/.ssh/id_rsa` hides the path in a redirection that an
     /// argv-only match never inspects — so the secret read slips through. Applying
-    /// the same pattern to read-redirection targets closes that gap. Only deny
-    /// rules use this; allow matching stays argv-only so a redirection can never
-    /// *grant* permission it otherwise would not.
+    /// the same pattern to read-redirection targets closes that gap. Only the
+    /// guardrail actions (deny and ask) use this; allow matching stays argv-only
+    /// so a redirection can never *grant* permission it otherwise would not.
     pub fn matches_including_read_redirections(&self, fragment: &Fragment) -> bool {
         if self.matches(fragment) {
             return true;
@@ -442,7 +447,10 @@ impl ParamConstraint {
             Action::Allow => values
                 .iter()
                 .all(|v| !(self.reject_traversal && has_parent_traversal(v)) && hit(v)),
-            Action::Deny => values.iter().any(|v| hit(v)),
+            // Ask is a guardrail like deny: it fires if *any* value is dangerous,
+            // so a "confirm first" constraint cannot be sidestepped by burying a
+            // matching value among innocuous ones.
+            Action::Deny | Action::Ask => values.iter().any(|v| hit(v)),
         }
     }
 

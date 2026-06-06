@@ -93,6 +93,9 @@ fn golden_table() {
         ("timeout 30 npm test", Verdict::Allow),
         // 22: nice stripped; git status matches the read-only rule.
         ("nice -n 10 git status", Verdict::Allow),
+        // 23: ask carves a "confirm first" hole — npm publish surfaces for
+        // approval (outranks any allow, yields to a deny), unlike a bare write.
+        ("npm publish --access public", Verdict::Ask),
     ];
 
     for (command, expected) in cases {

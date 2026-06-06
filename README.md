@@ -5,7 +5,8 @@ A small, fast Rust CLI that gates the shell commands your AI coding agents run �
 **one allowlist**, and allowlister enforces it identically across Claude Code,
 Cursor, GitHub Copilot CLI, OpenAI Codex CLI, Crush, Qwen Code, Goose, and
 OpenCode. For each command the agent wants to run it decides **allow**, **deny**,
-or **defer** — same engine, same config, no matter which agent is driving.
+**ask** (surface for human approval), or **defer** — same engine, same config, no
+matter which agent is driving.
 
 It replaces the simplistic string-prefix allow lists that current agents ship
 with. Instead of classifying a command as safe or unsafe in the abstract,
@@ -50,7 +51,7 @@ you never re-learn or rewrite rules per tool:
 | Redirection policy (scope out-redirects to allowed paths) | ✅ |
 | Recommended profiles (`read-only`, `repo-write`) | ✅ |
 | One config, auto-merged from user + project scope | ✅ |
-| `allow` / `deny` / `defer` verdicts | ✅ |
+| `allow` / `deny` / `ask` / `defer` verdicts | ✅ |
 | Auto-registration via `allowlister init --harness <name>` | ✅ |
 | Fail-open on any internal error (never a spurious deny) | ✅ |
 | Tool-use gating (built-in + MCP tools), param-aware | ✅* |
@@ -288,12 +289,13 @@ $ allowlister explain 'gh pr list | head -20 | wc -l'
 
 ## Rule schema
 
-Rules live in JSON config files (see [`examples/`](examples/)):
+Rules live in JSON config files (see [`examples/`](examples/)). `//` line and
+`/* */` block comments are allowed, so a config can document itself:
 
 ```jsonc
 {
   "name": "human-readable identifier shown in the decision reason",
-  "action": "allow",                         // or "deny"
+  "action": "allow",                         // or "deny", or "ask" (surface for approval)
 
   // exactly one of these two:
   "match": "git @(status|diff|log)*",        // matched against argv joined by spaces
@@ -380,17 +382,25 @@ agent actually exposes is in the
 
 ### Decision algorithm
 
-For each fragment: any matching **deny** rule denies it; otherwise the first
-matching **allow** rule (whose redirection policy permits every redirection)
-allows it; otherwise it **defers**. Composing fragments: any deny → deny; all
-allow → allow; otherwise → defer. Rule order never changes the verdict, only the
-rule cited in the reason. Parse errors and unsupported constructs (function
-definitions, `eval`) always defer — never deny.
+For each fragment the precedence is **deny > ask > allow**: any matching **deny**
+rule denies it; otherwise any matching **ask** rule surfaces it for approval;
+otherwise the first matching **allow** rule (whose redirection policy permits
+every redirection) allows it; otherwise it **defers**. Composing fragments: any
+deny → deny; else any ask → ask; else all allow → allow; otherwise → defer. Rule
+order never changes the verdict, only the rule cited in the reason. Parse errors
+and unsupported constructs (function definitions, `eval`) always defer — never
+deny.
+
+Because `ask` outranks `allow`, an ask rule carves a "confirm first" hole out of
+a broad allow without narrowing it: keep `git push?( *)` allowed, add
+`ask: git push *--force*`, and ordinary pushes allow while a force-push surfaces a
+prompt. Use it for operations that are dangerous but sometimes legitimate, where a
+hard `deny` (which a user/project overlay cannot override) would over-block.
 
 Tool-use rules use the same composition: for a tool call, any matching **deny**
-wins, else the first matching **allow**, else **defer**. An unrecognized tool, or
-one no rule matches, defers — so adding tool rules never changes behavior until a
-rule actually matches.
+wins, else any matching **ask**, else the first matching **allow**, else
+**defer**. An unrecognized tool, or one no rule matches, defers — so adding tool
+rules never changes behavior until a rule actually matches.
 
 ## Config locations and merge
 
@@ -431,24 +441,32 @@ example one your team keeps in a repo:
 allowlister install ./team-allowlist.json --local
 ```
 
-**`read-only.json`** — auto-allows pure **read** operations and defers
-everything else to the harness (which prompts you). It covers the shell and
-coreutils, `git`/`gh` inspection, and read-only commands across the common
+Both profiles sort operations into three tiers (see
+[`examples/AGENTS.md`](examples/AGENTS.md)): **deny** the never-legitimate core
+(reading private keys/credentials, disk/partition wipes, raw block-device writes,
+recursive `chmod`/`chown` on absolute/home paths), **ask** for the
+dangerous-but-sometimes-legitimate, and **defer** everything unclassified. The
+deny set is kept deliberately tiny because a deny can't be overridden in a
+user/project overlay; anything a real workflow might need is an `ask`, not a deny.
+
+**`read-only.json`** — auto-allows pure **read** operations. It covers the shell
+and coreutils, `git`/`gh` inspection, and read-only commands across the common
 language ecosystems: `pip`/`uv`/`python`, `npm`/`pnpm`/`yarn`/`bun`/`node`,
-`cargo`/`rustup`, `go`, `poetry`, `make`, and `just`. Anything that writes, runs
-project code, or otherwise isn't a pure read **defers** rather than being
-denied — so a human still approves it case by case. Output redirection on an
-allowed command is blocked (writes are not reads), except scratch under `/tmp`.
-A short list of irreversible, system-level actions (recursive `rm`, disk/partition
-tools, `curl | sh`, reading private keys) is denied outright.
+`cargo`/`rustup`, `go`, `poetry`, `make`, and `just`. Anything that writes or runs
+project code **defers** to the harness (which prompts you). Risky shortcuts that
+an allowed reader could otherwise sneak through — `curl | sh`, recursive `rm`,
+in-place edits, `sort -o`, branch/tag deletion, raw `gh api` writes — **ask** for
+confirmation. Output redirection on an allowed command is blocked (writes are not
+reads), except scratch under `/tmp`.
 
 **`repo-write.json`** — a superset of `read-only` that additionally allows the
 writes an agent needs to **manage a repository**: `git add`/`commit`/`branch`/
 `switch`/`merge`/`rebase`/`pull`/`push`, `gh pr`/`issue` collaboration, and
-`install`/`build`/`test`/`format`/`run` across those same ecosystems. Operations
-that look **destructive or irreversible are denied** — force-push, `reset --hard`,
-`clean -f`, history rewrite, branch/tag deletion, recursive `rm`, disk wipes, and
-registry publishing.
+`install`/`build`/`test`/`format`/`run` across those same ecosystems. Destructive
+or irreversible operations **ask** rather than hard-denying — force-push,
+`reset --hard`, `clean -f`, history rewrite, branch/tag deletion, recursive `rm`,
+registry publishing, `gh repo delete`, self-uninstall — so a release or
+maintenance agent can still do them with a human in the loop.
 
 > `repo-write` is permissive by design and is **not a sandbox**. Allowing build,
 > test, and run tools (and interpreters like `python`/`node`) means project code
@@ -464,7 +482,7 @@ security-critical verdicts.
 | Command | 0 | 1 | 2 |
 |---------|---|---|---|
 | `hook` | normal operation (decision on stdout) | malformed stdin payload (non-blocking; agent proceeds) | — |
-| `check` | allow / defer | usage/internal error | deny |
+| `check` | allow / defer / ask | usage/internal error | deny |
 | `explain`, `init` | success | error | — |
 
 The `hook` verb never denies on its own error, but *how* it signals that differs
@@ -475,6 +493,12 @@ so those adapters **always exit `0`** and carry a deny only in their decision JS
 a malformed payload exits `0` with empty stdout, which the harness reads as "no
 decision" and falls through to its normal flow. A deny is never expressed via the
 exit code.
+
+An **ask** verdict maps to the harness's own approval prompt where one exists
+(Claude Code, Cursor, Copilot emit an `ask` decision); on harnesses that honor
+only a deny it degrades to the same no-decision fall-through as `defer` — a
+prompt, never a silent allow and never a hard block. For the `check` verb, `ask`
+exits `0` (like `defer`); its verdict shows in the printed output.
 
 ## Development
 

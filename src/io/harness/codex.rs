@@ -247,6 +247,23 @@ mod tests {
     }
 
     #[test]
+    fn ask_verdict_emits_nothing() {
+        // Codex honors only `deny`; an ask has no native form, so it degrades to
+        // the safe fall-through (empty stdout → Codex's own prompt), never a
+        // silent allow and never a hard block.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(
+            dir.path().join(".allowlister.json"),
+            r#"{"rules":[{"name":"confirm publish","match":"npm publish*","action":"ask"}]}"#,
+        )
+        .unwrap();
+        let (code, stdout) = run_payload(&payload("npm publish", dir.path()));
+        assert_eq!(code, 0);
+        assert!(stdout.is_empty(), "an ask verdict must emit nothing");
+    }
+
+    #[test]
     fn denied_command_maps_to_deny() {
         let dir = sandbox_with_deny();
         let (code, stdout) = run_payload(&payload("touch /tmp/x", dir.path()));

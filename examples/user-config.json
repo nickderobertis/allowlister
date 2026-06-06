@@ -28,6 +28,10 @@
       "argv": ["gh", "api", "-X", "@(POST|PUT|PATCH|DELETE)", "**"],
       "action": "deny" },
 
+    { "name": "confirm: npm publish (release step, surface for approval)",
+      "match": "npm publish*",
+      "action": "ask" },
+
     { "name": "rm -rf — never",
       "match": "rm -rf*",
       "action": "deny" },

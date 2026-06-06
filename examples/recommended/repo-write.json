@@ -1,7 +1,18 @@
 {
   "name": "repo-write",
-  "description": "Recommended profile: everything in the read-only profile PLUS the write operations an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Operations that seem destructive or irreversible are denied: force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, disk wipes, and registry publishing. This profile is permissive by design and is NOT a sandbox: allowing build/test/run tools (and interpreters like python/node) means project code can execute arbitrary commands the gate does not see. The denies are guardrails against obvious mistakes, not a containment boundary.",
+  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is permissive by design and is NOT a sandbox: build/test/run tools and interpreters can execute arbitrary project code the gate never sees; the tiers are guardrails against obvious mistakes, not a containment boundary.",
   "rules": [
+    // Verdict tiers (see examples/AGENTS.md for the full rationale):
+    //   allow  -- auto-approved.
+    //   ask    -- surfaced for human approval. Outranks a broad allow, so a risky
+    //             variant (force-push, publish, curl|sh, rm -rf, gh api writes) is
+    //             held for confirmation without narrowing the allow it sits under.
+    //   deny   -- hard-blocked, no prompt. Reserved for the never-legitimate core:
+    //             reading secrets, disk/partition wipes, dd to a block device, and
+    //             recursive chmod/chown on absolute/home paths.
+    //   (defer)-- anything unmatched falls through to the harness's own prompt.
+    // Denies are deliberately minimal: a deny cannot be overridden in a user or
+    // project overlay, so anything a legitimate workflow might need is an ask.
     {
       "name": "scratch: any allowed command may redirect to /tmp",
       "description": "Redirection-only grant (never authorizes a command): any command already allowed by another rule may redirect stdout/stderr to throwaway scratch under /tmp, including macOS's real /private/tmp. Source and system paths stay denied, and `..` traversal that escapes /tmp is rejected by the engine. This widens scratch targets profile-wide without repeating a redirection policy on every run/build/test rule.",
@@ -141,7 +152,7 @@
     },
     {
       "name": "gh read-only: api GET",
-      "description": "Raw API reads. Write methods and body-field flags are denied below so only GET-style requests are allowed.",
+      "description": "Raw API reads. Write methods and body-field flags are held for approval below, so GET-style reads pass while a write surfaces a prompt.",
       "argv": [
         "gh",
         "api",
@@ -303,22 +314,22 @@
       "action": "allow"
     },
     {
-      "name": "write: git reset (soft/mixed; --hard denied below)",
+      "name": "write: git reset (soft/mixed; --hard asks below)",
       "match": "git reset?( *)",
       "action": "allow"
     },
     {
-      "name": "write: git stash (drop/clear denied below)",
+      "name": "write: git stash (drop/clear asks below)",
       "match": "git stash?( *)",
       "action": "allow"
     },
     {
-      "name": "write: git branch create/list (delete/rename/force denied below)",
+      "name": "write: git branch create/list (delete/rename/force asks below)",
       "match": "git branch?( *)",
       "action": "allow"
     },
     {
-      "name": "write: git switch (force/discard denied below)",
+      "name": "write: git switch (force/discard asks below)",
       "match": "git switch?( *)",
       "action": "allow"
     },
@@ -333,17 +344,17 @@
       "action": "allow"
     },
     {
-      "name": "write: git rebase (interactive/exec denied below)",
+      "name": "write: git rebase (interactive/exec asks below)",
       "match": "git rebase?( *)",
       "action": "allow"
     },
     {
-      "name": "write: git fetch/pull/push (force/delete denied below)",
+      "name": "write: git fetch/pull/push (force/delete asks below)",
       "match": "git @(fetch|pull|push)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: git tag create/list (delete denied below)",
+      "name": "write: git tag create/list (delete asks below)",
       "match": "git tag?( *)",
       "action": "allow"
     },
@@ -358,7 +369,7 @@
       "action": "allow"
     },
     {
-      "name": "write: git clean dry-run only (-f denied below)",
+      "name": "write: git clean dry-run only (-f asks below)",
       "match": "git clean @(-n|--dry-run)?( *)",
       "action": "allow"
     },
@@ -378,7 +389,7 @@
       "action": "allow"
     },
     {
-      "name": "write: git config local (global/system denied below)",
+      "name": "write: git config local (global/system asks below)",
       "match": "git config?( *)",
       "action": "allow"
     },
@@ -413,7 +424,7 @@
       "action": "allow"
     },
     {
-      "name": "write: gh repo clone/fork/sync/edit (create/delete defer/deny)",
+      "name": "write: gh repo clone/fork/sync/edit (create defers, delete asks)",
       "argv": [
         "gh",
         "repo",
@@ -483,22 +494,22 @@
       "action": "allow"
     },
     {
-      "name": "write: uv project ops (publish/self-uninstall denied below)",
+      "name": "write: uv project ops (publish/self-uninstall asks below)",
       "match": "uv @(pip|add|remove|sync|lock|run|build|venv|init|tool|python|export|tree|cache|version)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: poetry project ops (publish denied below)",
+      "name": "write: poetry project ops (publish asks below)",
       "match": "poetry @(install|add|remove|update|lock|run|build|shell|env|version|source|cache|export|init|check|show)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: cargo build/test/etc (publish/yank/login denied below)",
+      "name": "write: cargo build/test/etc (publish/yank/login asks below)",
       "match": "cargo @(build|b|check|c|test|t|run|r|clippy|fmt|bench|doc|d|add|remove|update|fetch|fix|clean|vendor|generate-lockfile|install|uninstall|expand|nextest|tree|metadata|init|new)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: rustup toolchain/target/component (self uninstall denied below)",
+      "name": "write: rustup toolchain/target/component (self uninstall asks below)",
       "match": "rustup @(install|update|default|toolchain|target|component|override|set|show|which|completions)?( *)",
       "action": "allow"
     },
@@ -513,7 +524,7 @@
       "action": "allow"
     },
     {
-      "name": "write: bundler/gem (push denied below)",
+      "name": "write: bundler/gem (push asks below)",
       "match": "@(bundle|gem) *",
       "action": "allow"
     },
@@ -543,34 +554,34 @@
       "action": "allow"
     },
     {
-      "name": "deny: gh api write methods",
+      "name": "ask: gh api write methods",
       "match": "gh api*@( -X| --method) @(POST|PUT|PATCH|DELETE|post|put|patch|delete)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: gh api body fields (imply a write request)",
+      "name": "ask: gh api body fields (imply a write request)",
       "match": "gh api*@( -f| -F| --field| --raw-field| --input)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: npm audit fix (writes)",
+      "name": "ask: npm audit fix (writes)",
       "match": "npm audit*@( fix)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: pnpm audit fix (writes)",
+      "name": "ask: pnpm audit fix (writes)",
       "match": "pnpm audit*@( --fix| fix)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: bun pm cache rm (writes)",
+      "name": "ask: bun pm cache rm (writes)",
       "match": "bun pm cache*@( rm)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: go env -w/-u (writes go config)",
+      "name": "ask: go env -w/-u (writes go config)",
       "match": "go env*@( -w| -u)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
       "name": "deny: never read private keys or credentials",
@@ -579,21 +590,21 @@
       "action": "deny"
     },
     {
-      "name": "deny: recursive rm",
+      "name": "ask: recursive rm",
       "description": "Recursive delete is never auto-allowed; route file removal through git or a human prompt. Flags are matched as whole space-delimited tokens so a filename like '--preserve-root' or 'my-report' is not mistaken for '-r'.",
       "match": "rm*@( -r| -R| --recursive| -fr| -fR)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git branch delete/rename/copy/force",
-      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; block them in every position.",
+      "name": "ask: git branch delete/rename/copy/force",
+      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; hold them for approval in every position.",
       "match": "git branch*@( -d| -D| --delete| -m| -M| --move| -c| -C| --copy| -f| --force)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git tag delete",
+      "name": "ask: git tag delete",
       "match": "git tag*@( -d| --delete)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
       "name": "deny: filesystem and partition destroyers",
@@ -611,120 +622,120 @@
       "action": "deny"
     },
     {
-      "name": "deny: shell as a pipe target (blocks curl | sh)",
+      "name": "ask: shell as a pipe target (curl | sh)",
       "argv": [
         "@(sh|bash|zsh|fish|dash|ksh|ash|csh|tcsh)",
         "**"
       ],
-      "action": "deny",
+      "action": "ask",
       "roles": [
         "pipe_filter"
       ]
     },
     {
-      "name": "deny: git push --force / --delete / --mirror",
+      "name": "ask: git push --force / --delete / --mirror",
       "match": "git push*@( -f| --force| --force-with-lease*| --delete| -d| --mirror| --prune)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git reset --hard / --merge / --keep",
+      "name": "ask: git reset --hard / --merge / --keep",
       "match": "git reset*@( --hard| --merge| --keep)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git clean force",
+      "name": "ask: git clean force",
       "match": "git clean*@( -f| --force)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git checkout force / explicit discard",
+      "name": "ask: git checkout force / explicit discard",
       "match": "git checkout*@( -f| --force| -- )*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git switch force / discard / force-create / orphan",
+      "name": "ask: git switch force / discard / force-create / orphan",
       "match": "git switch*@( -f| --force| --discard-changes| -C| --force-create| --orphan)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git stash drop / clear",
+      "name": "ask: git stash drop / clear",
       "match": "git stash*@( drop| clear)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git restore worktree discard",
+      "name": "ask: git restore worktree discard",
       "match": "git restore*@( --worktree| -W)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git rebase interactive / exec",
+      "name": "ask: git rebase interactive / exec",
       "match": "git rebase*@( -i| --interactive| --exec| -x)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git history rewrite (filter-branch / filter-repo)",
+      "name": "ask: git history rewrite (filter-branch / filter-repo)",
       "match": "git @(filter-branch|filter-repo)?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git update-ref delete",
+      "name": "ask: git update-ref delete",
       "match": "git update-ref*@( -d| --delete)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git reflog expire / delete",
+      "name": "ask: git reflog expire / delete",
       "match": "git reflog*@( expire| delete)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git pull --force",
+      "name": "ask: git pull --force",
       "match": "git pull*@( -f| --force)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: git config --global / --system",
+      "name": "ask: git config --global / --system",
       "match": "git config*@( --global| --system)*",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: package registry publish",
+      "name": "ask: package registry publish",
       "match": "@(npm|pnpm|yarn|bun) @(publish|unpublish|deprecate)?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: npm auth / registry mutation",
+      "name": "ask: npm auth / registry mutation",
       "match": "npm @(adduser|login|logout|token|access|owner|star|unstar)?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: cargo publish / yank / auth",
+      "name": "ask: cargo publish / yank / auth",
       "match": "cargo @(publish|yank|login|logout|owner)?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: poetry/uv/pypi publish",
+      "name": "ask: poetry/uv/pypi publish",
       "match": "@(poetry publish|uv publish|twine @(upload|register))?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: uv/rustup self-uninstall",
+      "name": "ask: uv/rustup self-uninstall",
       "match": "@(uv self uninstall|rustup self uninstall)?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: gem push (publish)",
+      "name": "ask: gem push (publish)",
       "match": "gem push?( *)",
-      "action": "deny"
+      "action": "ask"
     },
     {
-      "name": "deny: gh repo/release delete",
+      "name": "ask: gh repo/release delete",
       "argv": [
         "gh",
         "@(repo|release)",
         "delete",
         "**"
       ],
-      "action": "deny"
+      "action": "ask"
     }
   ]
 }
