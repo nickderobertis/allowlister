@@ -2,20 +2,37 @@
 
 ## Setup
 
-1. Install Rust via [rustup](https://rustup.rs) and [just](https://just.systems).
-2. Confirm the pinned toolchain (channel, components, targets):
-   ```sh
-   rustup show
-   ```
-   `rust-toolchain.toml` pins everything; rustup installs it on first use.
-3. Install developer tools and git hooks:
-   ```sh
-   just bootstrap
-   ```
-4. Run the full quality gate before pushing:
-   ```sh
-   just full-check
-   ```
+One command provisions a fresh machine — asdf + direnv, the pinned Rust
+toolchain, the cargo dev tools, and git hooks:
+
+```sh
+./scripts/setup.sh      # or `just setup` once `just` is on PATH
+```
+
+It is idempotent: re-running fills in only what is missing.
+`just setup-check` is the fast, install-free counterpart — it answers "is this
+machine set up?" from the resolved tools plus a fingerprint stamp of the pinned
+versions, and setup re-runs automatically after a `just upgrade` changes them.
+
+What setup wires up:
+
+- **asdf** (`.tool-versions`) pins `just`. The Rust toolchain is deliberately
+  *not* managed by asdf — `rust-toolchain.toml` + rustup stay the single source
+  of truth for the channel, components, and targets.
+- **direnv** (`.envrc`) layers the asdf and cargo tool paths onto your shell for
+  this directory; setup runs `direnv allow` for you.
+- **`just bootstrap`** installs the cargo dev tools (nextest, llvm-cov, deny,
+  machete, audit) and the git hooks.
+
+Prefer to do it by hand? Install [rustup](https://rustup.rs) and
+[just](https://just.systems), run `rustup show` (installs the pinned toolchain),
+then `just bootstrap`.
+
+Then run the full quality gate before pushing:
+
+```sh
+just full-check
+```
 
 ## Quality gate
 
@@ -138,6 +155,14 @@ release-plz the previous release tag as its version baseline
 This repo is set up for AI coding agents. Repository conventions for agents live
 in the platform-neutral `AGENTS.md` files (root and nested); agent-product
 permission configuration lives only in that product's own settings file.
+
+For the Claude Code agent, a `SessionStart` hook in `.claude/settings.json` runs
+the lightweight `scripts/setup-check.sh` at the start of a session and provisions
+the environment once (via `scripts/setup.sh`) if it is not ready — so a fresh
+clone, including a cloud agent's, sets itself up automatically. It is a fast
+no-op when already set up, never re-runs after a failed attempt (it advises
+instead), and is skipped in this repo's GitHub Actions CI or when
+`ALLOWLISTER_SKIP_SETUP` is set.
 
 This project uses a narrow, repo-scoped command allowlist for the Claude Code
 agent in `.claude/settings.json`: common quality-gate operations are allowed

@@ -502,13 +502,19 @@ exits `0` (like `defer`); its verdict shows in the printed output.
 
 ## Development
 
-Requires [`rustup`](https://rustup.rs) and [`just`](https://just.systems).
+One command provisions a fresh machine — asdf + direnv, the pinned Rust
+toolchain, the cargo dev tools, and git hooks. It is idempotent:
 
 ```sh
-rustup show          # confirm the toolchain in rust-toolchain.toml
-just bootstrap       # install dev tools (cargo subcommands) + git hooks
+./scripts/setup.sh   # or `just setup` once `just` is on PATH
 just full-check      # the complete quality gate
 ```
+
+asdf (`.tool-versions`) pins `just`; `rust-toolchain.toml` + rustup stay the
+source of truth for the Rust toolchain; direnv (`.envrc`) layers the tool paths.
+`just setup-check` is the fast, install-free "is this set up?" check. Prefer to
+wire it up by hand? Install [`rustup`](https://rustup.rs) and
+[`just`](https://just.systems), then run `rustup show && just bootstrap`.
 
 Common recipes: `just fmt`, `just check`, `just clippy`, `just test`,
 `just test-e2e`, `just test-cov`, `just security`, `just deps-check`, `just doc`,

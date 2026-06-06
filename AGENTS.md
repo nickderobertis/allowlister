@@ -37,6 +37,13 @@ edition 2021, toolchain pinned in `rust-toolchain.toml`.
   then re-run the gate and review the lockfile diff.
 - Keep dependency features minimal; one tool per role. Run every task through
   `just`.
+- `scripts/setup.sh` (`just setup`) is the one idempotent entry point for local
+  setup; keep it re-runnable. `scripts/setup-check.sh` (`just setup-check`) stays
+  a fast, install-free readiness check — resolved tools plus a fingerprint stamp
+  (under `.dev/`) of the pinned versions, so it re-provisions after `just upgrade`.
+- asdf (`.tool-versions`) pins only bootstrap tooling such as `just`, never the
+  Rust toolchain: `rust-toolchain.toml` + rustup remain its single source of
+  truth. direnv (`.envrc`) only layers tool paths onto the shell — no behavior.
 
 ## Quality gate (no exceptions)
 

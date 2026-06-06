@@ -12,7 +12,13 @@
 *.rs.bk
 .DS_Store
 
+# Local dev-setup state (stamp, logs, lock) and direnv's cache — machine-specific
+/.dev/
+/.direnv/
+
 # Local environment overrides (never commit secrets or machine-specific config)
 .env
 .env.local
 /.allowlister.local.json
+# Personal Claude Code settings (per-machine hooks/permissions; not shared)
+/.claude/settings.local.json
