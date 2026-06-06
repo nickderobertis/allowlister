@@ -30,6 +30,92 @@ pub struct LoadedConfig {
     pub warnings: Vec<String>,
 }
 
+/// Blank out `//` line and `/* */` block comments so a config file may carry
+/// explanatory notes that strict JSON forbids. Comment bytes are replaced with
+/// spaces in place (newlines preserved), so the result is the same length as the
+/// input and every byte keeps its offset — a later parse error still reports the
+/// true line and column. String contents are untouched, so a `//` inside a value
+/// (e.g. a `https://` URL glob) survives. Trailing commas are *not* accepted;
+/// only comments are stripped.
+///
+/// Public so a consumer reading an allowlister config (which may carry comments)
+/// can pre-process it the same way the loader does before handing it to a strict
+/// JSON parser.
+pub fn strip_jsonc_comments(input: &str) -> String {
+    #[derive(Clone, Copy)]
+    enum State {
+        Normal,
+        Str,
+        Line,
+        Block,
+    }
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut state = State::Normal;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match state {
+            State::Normal => match (b, bytes.get(i + 1)) {
+                (b'"', _) => {
+                    out.push(b);
+                    state = State::Str;
+                }
+                (b'/', Some(b'/')) => {
+                    out.extend_from_slice(b"  ");
+                    i += 2;
+                    state = State::Line;
+                    continue;
+                }
+                (b'/', Some(b'*')) => {
+                    out.extend_from_slice(b"  ");
+                    i += 2;
+                    state = State::Block;
+                    continue;
+                }
+                _ => out.push(b),
+            },
+            State::Str => {
+                out.push(b);
+                if b == b'\\' {
+                    // Copy the escaped byte verbatim so an escaped quote does not
+                    // end the string early.
+                    if let Some(&next) = bytes.get(i + 1) {
+                        out.push(next);
+                        i += 2;
+                        continue;
+                    }
+                } else if b == b'"' {
+                    state = State::Normal;
+                }
+            }
+            // Blank the comment body to spaces but keep newlines, so line and
+            // column numbers downstream match the original file.
+            State::Line => {
+                if b == b'\n' {
+                    out.push(b);
+                    state = State::Normal;
+                } else {
+                    out.push(b' ');
+                }
+            }
+            State::Block => {
+                if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                    out.extend_from_slice(b"  ");
+                    i += 2;
+                    state = State::Normal;
+                    continue;
+                }
+                out.push(if b == b'\n' { b'\n' } else { b' ' });
+            }
+        }
+        i += 1;
+    }
+    // Every substitution is ASCII-for-ASCII and multibyte bytes are copied or
+    // uniformly blanked, so the buffer is still valid UTF-8.
+    String::from_utf8(out).unwrap_or_else(|_| input.to_string())
+}
+
 /// Load and merge user + project config relative to `cwd`.
 pub fn load(cwd: &Path) -> LoadedConfig {
     load_from_paths(&configfs::discover(cwd, &Env::from_process()))
@@ -66,7 +152,8 @@ pub(crate) fn compile_str(contents: &str, source_label: &str) -> LoadedConfig {
 /// Parse `contents` and append its compiled rules — and any problems — to
 /// `config`, recording `display` as a source.
 fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
-    let raw: RawConfig = match serde_json::from_str(contents) {
+    let contents = strip_jsonc_comments(contents);
+    let raw: RawConfig = match serde_json::from_str(&contents) {
         Ok(raw) => raw,
         Err(err) => {
             config
@@ -166,6 +253,7 @@ impl RawRule {
         let action = match self.action.as_deref() {
             None | Some("allow") => Action::Allow,
             Some("deny") => Action::Deny,
+            Some("ask") => Action::Ask,
             Some(other) => return Err(format!("unknown action '{other}'")),
         };
         let kind = MatchKind::parse(self.kind.as_deref())?;
@@ -374,6 +462,41 @@ mod tests {
     }
 
     #[test]
+    fn strips_line_and_block_comments_preserving_offsets() {
+        let src = "{\n  // a note\n  \"rules\": [] /* trailing */\n}";
+        let out = strip_jsonc_comments(src);
+        // Same length as the input: comments became spaces, newlines kept.
+        assert_eq!(out.len(), src.len());
+        assert!(!out.contains("a note"));
+        assert!(!out.contains("trailing"));
+        serde_json::from_str::<serde_json::Value>(&out).unwrap();
+    }
+
+    #[test]
+    fn does_not_strip_comment_markers_inside_strings() {
+        // A `//` inside a string value (a URL glob) must survive untouched.
+        let src = r#"{"rules":[{"tool":"web_fetch","action":"allow","params":{"url":"https://github.com/**"}}]}"#;
+        let out = strip_jsonc_comments(src);
+        assert_eq!(out, src);
+        // An escaped quote must not end the string early and expose a later `//`.
+        let tricky = r#"{"name":"say \"hi\" // not a comment"}"#;
+        assert_eq!(strip_jsonc_comments(tricky), tricky);
+    }
+
+    #[test]
+    fn comments_in_a_config_file_load_cleanly() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            "{\n  // allow listing\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } /* ok */\n  ]\n}",
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
     fn invalid_json_is_skipped_with_warning() {
         let dir = TempDir::new().unwrap();
         let path = write_config(&dir, "bad.json", "{not json");
@@ -395,6 +518,33 @@ mod tests {
         );
         let config = load_from_paths(&[path]);
         assert_eq!(config.rules.len(), 1);
+        assert_eq!(config.warnings.len(), 1);
+    }
+
+    #[test]
+    fn ask_action_compiles() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"confirm","match":"npm publish*","action":"ask"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.warnings.is_empty());
+        assert_eq!(config.rules[0].action, crate::domain::Action::Ask);
+    }
+
+    #[test]
+    fn unknown_action_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"rules":[{"name":"r","match":"x","action":"maybe"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert!(config.rules.is_empty());
         assert_eq!(config.warnings.len(), 1);
     }
 

@@ -225,4 +225,26 @@ mod tests {
         assert_eq!(code, 0);
         assert_eq!(decision(&value), "defer");
     }
+
+    #[test]
+    fn ask_rule_maps_to_the_ask_decision() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        let cfg = json!({
+            "rules": [
+                { "name": "confirm publish", "match": "npm publish*", "action": "ask" }
+            ]
+        })
+        .to_string();
+        fs::write(dir.path().join(".allowlister.json"), cfg).unwrap();
+        let payload = json!({
+            "tool_name": "Bash",
+            "tool_input": { "command": "npm publish" },
+            "cwd": dir.path().to_string_lossy(),
+        })
+        .to_string();
+        let (code, value) = run_payload(&payload);
+        assert_eq!(code, 0);
+        assert_eq!(decision(&value), "ask");
+    }
 }

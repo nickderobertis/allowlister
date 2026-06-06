@@ -705,6 +705,132 @@ fn copilot_hook_invalid_json_defers_via_exit_zero_and_empty_stdout() {
         .stderr(predicate::str::contains("invalid hook JSON"));
 }
 
+// ---- ask verdict across every harness adapter ----------------------------
+//
+// `npm publish` matches the example config's ask rule. Adapters with a native
+// "ask"/"confirm" state must emit it; deny-only adapters (which honor only a
+// block) must degrade to the same empty-stdout fall-through as a defer — a
+// prompt, never a silent allow and never a hard block. This is the binary-driven
+// proxy for the live CLIs, whose own scripts cannot assert ask (it hands control
+// to the agent's interactive permission prompt).
+
+#[test]
+fn claude_code_hook_ask_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("npm publish --access public"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "ask");
+}
+
+#[test]
+fn cursor_hook_ask_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "ask");
+}
+
+#[test]
+fn copilot_hook_ask_routes_through_stdin_stdout() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "copilot"])
+        .write_stdin(sandbox.copilot_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "ask");
+}
+
+#[test]
+fn codex_hook_ask_emits_empty_stdout() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn crush_hook_ask_emits_empty_stdout() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "crush"])
+        .write_stdin(sandbox.crush_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn qwen_hook_ask_emits_empty_stdout() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "qwen"])
+        .write_stdin(sandbox.qwen_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn goose_hook_ask_emits_empty_stdout() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn opencode_hook_ask_emits_empty_stdout() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["hook", "opencode"])
+        .write_stdin(sandbox.opencode_payload("npm publish --access public"))
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn check_ask_returns_exit_code_zero() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["check", "npm publish --access public", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ASK"));
+}
+
 #[test]
 fn check_deny_returns_exit_code_two() {
     let sandbox = Sandbox::new();
@@ -1130,9 +1256,11 @@ fn init_profile_installs_a_curated_ruleset() {
         .assert()
         .success()
         .stdout(predicate::str::contains("read-only"));
+    // The installed profile may carry explanatory `//` comments, so strip them
+    // the way the loader does before a strict JSON parse.
+    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
     let doc: Value =
-        serde_json::from_str(&fs::read_to_string(dir.path().join(".allowlister.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
     assert!(
         doc["rules"].as_array().unwrap().len() > 30,
         "the read-only profile carries many rules"
@@ -1160,9 +1288,11 @@ fn init_interactive_flow_reads_answers_from_stdin() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Which starting ruleset?"));
+    // The installed profile may carry explanatory `//` comments, so strip them
+    // the way the loader does before a strict JSON parse.
+    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
     let doc: Value =
-        serde_json::from_str(&fs::read_to_string(dir.path().join(".allowlister.json")).unwrap())
-            .unwrap();
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
     assert!(
         doc["rules"].as_array().unwrap().len() > 30,
         "chose read-only"

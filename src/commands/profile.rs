@@ -119,9 +119,11 @@ pub(crate) fn incoming_rules(source: &Source) -> Result<Vec<Value>> {
     Ok(rules)
 }
 
-/// Parse config JSON, mapping a syntax error to a typed boundary error.
+/// Parse config JSON, mapping a syntax error to a typed boundary error. Comments
+/// are stripped first so a profile or target file may carry explanatory notes,
+/// matching what the rule loader accepts.
 fn parse_config(text: &str, label: &str) -> Result<Value> {
-    serde_json::from_str(text).map_err(|err| Error::InvalidConfig {
+    serde_json::from_str(&config::strip_jsonc_comments(text)).map_err(|err| Error::InvalidConfig {
         origin: label.to_string(),
         message: format!("invalid JSON: {err}"),
     })

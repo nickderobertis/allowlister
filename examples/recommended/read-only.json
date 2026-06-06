@@ -1,10 +1,21 @@
 {
   "name": "read-only",
-  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Anything that writes, runs project code, or is otherwise not a pure read defers to the harness (which prompts the human). A small set of irreversible, system-level operations is denied outright. Output redirections are not permitted on allowed commands (writes are blocked), except scratch writes under /tmp.",
+  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp.",
   "rules": [
+    // Verdict tiers (see examples/AGENTS.md for the full rationale):
+    //   allow  -- auto-approved.
+    //   ask    -- surfaced for human approval. Outranks a broad allow, so a risky
+    //             variant (force-push, publish, curl|sh, rm -rf, gh api writes) is
+    //             held for confirmation without narrowing the allow it sits under.
+    //   deny   -- hard-blocked, no prompt. Reserved for the never-legitimate core:
+    //             reading secrets, disk/partition wipes, dd to a block device, and
+    //             recursive chmod/chown on absolute/home paths.
+    //   (defer)-- anything unmatched falls through to the harness's own prompt.
+    // Denies are deliberately minimal: a deny cannot be overridden in a user or
+    // project overlay, so anything a legitimate workflow might need is an ask.
 
     { "name": "read: shell inspection commands",
-      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo), has a file-writing mode (tee, sort -o, shuf -o, xxd's output-file positional), or is an interactive pager that can spawn a shell (less/more via !cmd or LESSOPEN, man via -P). shuf stays (its only write mode, -o, is denied below).",
+      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo), has a file-writing mode (tee, sort -o, shuf -o, xxd's output-file positional), or is an interactive pager that can spawn a shell (less/more via !cmd or LESSOPEN, man via -P). shuf stays (its only write mode, -o, surfaces for approval below).",
       "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq)?( *)",
       "action": "allow" },
 
@@ -15,7 +26,7 @@
       "redirections": { "write_glob": ["/tmp/*", "/tmp/**"] } },
 
     { "name": "read: stream filters in pipes and substitutions",
-      "description": "Filters that transform stdin→stdout, scoped to pipe/substitution roles. Excludes awk and sed: both are interpreters that run arbitrary shell (awk system()/print|cmd, GNU sed e/w), so role-scoping does not contain them. Also excludes uniq and xxd, whose optional output-file positional writes a file in any role. sort stays here but its -o write mode is denied below.",
+      "description": "Filters that transform stdin→stdout, scoped to pipe/substitution roles. Excludes awk and sed: both are interpreters that run arbitrary shell (awk system()/print|cmd, GNU sed e/w), so role-scoping does not contain them. Also excludes uniq and xxd, whose optional output-file positional writes a file in any role. sort stays here but its -o write mode surfaces for approval below.",
       "match": "@(head|tail|wc|grep|egrep|fgrep|rg|sort|cut|tr|jq|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|hexdump|strings|pr)?( *)",
       "action": "allow",
       "roles": ["pipe_filter", "substitution"] },
@@ -77,17 +88,17 @@
       "action": "allow" },
 
     { "name": "gh read-only: api GET",
-      "description": "Raw API reads. Write methods and body-field flags are denied below so only GET-style requests are allowed.",
+      "description": "Raw API reads. Write methods and body-field flags are held for approval below, so GET-style reads pass while a write surfaces a prompt.",
       "argv": ["gh", "api", "**"],
       "action": "allow" },
 
-    { "name": "deny: gh api write methods",
+    { "name": "ask: gh api write methods",
       "match": "gh api*@( -X| --method) @(POST|PUT|PATCH|DELETE|post|put|patch|delete)*",
-      "action": "deny" },
+      "action": "ask" },
 
-    { "name": "deny: gh api body fields (imply a write request)",
+    { "name": "ask: gh api body fields (imply a write request)",
       "match": "gh api*@( -f| -F| --field| --raw-field| --input)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "node read-only: version only (node runs arbitrary code)",
       "match": "node @(--version|-v)?( *)",
@@ -101,17 +112,17 @@
       "match": "npm @(config @(get|list|ls)|pkg get|audit)?( *)",
       "action": "allow" },
 
-    { "name": "deny: npm audit fix (writes)",
+    { "name": "ask: npm audit fix (writes)",
       "match": "npm audit*@( fix)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "pnpm read-only",
       "match": "pnpm @(list|ls|why|outdated|view|info|licenses|root|bin|store status|config get|audit|doctor|--version|-v|help)?( *)",
       "action": "allow" },
 
-    { "name": "deny: pnpm audit fix (writes)",
+    { "name": "ask: pnpm audit fix (writes)",
       "match": "pnpm audit*@( --fix| fix)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "yarn read-only",
       "match": "yarn @(list|info|why|outdated|licenses|versions|node|config @(get|list)|--version|-v|help)?( *)",
@@ -121,9 +132,9 @@
       "match": "bun @(--version|-v|outdated|pm @(ls|hash|hash-string|cache))?( *)",
       "action": "allow" },
 
-    { "name": "deny: bun pm cache rm (writes)",
+    { "name": "ask: bun pm cache rm (writes)",
       "match": "bun pm cache*@( rm)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "deno read-only",
       "match": "deno @(--version|-V|info|doc|lint|fmt --check)?( *)",
@@ -173,9 +184,9 @@
       "match": "go env?( *)",
       "action": "allow" },
 
-    { "name": "deny: go env -w/-u (writes go config)",
+    { "name": "ask: go env -w/-u (writes go config)",
       "match": "go env*@( -w| -u)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "go mod read-only",
       "match": "go mod @(graph|verify|why|edit -print)?( *)",
@@ -196,24 +207,24 @@
       "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials|.config/gh/hosts.yml|*/.config/gh/hosts.yml)*",
       "action": "deny" },
 
-    { "name": "deny: sort/shuf write to a file (-o/--output)",
+    { "name": "ask: sort/shuf write to a file (-o/--output)",
       "description": "sort and shuf are otherwise safe stdin→stdout filters, but -o/--output (and the attached -oFILE / --output=FILE forms) writes a file in any role, bypassing the shell-redirection gate. Block that one write mode rather than dropping the tools.",
       "match": "@(sort|shuf)*@( -o| --output)*",
-      "action": "deny" },
+      "action": "ask" },
 
-    { "name": "deny: recursive rm",
+    { "name": "ask: recursive rm",
       "description": "Recursive delete is never auto-allowed; route file removal through git or a human prompt. Flags are matched as whole space-delimited tokens so a filename like '--preserve-root' or 'my-report' is not mistaken for '-r'.",
       "match": "rm*@( -r| -R| --recursive| -fr| -fR)*",
-      "action": "deny" },
+      "action": "ask" },
 
-    { "name": "deny: git branch delete/rename/copy/force",
-      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; block them in every position.",
+    { "name": "ask: git branch delete/rename/copy/force",
+      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; hold them for approval in every position.",
       "match": "git branch*@( -d| -D| --delete| -m| -M| --move| -c| -C| --copy| -f| --force)*",
-      "action": "deny" },
+      "action": "ask" },
 
-    { "name": "deny: git tag delete",
+    { "name": "ask: git tag delete",
       "match": "git tag*@( -d| --delete)*",
-      "action": "deny" },
+      "action": "ask" },
 
     { "name": "deny: filesystem and partition destroyers",
       "match": "@(mkfs|mkfs.*|fdisk|sfdisk|gdisk|cfdisk|parted|wipefs|blkdiscard|shred)?( *)",
@@ -227,13 +238,13 @@
       "match": "@(chmod|chown|chgrp)*@( -R| --recursive)*@( /| ~)*",
       "action": "deny" },
 
-    { "name": "deny: sed/awk/perl in-place file edit",
+    { "name": "ask: sed/awk/perl in-place file edit",
       "match": "@(sed|awk|perl)*@( -i| --in-place)*",
-      "action": "deny" },
+      "action": "ask" },
 
-    { "name": "deny: shell as a pipe target (blocks curl | sh)",
+    { "name": "ask: shell as a pipe target (curl | sh)",
       "argv": ["@(sh|bash|zsh|fish|dash|ksh|ash|csh|tcsh)", "**"],
-      "action": "deny",
+      "action": "ask",
       "roles": ["pipe_filter"] }
   ]
 }

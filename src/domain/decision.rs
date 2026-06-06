@@ -2,13 +2,17 @@
 //!
 //! Invariants:
 //! - **Deny is supreme.** Any matching deny rule denies the fragment,
-//!   regardless of how many allow rules also match.
+//!   regardless of how many allow or ask rules also match.
+//! - **Ask outranks allow.** Absent any deny, a matching ask rule surfaces the
+//!   fragment for approval even when an allow rule also matches. This lets an
+//!   ask rule carve a "confirm first" hole in a broad allow without the hard
+//!   wall of a deny — the precedence is deny > ask > allow.
 //! - **Allow is any-match.** The first matching allow rule (whose redirection
 //!   policy permits the fragment's redirections) allows it. A redirection-only
 //!   allow rule contributes redirection targets but never authorizes a command,
 //!   so it can only widen targets for a command another rule already permitted.
-//! - **Defer means "undecided."** It is never a synonym for allow or deny; the
-//!   harness's own permission flow takes over.
+//! - **Defer means "undecided."** It is never a synonym for allow, deny, or ask;
+//!   the harness's own permission flow takes over.
 //! - Rule order never changes the verdict, only which rule is cited.
 
 use super::analyzer::{Analysis, Fragment};
@@ -20,10 +24,11 @@ use super::toolcall::ToolCall;
 pub enum Verdict {
     Allow,
     Deny,
+    /// Surface the command for the harness's approval prompt. Emitted by a
+    /// matching `ask` rule that outranks any allow but yields to a deny.
+    Ask,
     /// Nothing matched — fall through to the harness's normal flow.
     Defer,
-    /// Reserved escalation; the engine does not currently emit this.
-    Ask,
 }
 
 impl Verdict {
@@ -106,6 +111,19 @@ pub fn decide(analysis: &Analysis, rules: &[Rule]) -> DecisionResult {
         return result(Verdict::Deny, reason, decisions, analysis);
     }
 
+    // No deny: any ask → overall ask (report the first asked fragment). Ask
+    // outranks allow, so one fragment needing confirmation holds the whole
+    // command for approval.
+    if let Some(asked) = decisions.iter().find(|d| d.verdict == Verdict::Ask) {
+        let reason = format!(
+            "`{}` ({}): {}",
+            asked.fragment.cmd_string(),
+            asked.fragment.role.as_str(),
+            asked.reason
+        );
+        return result(Verdict::Ask, reason, decisions, analysis);
+    }
+
     // All allow → overall allow.
     if decisions.iter().all(|d| d.verdict == Verdict::Allow) {
         let reason = format!("all {} command(s) matched allow rules", decisions.len());
@@ -116,7 +134,7 @@ pub fn decide(analysis: &Analysis, rules: &[Rule]) -> DecisionResult {
     let deferred = decisions
         .iter()
         .find(|d| d.verdict == Verdict::Defer)
-        .expect("a non-allow, non-deny decision must be a defer");
+        .expect("a non-allow, non-deny, non-ask decision must be a defer");
     let reason = format!(
         "no rule matched `{}` ({})",
         deferred.fragment.cmd_string(),
@@ -147,6 +165,9 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
     // `authorizers`, so it can never be what grants execution permission.
     let mut authorizers: Vec<&Rule> = Vec::new();
     let mut redirection_grants: Vec<&Rule> = Vec::new();
+    // The first matching ask rule, held until the loop finishes: a deny found
+    // later must still win, so ask cannot short-circuit the way deny does.
+    let mut ask: Option<&Rule> = None;
 
     for rule in rules {
         match rule.action {
@@ -163,6 +184,14 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
                     };
                 }
             }
+            // Ask is a guardrail like deny (it sees read-redirection targets too),
+            // but it never short-circuits: keep scanning for a deny that outranks
+            // it. Record only the first match — rule order picks who is cited.
+            Action::Ask => {
+                if ask.is_none() && rule.matches_including_read_redirections(fragment) {
+                    ask = Some(rule);
+                }
+            }
             Action::Allow => {
                 if rule.matches(fragment) {
                     if rule.is_redirection_only() {
@@ -173,6 +202,17 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
                 }
             }
         }
+    }
+
+    // No deny fired. An ask outranks any allow, so surface for approval before
+    // considering authorizers or redirection grants.
+    if let Some(rule) = ask {
+        return FragmentDecision {
+            fragment: fragment.clone(),
+            verdict: Verdict::Ask,
+            rule_name: Some(rule.name.clone()),
+            reason: format!("needs approval per rule '{}'", rule.name),
+        };
     }
 
     // No rule authorizes the command — a redirection-only match is not enough.
@@ -247,15 +287,27 @@ pub fn evaluate(command: &str, rules: &[Rule]) -> DecisionResult {
 
 /// Evaluate a single normalized tool call against the tool rules, composing a
 /// verdict the same way the shell engine does: any matching **deny** denies
-/// (supreme), else the first matching **allow** allows, else **defer**. A tool
-/// call has no fragments or redirections, so the result carries only a verdict
-/// and reason; rule order never changes the verdict, only which rule is cited.
+/// (supreme), else any matching **ask** surfaces for approval, else the first
+/// matching **allow** allows, else **defer**. A tool call has no fragments or
+/// redirections, so the result carries only a verdict and reason; rule order
+/// never changes the verdict, only which rule is cited.
 pub fn evaluate_tool_call(call: &ToolCall, rules: &[ToolRule]) -> DecisionResult {
     for rule in rules {
         if rule.action == Action::Deny && rule.matches(call) {
             return tool_result(
                 Verdict::Deny,
                 format!("tool `{}` denied by rule '{}'", call.tool_name, rule.name),
+            );
+        }
+    }
+    for rule in rules {
+        if rule.action == Action::Ask && rule.matches(call) {
+            return tool_result(
+                Verdict::Ask,
+                format!(
+                    "tool `{}` needs approval per rule '{}'",
+                    call.tool_name, rule.name
+                ),
             );
         }
     }
@@ -315,6 +367,84 @@ mod tests {
             String::new(),
         )
         .unwrap()
+    }
+
+    fn ask(name: &str, pattern: &str) -> Rule {
+        Rule::from_match(
+            name.into(),
+            Action::Ask,
+            pattern,
+            MatchKind::Glob,
+            None,
+            RedirPolicy::default(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ask_rule_surfaces_for_approval() {
+        let rules = vec![ask("publish", "npm publish*")];
+        assert_eq!(evaluate("npm publish", &rules).verdict, Verdict::Ask);
+    }
+
+    #[test]
+    fn ask_outranks_a_broad_allow_it_is_carved_out_of() {
+        // The motivating shape: a broad allow plus an ask that punches a
+        // "confirm first" hole in it, with the allow left untouched.
+        let rules = vec![
+            allow("git push", "git push*"),
+            ask("force push", "git push*--force*"),
+        ];
+        assert_eq!(
+            evaluate("git push -u origin feat", &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate("git push --force origin main", &rules).verdict,
+            Verdict::Ask
+        );
+    }
+
+    #[test]
+    fn deny_is_supreme_over_ask() {
+        // Rule order must not matter: deny wins whether it precedes or follows
+        // the ask that also matches.
+        let ask_first = vec![ask("a", "rm *"), deny("d", "rm -rf*")];
+        let deny_first = vec![deny("d", "rm -rf*"), ask("a", "rm *")];
+        assert_eq!(evaluate("rm -rf /", &ask_first).verdict, Verdict::Deny);
+        assert_eq!(evaluate("rm -rf /", &deny_first).verdict, Verdict::Deny);
+    }
+
+    #[test]
+    fn ask_sees_read_redirection_targets_like_deny() {
+        // An ask guardrail folds in read-redirection targets, so the hidden-path
+        // form trips it just as the argv form does.
+        let rules = vec![ask("secretish", "cat *id_rsa*")];
+        assert_eq!(evaluate("cat ~/.ssh/id_rsa", &rules).verdict, Verdict::Ask);
+        assert_eq!(
+            evaluate("cat < ~/.ssh/id_rsa", &rules).verdict,
+            Verdict::Ask
+        );
+    }
+
+    #[test]
+    fn one_asked_fragment_holds_the_whole_command() {
+        // Across a pipeline, an ask in any fragment surfaces the whole command,
+        // but a deny in another fragment still wins.
+        let rules = vec![
+            allow("git log", "git log*"),
+            allow("grep", "grep *"),
+            ask("rm", "rm *"),
+            deny("nuke", "rm -rf*"),
+        ];
+        assert_eq!(evaluate("git log | grep x", &rules).verdict, Verdict::Allow);
+        assert_eq!(evaluate("git log | rm foo", &rules).verdict, Verdict::Ask);
+        assert_eq!(
+            evaluate("git log | rm -rf foo", &rules).verdict,
+            Verdict::Deny
+        );
     }
 
     /// A redirection-only allow rule: matches `pattern`, grants `writes`, and
@@ -565,6 +695,39 @@ mod tool_tests {
             String::new(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn ask_outranks_allow_but_yields_to_deny_for_tool_calls() {
+        // deny > ask > allow holds on the tool engine too: a broad allow, an ask
+        // that carves a subset out for approval, and a deny that still wins.
+        let rules = vec![
+            rule("repo", Action::Allow, "read", &[(ParamKey::Path, &["**"])]),
+            rule(
+                "confirm-env",
+                Action::Ask,
+                "read",
+                &[(ParamKey::Path, &["**/.env*"])],
+            ),
+            rule(
+                "secrets",
+                Action::Deny,
+                "read",
+                &[(ParamKey::Path, &["**/.ssh/**"])],
+            ),
+        ];
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/a.ts"), &rules).verdict,
+            Verdict::Allow
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/.env"), &rules).verdict,
+            Verdict::Ask
+        );
+        assert_eq!(
+            evaluate_tool_call(&read("/repo/.ssh/id_rsa"), &rules).verdict,
+            Verdict::Deny
+        );
     }
 
     #[test]
