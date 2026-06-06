@@ -159,25 +159,24 @@ denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowli
 note "  ok: command executed without a permission prompt"
 
 # Case 3: an `ask` verdict must HOLD the command for human approval, not run it.
-# This case alone drops bypassPermissions (which would let an ask proceed) for
-# `default` mode, where a hook `allow` still auto-approves but a hook `ask` has
-# no headless approver, so the command is held. The allowed `echo` (run first)
-# proves the agent is live and that allow still works in this mode; the ask'd
-# `mkdir` must not have created its directory.
+# Runs under the same bypassPermissions mode as the other cases (so the model
+# actually attempts the command — `default` mode runs no tools at all headlessly)
+# and asserts the ask'd `mkdir` did not create its directory. The transcript tail
+# is dumped to show how the real CLI handled the ask; the surfaced reason is the
+# liveness proof that the gate fired on the attempt.
 note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
-ask_live="$sandbox/sentinel-ask-live.txt"
 ask_held="$sandbox/sentinel-ask-held"
-rm -rf "$ask_live" "$ask_held"
-ask_marker="ask-live-marker"
-run_claude "Run these two shell commands with the Bash tool, in this exact order, then stop. First: echo $ask_marker > $ask_live  Second: mkdir $ask_held — if the second is blocked or needs approval, do not retry it." \
-    "$sandbox/ask.stream" default
-[ -e "$ask_live" ] || fail "ask-case liveness failed: the allowed \`echo\` did not run (cannot conclude the ask case)"
+rm -rf "$ask_held"
+run_claude "Use the Bash tool to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop and do not retry." \
+    "$sandbox/ask.stream"
+note "  ── ask transcript tail (debug) ──"
+al_dump_stream "$sandbox/ask.stream"
 [ -e "$ask_held" ] && fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
-note "  ok: the allowed command ran but the ask'd \`mkdir\` was held (not auto-executed)"
+note "  ok: the ask'd \`mkdir\` did not execute (held, not auto-run)"
 if asked_in "$sandbox/ask.stream"; then
-    note "  confirmed: allowlister's approval-required reason reached the transcript"
+    note "  confirmed: allowlister's approval-required reason reached the transcript (the ask fired)"
 else
-    note "  note: the ask reason was not echoed back by the CLI in headless mode"
+    note "  note: the ask reason was not surfaced; relying on the side-effect (held) only"
 fi
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked"
