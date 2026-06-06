@@ -113,11 +113,17 @@ fi
 #  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
 run_agent() {
     local prompt="$1" stream="$2"
+    # The ask case passes "no-force" to drop --force: --force auto-approves an
+    # `ask` (turning it into a yes), so an ask can only be shown to HOLD when the
+    # confirmation flow is left intact. deny/allow are unaffected (a hook `deny`
+    # blocks under --force, a hook `allow` runs).
+    local approve=(--force)
+    [ "${3:-}" = "no-force" ] && approve=()
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
     ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
         timeout 180 "$agent_bin" -p "$prompt" \
-            --force \
+            "${approve[@]}" \
             "${model_args[@]}" \
             --output-format stream-json \
             </dev/null ) >"$stream" 2>"$stream.err" || {
@@ -188,8 +194,9 @@ note "  ok: command executed without a permission prompt"
 note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
 ask_held="$sandbox/sentinel-ask-held"
 rm -rf "$ask_held"
+# Drop --force so the ask is not auto-approved; the hook's `ask` then holds it.
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
-    "$sandbox/ask.stream"
+    "$sandbox/ask.stream" no-force
 if [ -e "$ask_held" ]; then
     dump_deny_diagnostic "$sandbox/ask.stream"
     fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
