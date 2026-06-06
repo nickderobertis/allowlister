@@ -80,3 +80,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
         run: release-plz release-pr ${{ steps.baseline.outputs.arg }} --git-token "$GITHUB_TOKEN"
+
+      # Auto-release: enable GitHub auto-merge on the release PR so it merges
+      # itself once the required status checks (the deterministic gate; the
+      # live-harness and perf jobs are not required) pass. That merge re-triggers
+      # this workflow's `release` step above, which tags vX.Y.Z and cuts the
+      # GitHub Release. Artifacts thus still publish only after the gate is green —
+      # there is no manual merge step, but no gating is skipped.
+      - name: Auto-merge the release PR when the gate is green
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json number,headRefName \
+                 --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
+          if [ -n "$pr" ]; then
+            echo "Enabling auto-merge on release PR #$pr"
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --rebase \
+              || echo "::warning::could not enable auto-merge on #$pr (already enabled, or already merging)"
+          else
+            echo "No open release PR to auto-merge."
+          fi
