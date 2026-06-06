@@ -17,7 +17,7 @@
 # stream-json schema is not pinned here, so a missing reason is a note, not a
 # failure. The side effects are the hard assertions.
 #
-# `ask`/`defer` are not asserted: they hand control back to the harness's normal
+# `defer` is not asserted: it hands control back to the harness's normal
 # permission flow, which has no deterministic headless outcome. Those paths are
 # covered hermetically in tests/e2e.
 #
@@ -70,6 +70,7 @@ cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
+    { "name": "ask before mkdir", "match": "mkdir *", "action": "ask" },
     { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
       "redirections": { "write_glob": ["$sandbox/*"] } },
 ${AL_TOOL_RULES}
@@ -153,7 +154,7 @@ dump_deny_diagnostic() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/4: shell deny — \`touch\` must be blocked"
+note "» case 1/5: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -170,7 +171,7 @@ else
     note "  note: Cursor showed its generic hook-block message; allowlister's reason was not surfaced"
 fi
 
-note "» case 2/4: shell allow — \`echo\` must run"
+note "» case 2/5: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
 rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
@@ -181,19 +182,39 @@ grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote une
 hook_rejected_in "$sandbox/allow.stream" && fail "allowed command was rejected by a hook"
 note "  ok: command executed without a permission prompt"
 
-note "» case 3/4: built-in read tool — reading the secret must be blocked (beforeReadFile)"
+# Case 3: an `ask` verdict must HOLD the command for approval, not run it. Same
+# --force mode as the other cases (so the model actually attempts the command);
+# the ask'd `mkdir` must not have created its directory.
+note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
+ask_held="$sandbox/sentinel-ask-held"
+rm -rf "$ask_held"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
+    "$sandbox/ask.stream"
+if [ -e "$ask_held" ]; then
+    dump_deny_diagnostic "$sandbox/ask.stream"
+    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+fi
+note "  ok: the ask'd \`mkdir\` did not execute (held, not auto-run)"
+if hook_rejected_in "$sandbox/ask.stream" || reason_surfaced_in "$sandbox/ask.stream"; then
+    note "  confirmed: the hook held the command for approval (structured rejection or reason surfaced)"
+else
+    dump_deny_diagnostic "$sandbox/ask.stream"
+    note "  note: could not independently confirm the attempt via the stream; relied on the held side-effect"
+fi
+
+note "» case 4/5: built-in read tool — reading the secret must be blocked (beforeReadFile)"
 run_agent "There are two files in this project. Read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if [ "$have_mcp" = 1 ]; then
-    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked (beforeMCPExecution)"
+    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked (beforeMCPExecution)"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ cursor live e2e passed (shell deny+allow, built-in read deny, MCP deny)"
+note "✓ cursor live e2e passed (shell deny+allow+ask, built-in read deny, MCP deny)"
