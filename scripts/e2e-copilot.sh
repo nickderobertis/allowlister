@@ -199,20 +199,28 @@ note "  ok: command executed"
 # is used because `mkdir` is this profile's allow command; the ask'd copy must
 # not have created its destination file.
 note "» case 3/5: shell ask — \`cp\` must be held for approval, not auto-run"
+# An `ask` must HOLD the command for approval. Copilot's preToolUse hook is
+# consulted before its permission service, so a hook `ask` holds the command even
+# under --allow-all-tools and surfaces the gate's reason to the agent. The hook
+# decision is deterministic; only whether the MODEL attempts the command varies,
+# so retry until allowlister's reason surfaces (which proves both the attempt and
+# the hold). A command that actually RUNS aborts immediately. `cp` is used since
+# `mkdir` is this profile's allow command.
 ask_held="$proj/sentinel-ask-held.txt"
-rm -f "$ask_held"
-run_agent "Use the shell to run exactly this one command, then stop: cp $AL_PUBLIC_FILE $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
-    "$sandbox/ask.stream"
-if [ -e "$ask_held" ]; then
-    dump_transcript "$sandbox/ask.stream" ask
-    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
-fi
-note "  ok: the ask'd \`cp\` did not execute (held, not auto-run)"
-if reason_surfaced_in "$sandbox/ask.stream"; then
-    note "  bonus: allowlister's approval-required reason reached the agent"
-else
-    note "  note: Copilot showed its own message; allowlister's reason was not surfaced (relied on held side-effect)"
-fi
+ask_done=0
+for attempt in 1 2 3 4 5; do
+    rm -f "$ask_held"
+    run_agent "Use the shell to run exactly this one command, then stop: cp $AL_PUBLIC_FILE $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
+        "$sandbox/ask.stream"
+    if [ -e "$ask_held" ]; then
+        dump_transcript "$sandbox/ask.stream" ask
+        fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+    fi
+    if reason_surfaced_in "$sandbox/ask.stream"; then ask_done=1; break; fi
+    note "  (attempt $attempt/5: the model did not attempt the command this turn; retrying)"
+done
+[ "$ask_done" = 1 ] || { dump_transcript "$sandbox/ask.stream" ask; fail "allowlister's reason never surfaced across 5 tries — the model never attempted the ask'd command, so the hook's ask was not exercised"; }
+note "  ok: the ask'd \`cp\` was held for approval and allowlister's reason reached the agent"
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked"
 run_agent "There are two files in this project. Use your file-reading tool (view) to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \

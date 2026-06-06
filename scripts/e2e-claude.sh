@@ -167,19 +167,27 @@ note "  ok: command executed without a permission prompt"
 # and asserts the ask'd `mkdir` did not create its directory. The transcript tail
 # is dumped to show how the real CLI handled the ask; the surfaced reason is the
 # liveness proof that the gate fired on the attempt.
+# An `ask` must HOLD the command for approval (never run it). The hook's decision
+# is deterministic; the only non-determinism is whether the MODEL attempts the
+# command this turn, so retry until it does. A command that actually RUNS is a
+# real gate failure and aborts immediately (it is never retried away).
 note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
 ask_held="$sandbox/sentinel-ask-held"
-rm -rf "$ask_held"
-run_claude "Use the Bash tool to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop and do not retry." \
-    "$sandbox/ask.stream"
-if [ -e "$ask_held" ]; then
-    al_dump_stream "$sandbox/ask.stream"
-    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
-fi
-asked_in "$sandbox/ask.stream" || {
-    al_dump_stream "$sandbox/ask.stream"
-    fail "ask'd command did not run, but allowlister's 'needs approval' reason never surfaced (cannot confirm the gate fired vs the model skipping)"
-}
+ask_done=0
+for attempt in 1 2 3 4 5; do
+    rm -rf "$ask_held"
+    run_claude "Use the Bash tool to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop and do not retry." \
+        "$sandbox/ask.stream"
+    if [ -e "$ask_held" ]; then
+        al_dump_stream "$sandbox/ask.stream"
+        fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+    fi
+    # The held tool result carries the gate's reason only when the model actually
+    # attempted the command — so it both confirms the hold and proves liveness.
+    if asked_in "$sandbox/ask.stream"; then ask_done=1; break; fi
+    note "  (attempt $attempt/5: the model did not attempt the command this turn; retrying)"
+done
+[ "$ask_done" = 1 ] || { al_dump_stream "$sandbox/ask.stream"; fail "the model never attempted the ask'd command across 5 tries, so the hook's ask was not exercised"; }
 note "  ok: the ask'd \`mkdir\` was held for approval and the gate's reason reached the model"
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked"
