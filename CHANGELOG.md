@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/nickderobertis/allowlister/compare/v0.3.0...v0.3.1) - 2026-06-05
+
+### Added
+
+- *(tools)* complete tool-use gating with OpenCode and Cursor ([#34](https://github.com/nickderobertis/allowlister/pull/34))
+- *(tools)* extend tool-use gating to Codex, Copilot, Qwen, Crush, Goose
+- *(tools)* gate non-shell tool calls (engine + config + Claude Code) ([#32](https://github.com/nickderobertis/allowlister/pull/32))
+- add redirection-only rule type for profile-wide scratch writes ([#30](https://github.com/nickderobertis/allowlister/pull/30))
+
 ## [0.3.0](https://github.com/nickderobertis/allowlister/compare/v0.2.1...v0.3.0) - 2026-06-05
 
 ### Added
