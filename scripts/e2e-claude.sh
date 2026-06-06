@@ -69,6 +69,7 @@ cat > "$rules" <<JSON
 {
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
+    { "name": "ask before mkdir", "match": "mkdir *", "action": "ask" },
     { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
       "redirections": { "write_glob": ["$sandbox/*"] } },
 ${AL_TOOL_RULES}
@@ -114,12 +115,12 @@ fi
 #    HOME is left intact so `claude` keeps its credentials.
 #  * stdin from /dev/null avoids the interactive "waiting for stdin" delay.
 run_claude() {
-    local prompt="$1" stream="$2"
+    local prompt="$1" stream="$2" mode="${3:-bypassPermissions}"
     local mcp_args=()
     [ -f "$mcp_config" ] && mcp_args=(--mcp-config "$mcp_config" --strict-mcp-config)
     ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
         timeout 150 claude -p "$prompt" \
-            --permission-mode bypassPermissions \
+            --permission-mode "$mode" \
             --model "$model" \
             --max-turns 6 \
             "${mcp_args[@]}" \
@@ -133,7 +134,11 @@ run_claude() {
 # is echoed back to the model verbatim in the blocked tool result).
 denied_in() { grep -aq 'allowlister:.*denied' "$1"; }
 
-note "» case 1/4: shell deny — \`touch\` must be blocked"
+# True if the transcript shows allowlister ASKING for approval — the reason
+# string is echoed back when the ask'd tool call is held.
+asked_in() { grep -aq 'allowlister:.*needs approval' "$1"; }
+
+note "» case 1/5: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_claude "Use the Bash tool to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -142,7 +147,7 @@ run_claude "Use the Bash tool to run exactly this one command, then stop: touch 
 denied_in "$sandbox/deny.stream" || fail "no allowlister deny appeared in the transcript (hook did not fire, or the model never attempted the command)"
 note "  ok: command blocked and the deny reason was reported to the model"
 
-note "» case 2/4: shell allow — \`echo\` must run"
+note "» case 2/5: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
 rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
@@ -153,19 +158,41 @@ grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote une
 denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
 note "  ok: command executed without a permission prompt"
 
-note "» case 3/4: built-in read tool — reading the secret must be blocked"
+# Case 3: an `ask` verdict must HOLD the command for human approval, not run it.
+# This case alone drops bypassPermissions (which would let an ask proceed) for
+# `default` mode, where a hook `allow` still auto-approves but a hook `ask` has
+# no headless approver, so the command is held. The allowed `echo` (run first)
+# proves the agent is live and that allow still works in this mode; the ask'd
+# `mkdir` must not have created its directory.
+note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
+ask_live="$sandbox/sentinel-ask-live.txt"
+ask_held="$sandbox/sentinel-ask-held"
+rm -rf "$ask_live" "$ask_held"
+ask_marker="ask-live-marker"
+run_claude "Run these two shell commands with the Bash tool, in this exact order, then stop. First: echo $ask_marker > $ask_live  Second: mkdir $ask_held — if the second is blocked or needs approval, do not retry it." \
+    "$sandbox/ask.stream" default
+[ -e "$ask_live" ] || fail "ask-case liveness failed: the allowed \`echo\` did not run (cannot conclude the ask case)"
+[ -e "$ask_held" ] && fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+note "  ok: the allowed command ran but the ask'd \`mkdir\` was held (not auto-executed)"
+if asked_in "$sandbox/ask.stream"; then
+    note "  confirmed: allowlister's approval-required reason reached the transcript"
+else
+    note "  note: the ask reason was not echoed back by the CLI in headless mode"
+fi
+
+note "» case 4/5: built-in read tool — reading the secret must be blocked"
 run_claude "There are two files in this project. Use your Read tool to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if al_have_python && [ -f "$mcp_config" ]; then
-    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_claude "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ claude live e2e passed (shell deny+allow, built-in read deny, MCP deny)"
+note "✓ claude live e2e passed (shell deny+allow+ask, built-in read deny, MCP deny)"
