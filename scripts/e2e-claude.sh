@@ -14,11 +14,14 @@
 # string echoed back in the transcript (no JSON tooling required):
 #   * deny  -> the command never executes and the model is told why
 #   * allow -> the command executes without a permission prompt
+#   * ask   -> the command is held (never executes) and the model is told it
+#              needs approval
 #
-# Defer/ask are intentionally not asserted here: they hand control back to the
-# harness's normal permission flow, which has no deterministic headless outcome
-# (it would block on a human in `default` mode, or proceed under
-# `bypassPermissions`). Those paths are covered hermetically in tests/e2e.
+# `ask` IS asserted (case 3): under bypassPermissions a hook `ask` is held --
+# the model attempts the command, the gate returns "needs approval", and the
+# command never runs. Only `defer` is not asserted (it hands control to the
+# harness's normal flow, which has no deterministic headless outcome); it is
+# covered hermetically in tests/e2e.
 #
 # Environment overrides:
 #   ALLOWLISTER_E2E_MODEL   model passed to `claude --model` (default: haiku)
@@ -169,15 +172,15 @@ ask_held="$sandbox/sentinel-ask-held"
 rm -rf "$ask_held"
 run_claude "Use the Bash tool to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop and do not retry." \
     "$sandbox/ask.stream"
-note "  ── ask transcript tail (debug) ──"
-al_dump_stream "$sandbox/ask.stream"
-[ -e "$ask_held" ] && fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
-note "  ok: the ask'd \`mkdir\` did not execute (held, not auto-run)"
-if asked_in "$sandbox/ask.stream"; then
-    note "  confirmed: allowlister's approval-required reason reached the transcript (the ask fired)"
-else
-    note "  note: the ask reason was not surfaced; relying on the side-effect (held) only"
+if [ -e "$ask_held" ]; then
+    al_dump_stream "$sandbox/ask.stream"
+    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
 fi
+asked_in "$sandbox/ask.stream" || {
+    al_dump_stream "$sandbox/ask.stream"
+    fail "ask'd command did not run, but allowlister's 'needs approval' reason never surfaced (cannot confirm the gate fired vs the model skipping)"
+}
+note "  ok: the ask'd \`mkdir\` was held for approval and the gate's reason reached the model"
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked"
 run_claude "There are two files in this project. Use your Read tool to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \

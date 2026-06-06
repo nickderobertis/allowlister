@@ -22,7 +22,7 @@
 # output is not pinned here, so a missing reason is a note, not a failure. The
 # side effects are the hard assertions.
 #
-# `ask`/`defer` are not asserted: they hand control back to the harness's normal
+# `defer` is not asserted: it hands control back to the harness's normal
 # permission flow, which has no deterministic headless outcome. Those paths are
 # covered hermetically in tests/e2e.
 #
@@ -93,6 +93,7 @@ cat > "$rules" <<JSON
   "rules": [
     { "name": "deny touch", "match": "touch *", "action": "deny" },
     { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
+    { "name": "ask before cp", "match": "cp *", "action": "ask" },
 ${AL_TOOL_RULES}
   ]
 }
@@ -167,7 +168,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/4: shell deny — \`touch\` must be blocked even under --allow-all-tools"
+note "» case 1/5: shell deny — \`touch\` must be blocked even under --allow-all-tools"
 deny_sentinel="$proj/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -183,7 +184,7 @@ else
     note "  note: Copilot showed its own block message; allowlister's reason was not surfaced"
 fi
 
-note "» case 2/4: shell allow — \`mkdir\` must run"
+note "» case 2/5: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 rm -rf "$allow_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
@@ -194,19 +195,38 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed"
 
-note "» case 3/4: built-in read tool — reading the secret must be blocked"
+# Case 3: an `ask` verdict must HOLD the command for approval, not run it. `cp`
+# is used because `mkdir` is this profile's allow command; the ask'd copy must
+# not have created its destination file.
+note "» case 3/5: shell ask — \`cp\` must be held for approval, not auto-run"
+ask_held="$proj/sentinel-ask-held.txt"
+rm -f "$ask_held"
+run_agent "Use the shell to run exactly this one command, then stop: cp $AL_PUBLIC_FILE $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
+    "$sandbox/ask.stream"
+if [ -e "$ask_held" ]; then
+    dump_transcript "$sandbox/ask.stream" ask
+    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+fi
+note "  ok: the ask'd \`cp\` did not execute (held, not auto-run)"
+if reason_surfaced_in "$sandbox/ask.stream"; then
+    note "  bonus: allowlister's approval-required reason reached the agent"
+else
+    note "  note: Copilot showed its own message; allowlister's reason was not surfaced (relied on held side-effect)"
+fi
+
+note "» case 4/5: built-in read tool — reading the secret must be blocked"
 run_agent "There are two files in this project. Use your file-reading tool (view) to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if [ "$have_mcp" = 1 ]; then
-    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ copilot live e2e passed (shell deny+allow, built-in read deny, MCP deny)"
+note "✓ copilot live e2e passed (shell deny+allow+ask, built-in read deny, MCP deny)"
