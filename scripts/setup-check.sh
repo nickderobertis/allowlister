@@ -12,6 +12,9 @@ _load_tool_env
 
 if _check_ready; then
   echo "✓ dev environment ready"
+  optional_missing="$(_missing_bins "$OPTIONAL_BINS")"
+  [ -n "$optional_missing" ] \
+    && echo "note: optional tools unavailable:${optional_missing} (git hooks disabled; build/test unaffected)"
   exit 0
 fi
 

@@ -4,8 +4,16 @@
 
 # Binaries that must resolve for the dev environment to be considered ready.
 # asdf/direnv (the version + env layer), just (task runner), the Rust toolchain,
-# the test runner installed by `just bootstrap`, and the git-hook manager.
-REQUIRED_BINS="asdf direnv just rustc cargo cargo-nextest lefthook"
+# and the test runner installed by `just bootstrap`.
+REQUIRED_BINS="asdf direnv just rustc cargo cargo-nextest"
+
+# Soft requirements: their absence is an advisory, never a "not ready" verdict.
+# lefthook is a Go binary with no cargo source fallback, so on a network where
+# its prebuilt is unreachable `just bootstrap` warns rather than fails; missing,
+# it only disables the local git-hook convenience — building and testing still
+# work. Kept consistent with bootstrap so setup-check does not nag forever on a
+# restricted network where setup otherwise succeeded.
+OPTIONAL_BINS="lefthook"
 
 # Machine-local setup state. Lives outside target/ so `cargo clean` does not
 # wipe it (cleaning build artifacts does not un-provision the machine).
@@ -56,14 +64,24 @@ _fingerprint() {
   } 2>/dev/null | _sha256_stdin
 }
 
+# Echo the subset of $1 (a space-separated list of binary names) that does not
+# resolve on PATH, each prefixed with a space; empty when all resolve.
+_missing_bins() {
+  local b out=""
+  for b in $1; do
+    command -v "$b" >/dev/null 2>&1 || out="$out $b"
+  done
+  printf '%s' "$out"
+}
+
 # Is the dev environment ready? Returns 0 when every required binary resolves and
 # the stamp matches the current fingerprint; otherwise returns 1 and sets REASON.
+# Soft requirements (OPTIONAL_BINS) do not affect readiness; surface them with
+# _missing_bins where an advisory is wanted.
 _check_ready() {
   REASON=""
-  local missing="" b
-  for b in $REQUIRED_BINS; do
-    command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
-  done
+  local missing
+  missing="$(_missing_bins "$REQUIRED_BINS")"
   if [ -n "$missing" ]; then
     REASON="missing tools:$missing"
     return 1
