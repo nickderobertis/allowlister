@@ -157,12 +157,14 @@ in the platform-neutral `AGENTS.md` files (root and nested); agent-product
 permission configuration lives only in that product's own settings file.
 
 For the Claude Code agent, a `SessionStart` hook in `.claude/settings.json` runs
-the lightweight `scripts/setup-check.sh` at the start of a session and provisions
-the environment once (via `scripts/setup.sh`) if it is not ready — so a fresh
-clone, including a cloud agent's, sets itself up automatically. It is a fast
-no-op when already set up, never re-runs after a failed attempt (it advises
-instead), and is skipped in this repo's GitHub Actions CI or when
-`ALLOWLISTER_SKIP_SETUP` is set.
+the lightweight check at the start of a session. It never installs anything
+itself — a multi-minute provision run synchronously inside a SessionStart hook
+would freeze the session, which waits on the hook — so when the environment is
+not ready it injects guidance for the agent to run `just setup` as a visible,
+interruptible first step. It is a fast no-op when already set up, and is skipped
+in this repo's GitHub Actions CI or when `ALLOWLISTER_SKIP_SETUP` is set. Set
+`ALLOWLISTER_AUTO_SETUP=1` to instead provision hands-off in a detached
+background process (still non-blocking).
 
 This project uses a narrow, repo-scoped command allowlist for the Claude Code
 agent in `.claude/settings.json`: common quality-gate operations are allowed
