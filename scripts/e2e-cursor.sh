@@ -194,27 +194,27 @@ note "  ok: command executed without a permission prompt"
 # --force mode as the other cases (so the model actually attempts the command);
 # the ask'd `mkdir` must not have created its directory.
 note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
+# An `ask` must HOLD the command for approval. Under --trust the session runs but
+# per-command confirmation is intact, so the hook's `ask` holds the command (a
+# "rejected" tool result); --force would auto-approve it. The hook decision is
+# deterministic; only whether the MODEL attempts the command varies, so retry
+# until a rejected tool call appears. A command that actually RUNS aborts now.
 ask_held="$sandbox/sentinel-ask-held"
-rm -rf "$ask_held"
-# Use --trust (not -f/--force): --force auto-approves the ask and runs it, while
-# bare (no trust flag) makes cursor-agent refuse to start. --trust lets the
-# session run but leaves per-command confirmation intact, so the hook's `ask`
-# holds the command.
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
-    "$sandbox/ask.stream" trust
-if [ -e "$ask_held" ]; then
-    dump_deny_diagnostic "$sandbox/ask.stream"
-    fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
-fi
-# Liveness + hold: the transcript must show a REJECTED tool call. cursor-agent
-# leaves the rejection `reason` empty for an `ask`, so attribute via the
-# structured rejection of the (only) attempted command rather than the reason
-# text: a "rejected" result means the ask'd mkdir was attempted and held, and its
-# absence (e.g. the agent refusing to start) fails instead of false-passing.
-grep -aq '"rejected"' "$sandbox/ask.stream" || {
-    dump_deny_diagnostic "$sandbox/ask.stream"
-    fail "no rejected tool call in the transcript — the ask'd mkdir was not attempted-and-held (the agent may not have run it)"
-}
+ask_done=0
+for attempt in 1 2 3 4 5; do
+    rm -rf "$ask_held"
+    run_agent "Use the shell to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
+        "$sandbox/ask.stream" trust
+    if [ -e "$ask_held" ]; then
+        dump_deny_diagnostic "$sandbox/ask.stream"
+        fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
+    fi
+    # cursor-agent leaves the rejection `reason` empty for an `ask`, so attribute
+    # the hold via the structured rejected tool result of the attempted command.
+    if grep -aq '"rejected"' "$sandbox/ask.stream"; then ask_done=1; break; fi
+    note "  (attempt $attempt/5: the model did not attempt the command this turn; retrying)"
+done
+[ "$ask_done" = 1 ] || { dump_deny_diagnostic "$sandbox/ask.stream"; fail "no rejected tool call across 5 tries — the model never attempted the ask'd command, so the hook's ask was not exercised"; }
 note "  ok: the ask'd \`mkdir\` was attempted and rejected — held for approval, not run"
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked (beforeReadFile)"
