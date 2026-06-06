@@ -33,10 +33,22 @@ samply-version := "0.13.1"
 _default:
     @just --list --unsorted
 
+# One-command machine setup (asdf + direnv + toolchain + tools + hooks; idempotent).
+setup:
+    @bash scripts/setup.sh
+
+# Fast check of whether this machine is set up (no installs; non-zero if not).
+setup-check:
+    @bash scripts/setup-check.sh
+
 # Install developer tools (cargo subcommands + git hooks) reproducibly.
 bootstrap:
     @echo "» installing cargo-binstall (if missing)"
-    @command -v cargo-binstall >/dev/null || cargo install --locked cargo-binstall
+    @# Prefer the official prebuilt installer over `cargo install` from source:
+    @# compiling cargo-binstall can require a newer rustc than the pinned
+    @# toolchain (e.g. cargo-platform needs rustc 1.91 while this repo pins 1.89).
+    @command -v cargo-binstall >/dev/null || \
+        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
     @echo "» installing pinned dev tools"
     cargo binstall --no-confirm --disable-telemetry \
         cargo-nextest@{{nextest-version}} \

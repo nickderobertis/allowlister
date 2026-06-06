@@ -84,5 +84,19 @@
       "Bash(cat deny.toml)",
       "Bash(cat justfile)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/session-setup.sh\"",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
   }
 }
