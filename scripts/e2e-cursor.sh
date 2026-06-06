@@ -118,7 +118,9 @@ run_agent() {
     # confirmation flow is left intact. deny/allow are unaffected (a hook `deny`
     # blocks under --force, a hook `allow` runs).
     local approve=(--force)
-    [ "${3:-}" = "no-force" ] && approve=()
+    case "${3:-}" in
+        trust) approve=(--trust) ;;
+    esac
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
     ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
@@ -194,19 +196,23 @@ note "  ok: command executed without a permission prompt"
 note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
 ask_held="$sandbox/sentinel-ask-held"
 rm -rf "$ask_held"
-# Drop --force so the ask is not auto-approved; the hook's `ask` then holds it.
+# Use --trust (not -f/--force): --force auto-approves the ask and runs it, while
+# bare (no trust flag) makes cursor-agent refuse to start. --trust lets the
+# session run but leaves per-command confirmation intact, so the hook's `ask`
+# holds the command.
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $ask_held — if it is blocked or needs approval, stop immediately and do not retry." \
-    "$sandbox/ask.stream" no-force
+    "$sandbox/ask.stream" trust
 if [ -e "$ask_held" ]; then
     dump_deny_diagnostic "$sandbox/ask.stream"
     fail "ask command auto-executed: $ask_held was created (an ask must be held for approval, not run)"
 fi
-note "  ok: the ask'd \`mkdir\` did not execute (held, not auto-run)"
+# Hard attribution: the hook's rejection/reason must surface, otherwise an agent
+# that never attempted the command would false-pass on the absent side effect.
 if hook_rejected_in "$sandbox/ask.stream" || reason_surfaced_in "$sandbox/ask.stream"; then
-    note "  confirmed: the hook held the command for approval (structured rejection or reason surfaced)"
+    note "  ok: the ask'd \`mkdir\` was held for approval and the hook's decision surfaced"
 else
     dump_deny_diagnostic "$sandbox/ask.stream"
-    note "  note: could not independently confirm the attempt via the stream; relied on the held side-effect"
+    fail "ask'd command did not run, but no hook rejection/reason surfaced — cannot confirm the gate held it (the agent may not have attempted it)"
 fi
 
 note "» case 4/5: built-in read tool — reading the secret must be blocked (beforeReadFile)"
