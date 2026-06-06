@@ -93,7 +93,7 @@
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/session-setup.sh\"",
-            "timeout": 900
+            "timeout": 30
           }
         ]
       }
