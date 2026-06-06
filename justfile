@@ -42,28 +42,53 @@ setup-check:
     @bash scripts/setup-check.sh
 
 # Install developer tools (cargo subcommands + git hooks) reproducibly.
+# Resilient to locked-down networks: when no prebuilt binary is reachable it
+# falls back to a source build, which the pinned toolchain is kept new enough to
+# complete (the cargo tools' deps require a recent rustc).
 bootstrap:
-    @echo "» installing cargo-binstall (if missing)"
-    @# Prefer the official prebuilt installer over `cargo install` from source:
-    @# compiling cargo-binstall can require a newer rustc than the pinned
-    @# toolchain (e.g. cargo-platform needs rustc 1.91 while this repo pins 1.89).
-    @command -v cargo-binstall >/dev/null || \
-        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-    @echo "» installing pinned dev tools"
-    cargo binstall --no-confirm --disable-telemetry \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "» installing cargo-binstall (if missing)"
+    if ! command -v cargo-binstall >/dev/null; then
+        # Prefer the prebuilt installer over `cargo install` from source: building
+        # cargo-binstall itself can need a newer rustc than the tools below.
+        curl -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+    fi
+    # Prefer a prebuilt binary; if every binary source is unreachable, build from
+    # source so a network-restricted environment can still provision.
+    binstall_or_build() {
+        cargo binstall --no-confirm --disable-telemetry "$1" \
+            || { echo "» no prebuilt binary reachable for $1 — building from source"; cargo install --locked "$1"; }
+    }
+    echo "» installing pinned dev tools"
+    for tool in \
         cargo-nextest@{{nextest-version}} \
         cargo-llvm-cov@{{llvmcov-version}} \
         cargo-deny@{{deny-version}} \
         cargo-machete@{{machete-version}} \
-        cargo-audit@{{audit-version}}
-    @command -v lefthook >/dev/null || cargo binstall --no-confirm --disable-telemetry lefthook
-    @echo "» installing benchmark + profiling tools"
-    cargo binstall --no-confirm --disable-telemetry \
+        cargo-audit@{{audit-version}}; do
+        binstall_or_build "$tool"
+    done
+    # lefthook is a Go binary (no cargo source build), so install the prebuilt
+    # only and warn rather than fail if it cannot be reached.
+    if ! command -v lefthook >/dev/null; then
+        cargo binstall --no-confirm --disable-telemetry lefthook \
+            || echo "! lefthook unavailable (no prebuilt reachable); install it manually to enable git hooks"
+    fi
+    echo "» installing benchmark + profiling tools"
+    for tool in \
         hyperfine@{{hyperfine-version}} \
         critcmp@{{critcmp-version}} \
-        samply@{{samply-version}}
-    @just hooks-install
-    @echo "✓ bootstrap complete"
+        samply@{{samply-version}}; do
+        binstall_or_build "$tool"
+    done
+    if command -v lefthook >/dev/null; then
+        just hooks-install
+    else
+        echo "» skipping git hooks (lefthook missing)"
+    fi
+    echo "✓ bootstrap complete"
 
 # Fetch locked dependencies and verify the pinned toolchain is present.
 sync:

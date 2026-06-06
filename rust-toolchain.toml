@@ -2,7 +2,7 @@
 # The channel is an exact stable release so that `cargo +<channel>` resolves
 # identically everywhere; bump deliberately alongside a `just upgrade`.
 [toolchain]
-channel = "1.89.0"
+channel = "1.96.0"
 components = ["rustfmt", "clippy", "llvm-tools"]
 targets = [
     "x86_64-unknown-linux-gnu",
