@@ -166,6 +166,17 @@ in this repo's GitHub Actions CI or when `ALLOWLISTER_SKIP_SETUP` is set. Set
 `ALLOWLISTER_AUTO_SETUP=1` to instead provision hands-off in a detached
 background process (still non-blocking).
 
+In a remote or CI environment that builds containers from a provisioning step,
+run `scripts/setup.sh` there so the toolchain is ready before a session starts:
+that avoids the in-session wait and the bootstrap order problem where `just` is
+itself installed by setup. Non-interactive shells do not source the login rc, so
+the asdf shims and `~/.cargo/bin` must be on `PATH` for tool calls — the setup
+scripts and session hook normalise this through `_load_tool_env`, but a bare
+shell needs them added explicitly. `lefthook` (git hooks) is the one optional
+tool: it has no cargo source fallback, so where its prebuilt is unreachable
+setup-check reports it as an advisory rather than failing, since building and
+testing do not depend on it.
+
 This project uses a narrow, repo-scoped command allowlist for the Claude Code
 agent in `.claude/settings.json`: common quality-gate operations are allowed
 through `just` recipes (e.g. `just full-check`, `just test`, `just clippy`), with
