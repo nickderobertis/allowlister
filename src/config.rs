@@ -24,10 +24,22 @@ pub struct LoadedConfig {
     pub rules: Vec<Rule>,
     /// Non-shell tool-call rules, evaluated by the tool engine.
     pub tool_rules: Vec<ToolRule>,
+    /// Usage-history recording settings (opt-in; see [`HistorySettings`]).
+    pub history: HistorySettings,
     /// Config files that were loaded (or skipped, annotated with the reason).
     pub sources: Vec<String>,
     /// Non-fatal problems encountered while loading.
     pub warnings: Vec<String>,
+}
+
+/// Whether allowlister records a local history of evaluated commands. Off by
+/// default; `init` offers to turn it on, and a later-loaded config file (project
+/// over user) wins. The hot path also honors the `ALLOWLISTER_HISTORY` env var
+/// as an override.
+#[derive(Debug, Clone, Default)]
+pub struct HistorySettings {
+    /// Record each evaluation (verdict plus parsed subcommands) to disk.
+    pub enabled: bool,
 }
 
 /// Blank out `//` line and `/* */` block comments so a config file may carry
@@ -165,6 +177,13 @@ fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
             return;
         }
     };
+    // A later config file overrides the history toggle of an earlier one (project
+    // over user), matching the merge order; an absent key leaves it untouched.
+    if let Some(history) = &raw.history {
+        if let Some(enabled) = history.enabled {
+            config.history.enabled = enabled;
+        }
+    }
     for (index, raw_rule) in raw.rules.into_iter().enumerate() {
         match raw_rule.compile(display) {
             Ok(Compiled::Bash(rule)) => config.rules.push(rule),
@@ -182,6 +201,14 @@ fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
 struct RawConfig {
     #[serde(default)]
     rules: Vec<RawRule>,
+    #[serde(default)]
+    history: Option<RawHistory>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawHistory {
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -706,6 +733,20 @@ mod tests {
         let config = load_from_paths(&[path]);
         assert_eq!(config.tool_rules.len(), 2);
         assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn history_toggle_defaults_off_and_parses_and_overrides() {
+        let dir = TempDir::new().unwrap();
+        // Absent key: default off.
+        let plain = write_config(&dir, "a.json", r#"{"rules":[]}"#);
+        assert!(!load_from_paths(&[plain]).history.enabled);
+        // Present and true: on.
+        let on = write_config(&dir, "b.json", r#"{"history":{"enabled":true},"rules":[]}"#);
+        assert!(load_from_paths(std::slice::from_ref(&on)).history.enabled);
+        // A later file (project over user) wins: user on, project off → off.
+        let off = write_config(&dir, "c.json", r#"{"history":{"enabled":false}}"#);
+        assert!(!load_from_paths(&[on, off]).history.enabled);
     }
 
     #[test]

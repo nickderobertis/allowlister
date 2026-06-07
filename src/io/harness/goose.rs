@@ -32,9 +32,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// True for Goose's shell tool. The developer extension exposes it as a bare
@@ -82,10 +82,11 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // and gated by the tool-rule engine. An unrecognized tool with no matching
     // rule defers, emitting nothing — exactly the prior non-shell behavior.
     let result = if is_shell_tool(&input.tool_name) {
-        domain::evaluate(&command_from(&input.tool_input), &loaded.rules)
+        let command = command_from(&input.tool_input);
+        gate::evaluate_shell(&loaded, "goose", dir, &command)
     } else {
         let call = normalize::goose(&input.tool_name, &input.tool_input);
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        gate::evaluate_tool(&loaded, "goose", dir, &call)
     };
 
     // Goose honors only a `block`. An allow or defer verdict emits nothing — a

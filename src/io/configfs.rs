@@ -71,6 +71,17 @@ pub(crate) fn local_config_path(dir: &Path) -> PathBuf {
     dir.join(".allowlister.json")
 }
 
+/// The directory usage history is written to: a `history/` folder beside the
+/// user-level config (XDG first, else `~/.config`). `None` when neither
+/// `XDG_CONFIG_HOME` nor `HOME` is set. History is intentionally user-global —
+/// one store spanning every project — with each event tagged by its project, so
+/// it survives across repositories and never lands in version control.
+pub(crate) fn default_history_dir(env: &Env) -> Option<PathBuf> {
+    let config = default_user_config_path(env)?;
+    let parent = config.parent().unwrap_or(Path::new("."));
+    Some(parent.join("history"))
+}
+
 /// Project configs from `cwd` up to a `.git` boundary or the filesystem root,
 /// returned outermost-first.
 pub fn project_config_paths(cwd: &Path) -> Vec<PathBuf> {

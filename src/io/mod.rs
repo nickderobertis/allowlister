@@ -10,5 +10,6 @@ pub mod crush_settings;
 pub mod cursor_settings;
 pub mod goose_settings;
 pub mod harness;
+pub mod history;
 pub mod opencode_settings;
 pub mod qwen_settings;

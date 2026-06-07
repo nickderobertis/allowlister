@@ -11,7 +11,8 @@ edition 2021, toolchain pinned in `rust-toolchain.toml`.
 - `src/lib.rs` — wiring and the public API; `run()` is the entry point.
 - `src/cli.rs` — clap definitions: args, subcommands, defaults in one place.
 - `src/domain/` — pure engine (glob, rule, analyzer, decision). No I/O.
-- `src/io/` — filesystem config discovery and harness stdin/stdout adapters.
+- `src/io/` — filesystem config discovery, harness stdin/stdout adapters, and the
+  opt-in usage-history store.
 - `src/commands/` — one module per CLI verb; orchestrates domain + io.
 - `src/config.rs` — JSON rule schema and user/project merge (a boundary, not
   domain).

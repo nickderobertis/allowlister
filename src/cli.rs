@@ -104,6 +104,37 @@ enum Command {
         /// Overwrite an existing config instead of refusing.
         #[arg(long)]
         force: bool,
+        /// Record a local history of evaluated commands to help you refine your
+        /// allowlist (off by default; you are asked when running interactively).
+        #[arg(long, overrides_with = "no_history")]
+        history: bool,
+        /// Do not record command history (the default).
+        #[arg(long = "no-history")]
+        no_history: bool,
+    },
+
+    /// Inspect recorded usage — how often each command, and each parsed
+    /// subcommand, was allowed, asked, denied, or deferred to the harness — so
+    /// you can refine your allowlist from real behavior. Recording is opt-in
+    /// (turn it on during `init`). With no subcommand, prints the frequency
+    /// report.
+    History {
+        #[command(subcommand)]
+        action: Option<HistoryAction>,
+        /// Which table to show: per-subcommand `fragments` (the default),
+        /// `programs` (collapsed to the leading program), or whole `commands`.
+        #[arg(long, value_enum, default_value = "fragments")]
+        view: ViewArg,
+        /// Show only rows that had this verdict, sorted by it. `defer` surfaces
+        /// the commands that fell through to the harness's own prompt.
+        #[arg(long, value_enum)]
+        verdict: Option<VerdictArg>,
+        /// Show at most this many rows.
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        /// Emit machine-readable JSON instead of a table.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Merge an allowlist into your config, creating it if absent. Re-running
@@ -122,6 +153,104 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
+}
+
+/// Maintenance subcommands for `history`.
+#[derive(Debug, Subcommand)]
+enum HistoryAction {
+    /// List the recent recorded events (a bounded, time-ordered window).
+    Recent {
+        /// Show at most this many events.
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        /// Keep only events whose project tag contains this substring.
+        #[arg(long)]
+        project: Option<String>,
+        /// Keep only events from this harness.
+        #[arg(long)]
+        harness: Option<String>,
+        /// Keep only events with this verdict.
+        #[arg(long, value_enum)]
+        verdict: Option<VerdictArg>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fold the recent-events log into the durable summary now.
+    Compact,
+    /// Delete all recorded history.
+    Clear {
+        /// Skip the confirmation prompt.
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
+    /// Print where history data is stored.
+    Path,
+}
+
+/// The frequency table `history` shows by default.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ViewArg {
+    /// Per parsed subcommand (the full subcommand string).
+    Fragments,
+    /// Per program (the subcommand's leading token).
+    Programs,
+    /// Per whole command line.
+    Commands,
+}
+
+/// A verdict, for `history` filters.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum VerdictArg {
+    Allow,
+    Deny,
+    Ask,
+    Defer,
+}
+
+impl HistoryAction {
+    /// Map the clap subcommand onto the command layer's action type.
+    fn into_command(self) -> commands::history::Action {
+        match self {
+            HistoryAction::Recent {
+                top,
+                project,
+                harness,
+                verdict,
+                json,
+            } => commands::history::Action::Recent(commands::history::RecentArgs {
+                top,
+                project,
+                harness,
+                verdict: verdict.map(Into::into),
+                json,
+            }),
+            HistoryAction::Compact => commands::history::Action::Compact,
+            HistoryAction::Clear { yes } => commands::history::Action::Clear { yes },
+            HistoryAction::Path => commands::history::Action::Path,
+        }
+    }
+}
+
+impl From<ViewArg> for commands::history::View {
+    fn from(arg: ViewArg) -> Self {
+        match arg {
+            ViewArg::Fragments => commands::history::View::Fragments,
+            ViewArg::Programs => commands::history::View::Programs,
+            ViewArg::Commands => commands::history::View::Commands,
+        }
+    }
+}
+
+impl From<VerdictArg> for crate::domain::Verdict {
+    fn from(arg: VerdictArg) -> Self {
+        match arg {
+            VerdictArg::Allow => crate::domain::Verdict::Allow,
+            VerdictArg::Deny => crate::domain::Verdict::Deny,
+            VerdictArg::Ask => crate::domain::Verdict::Ask,
+            VerdictArg::Defer => crate::domain::Verdict::Defer,
+        }
+    }
 }
 
 /// Supported coding harnesses.
@@ -178,6 +307,8 @@ impl Cli {
                 interactive,
                 yes,
                 force,
+                history,
+                no_history,
             } => {
                 // `--no-hooks` and `--hooks` override each other (last wins); if
                 // neither is given, leave the choice unset so the interactive
@@ -185,6 +316,15 @@ impl Cli {
                 let hooks = if no_hooks {
                     Some(false)
                 } else if hooks {
+                    Some(true)
+                } else {
+                    None
+                };
+                // History mirrors the same tri-state, but its non-interactive
+                // default is off, so an unset choice (`None`) records nothing.
+                let history = if no_history {
+                    Some(false)
+                } else if history {
                     Some(true)
                 } else {
                     None
@@ -198,8 +338,24 @@ impl Cli {
                     interactive,
                     yes,
                     force,
+                    history,
                 })
             }
+            Command::History {
+                action,
+                view,
+                verdict,
+                top,
+                json,
+            } => commands::history::run(
+                action.map(HistoryAction::into_command),
+                commands::history::ShowArgs {
+                    view: view.into(),
+                    verdict: verdict.map(Into::into),
+                    top,
+                    json,
+                },
+            ),
             Command::Install {
                 source,
                 global,

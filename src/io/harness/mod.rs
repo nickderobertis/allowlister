@@ -10,6 +10,7 @@ pub mod codex;
 pub mod copilot;
 pub mod crush;
 pub mod cursor;
+mod gate;
 pub mod goose;
 pub mod normalize;
 pub mod opencode;

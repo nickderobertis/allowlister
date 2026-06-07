@@ -1836,3 +1836,323 @@ fn opencode_read_tool_denies_secret_via_stdin() {
         .clone();
     assert_eq!(opencode_decision_of(&output), "deny");
 }
+
+// ---- usage history ---------------------------------------------------------
+//
+// Recording is opt-in. These drive the real binary with `ALLOWLISTER_HISTORY=1`
+// (the env override) or a config that turns it on, then assert the `history`
+// command reports what the hooks recorded. The store lives under the hermetic
+// `XDG_CONFIG_HOME`, so nothing touches the host.
+
+#[test]
+fn history_records_hook_evaluations_and_reports_them() {
+    let sandbox = Sandbox::new();
+    // One of each verdict: allow, defer, deny.
+    for command in [
+        "gh pr list | head -20",
+        "some_unknown_tool --flag",
+        "rm -rf /",
+    ] {
+        sandbox
+            .command()
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(sandbox.payload(command))
+            .assert()
+            .success();
+    }
+
+    // The JSON report aggregates the three evaluations.
+    let out = sandbox
+        .command()
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["events_total"], 3);
+    assert_eq!(value["overall"]["allow"], 1);
+    assert_eq!(value["overall"]["deny"], 1);
+    assert_eq!(value["overall"]["defer"], 1);
+
+    // The text report names a deferred subcommand and offers the refine tip.
+    let text = sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(text).unwrap();
+    assert!(text.contains("3 event(s) recorded"), "{text}");
+    assert!(text.contains("some_unknown_tool --flag"), "{text}");
+    assert!(text.contains("Tip:"), "{text}");
+}
+
+#[test]
+fn history_filter_recent_path_compact_and_clear() {
+    let sandbox = Sandbox::new();
+    for command in ["some_unknown_tool --flag", "gh pr list | head -20"] {
+        sandbox
+            .command()
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(sandbox.payload(command))
+            .assert()
+            .success();
+    }
+
+    // --verdict defer keeps only deferred subcommands.
+    let out = sandbox
+        .command()
+        .args(["history", "--verdict", "defer", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    let rows = value["rows"].as_array().unwrap();
+    assert!(rows.iter().all(|r| r["defer"].as_u64().unwrap() > 0));
+    assert!(rows.iter().any(|r| r["key"] == "some_unknown_tool --flag"));
+
+    // `path` prints where the store lives; `recent` lists the raw events.
+    sandbox
+        .command()
+        .args(["history", "path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allowlister"));
+    sandbox
+        .command()
+        .args(["history", "recent", "--harness", "claude-code"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("some_unknown_tool"));
+
+    // `compact` folds into the summary; `clear` wipes everything.
+    sandbox
+        .command()
+        .args(["history", "compact"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 event(s)"));
+    sandbox
+        .command()
+        .args(["history", "clear", "-y"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cleared"));
+    sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No usage recorded yet"));
+}
+
+#[test]
+fn history_is_off_by_default_and_records_nothing() {
+    let sandbox = Sandbox::new();
+    // No env override and the sandbox config does not opt in, so nothing records.
+    sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("gh pr list | head -20"))
+        .assert()
+        .success();
+    sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No usage recorded yet"));
+}
+
+#[test]
+fn init_history_flag_persists_the_toggle_and_drives_recording() {
+    let home = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    let cmd = || {
+        let mut c = Command::cargo_bin("allowlister").unwrap();
+        c.env("XDG_CONFIG_HOME", xdg.path())
+            .env("HOME", home.path());
+        c
+    };
+
+    // Opt in at init time (no env override).
+    cmd()
+        .args([
+            "init",
+            "--global",
+            "--profile",
+            "starter",
+            "--no-hooks",
+            "--history",
+            "-y",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("history recording is ON"));
+    let config = fs::read_to_string(xdg.path().join("allowlister/config.json")).unwrap();
+    assert!(config.contains("\"history\""), "{config}");
+
+    // The config flag alone (no env) now drives recording on the next hook run.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls -la" },
+        "cwd": home.path().to_string_lossy(),
+    })
+    .to_string();
+    cmd()
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    let out = cmd()
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["events_total"], 1);
+    assert_eq!(value["overall"]["allow"], 1);
+}
+
+#[test]
+fn history_records_tool_calls_and_a_second_harness() {
+    let sandbox = Sandbox::new();
+    // A non-shell tool call (Subject::Tool) through claude-code, and a shell call
+    // through a different harness (codex) — both must record via the shared gate.
+    let read = serde_json::json!({
+        "tool_name": "Read",
+        "tool_input": { "file_path": "/etc/hosts" },
+        "cwd": sandbox.cwd().to_string_lossy(),
+    })
+    .to_string();
+    sandbox
+        .command()
+        .env("ALLOWLISTER_HISTORY", "1")
+        .args(["hook", "claude-code"])
+        .write_stdin(read)
+        .assert()
+        .success();
+    sandbox
+        .command()
+        .env("ALLOWLISTER_HISTORY", "1")
+        .args(["hook", "codex"])
+        .write_stdin(sandbox.codex_payload("gh pr list"))
+        .assert()
+        .success();
+
+    // The tool call is recorded as a subcommand keyed by its tool name.
+    let out = sandbox
+        .command()
+        .args(["history", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["events_total"], 2);
+    let rows = value["rows"].as_array().unwrap();
+    assert!(rows.iter().any(|r| r["key"] == "Read"));
+
+    // recent --json carries the kind and the originating harness for each event.
+    let recent = sandbox
+        .command()
+        .args(["history", "recent", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&recent).unwrap();
+    let events = events.as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e["kind"] == "tool" && e["harness"] == "claude-code" && e["command"] == "Read"));
+    assert!(events
+        .iter()
+        .any(|e| e["kind"] == "shell" && e["harness"] == "codex"));
+}
+
+#[test]
+fn history_views_and_recent_project_filter() {
+    let sandbox = Sandbox::new();
+    for command in ["gh pr list | head -20", "some_unknown_tool --flag"] {
+        sandbox
+            .command()
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(sandbox.payload(command))
+            .assert()
+            .success();
+    }
+
+    // --view programs collapses subcommands to their leading program.
+    sandbox
+        .command()
+        .args(["history", "--view", "programs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PROGRAM").and(predicate::str::contains("gh")));
+    // --view commands shows whole command lines.
+    sandbox
+        .command()
+        .args(["history", "--view", "commands"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gh pr list | head -20"));
+
+    // recent --project keeps only events whose project tag matches; a bogus tag
+    // matches nothing.
+    let project = sandbox.cwd().to_string_lossy().into_owned();
+    sandbox
+        .command()
+        .args(["history", "recent", "--project", &project])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("some_unknown_tool"));
+    sandbox
+        .command()
+        .args(["history", "recent", "--project", "/no/such/project"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No recent events"));
+}
+
+#[test]
+fn init_no_history_persists_the_disabled_toggle() {
+    let home = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    let out = Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("HOME", home.path())
+        .current_dir(project.path())
+        .args([
+            "init",
+            "--local",
+            "--profile",
+            "starter",
+            "--no-hooks",
+            "--no-history",
+            "-y",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(String::from_utf8(out).unwrap().contains("OFF"));
+    // The choice is persisted explicitly as disabled.
+    let config = fs::read_to_string(project.path().join(".allowlister.json")).unwrap();
+    assert!(config.contains("\"enabled\": false"), "{config}");
+}

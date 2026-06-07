@@ -89,6 +89,16 @@ printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"comman
 export XDG_CONFIG_HOME="$sandbox/xdg"
 export HOME="$sandbox"
 
+# Seed a usage-history store so the `history` report benchmarks a non-trivial
+# aggregate rather than the empty fast path. Recording is opt-in, so force it on
+# for the seed only (the timed `history` rows read with it off). This writes under
+# the hermetic XDG dir, never the host.
+note "» seeding usage history"
+for cmd in 'gh pr list | head -20' 'git status' 'npm run build' 'cargo test' 'some_unknown_tool'; do
+    printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' \
+        "$cmd" "$proj" | ALLOWLISTER_HISTORY=1 "$bin" hook claude-code >/dev/null
+done
+
 mkdir -p "$out"
 
 note "» benchmarking $bin"
@@ -111,6 +121,9 @@ hyperfine \
     -n "check:json" "'$bin' check 'gh pr list' --json --cwd '$proj'" \
     -n "explain" "'$bin' explain 'gh pr list | head -20 | wc -l' --cwd '$proj'" \
     -n "hook:allow" "'$bin' hook claude-code < '$payload'" \
+    -n "hook:record" "ALLOWLISTER_HISTORY=1 '$bin' hook claude-code < '$payload'" \
+    -n "history" "'$bin' history > /dev/null" \
+    -n "history:json" "'$bin' history --json > /dev/null" \
     -n "init:local" "cd '$initdir' && '$bin' init --local > /dev/null" \
     -n "install:profile" "'$bin' install read-only --output '$installdir/config.json' > /dev/null"
 
