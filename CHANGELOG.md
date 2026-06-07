@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2](https://github.com/nickderobertis/allowlister/compare/v0.4.1...v0.4.2) - 2026-06-07
+
+### Added
+
+- record and report allowlister usage history ([#46](https://github.com/nickderobertis/allowlister/pull/46))
+
 ## [0.4.1](https://github.com/nickderobertis/allowlister/compare/v0.4.0...v0.4.1) - 2026-06-06
 
 ### Added
