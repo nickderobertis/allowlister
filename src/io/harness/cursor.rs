@@ -20,9 +20,9 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// Wire the adapter to the process's standard streams.
@@ -61,13 +61,13 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     let result = match input.hook_event_name.as_str() {
         "beforeReadFile" => {
             let call = normalize::cursor_read(input.file_path.as_deref().unwrap_or_default());
-            domain::evaluate_tool_call(&call, &loaded.tool_rules)
+            gate::evaluate_tool(&loaded, "cursor", dir, &call)
         }
         "beforeMCPExecution" => {
             let call = normalize::cursor_mcp(&input.tool_name, &input.tool_input);
-            domain::evaluate_tool_call(&call, &loaded.tool_rules)
+            gate::evaluate_tool(&loaded, "cursor", dir, &call)
         }
-        _ => domain::evaluate(&input.command, &loaded.rules),
+        _ => gate::evaluate_shell(&loaded, "cursor", dir, &input.command),
     };
 
     let permission = match result.verdict {

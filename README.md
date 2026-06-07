@@ -255,7 +255,7 @@ allowlister explain '<cmd>' [--cwd P]
                                   decision, and overall verdict. The primary debugging tool.
 allowlister init [--global | --local] [--profile SOURCE]
                  [--harness claude-code|cursor|copilot|codex|crush|qwen|goose|opencode]
-                 [--hooks | --no-hooks] [-i | -y] [--force]
+                 [--hooks | --no-hooks] [--history | --no-history] [-i | -y] [--force]
                                   Set up: write a config from a ruleset (starter,
                                   read-only, repo-write, or a file) and register
                                   the hook in the chosen harness's settings (the
@@ -267,6 +267,14 @@ allowlister install <source> [--global | --local | --output P]
                                   read-only or repo-write — or a path to a JSON
                                   file) into your config. Idempotent: re-running
                                   never duplicates rules.
+allowlister history [--view fragments|programs|commands] [--verdict V]
+                    [--top N] [--json]
+                                  Report recorded usage: how often each parsed
+                                  subcommand (and each whole command) was allowed,
+                                  asked, denied, or deferred. Recording is opt-in.
+allowlister history recent|compact|clear|path
+                                  List recent events, fold them into the summary,
+                                  delete all history, or print the store location.
 ```
 
 Examples:
@@ -286,6 +294,61 @@ exit=2
 $ allowlister explain 'gh pr list | head -20 | wc -l'
 ... fragment table, per-fragment decisions, verdict: ALLOW
 ```
+
+## Usage history
+
+To refine an allowlist you need to know what is actually happening: which
+commands the agent runs, and which ones fall through to a permission prompt
+because no rule covers them. `allowlister history` answers that from a local
+record of every evaluation.
+
+Recording is **opt-in and off by default** — it logs the commands your agent
+runs, so you turn it on deliberately. `allowlister init` asks once (interactive)
+or takes `--history` / `--no-history`; either way the choice is stored in your
+config as `"history": { "enabled": true }`. The `ALLOWLISTER_HISTORY=1` (or `0`)
+environment variable overrides the config per run.
+
+Each evaluation is recorded with its harness, project (the cwd it ran in), the
+overall verdict, and every parsed subcommand with the rule that decided it.
+
+```text
+$ allowlister history
+allowlister usage history — 13 event(s) recorded
+
+  allow 8   ask 0   deny 1   defer 4
+
+Most-evaluated subcommands:
+
+  TOTAL  ALLOW  ASK  DENY  DEFER  SUBCOMMAND         RULE
+      6      6    0     0      0  git status         git read-only
+      3      3    0     0      0  git log --oneline  git read-only
+      3      0    0     0      3  npm run build
+      1      0    0     0      1  cargo test
+      1      0    0     1      0  rm -rf /tmp/junk   no rm -rf
+
+Tip: `allowlister history --verdict defer` lists what fell through to the
+harness's own prompt — the best candidates for a new allow rule.
+```
+
+The counts are **per parsed subcommand**, not per whole command line, so
+`git status` inside `git status && npm run build` is tallied as `git status`.
+That is the unit a rule matches, which makes the report directly actionable:
+
+- `--verdict defer` ranks the commands no rule covered — add allow rules for the
+  frequent, safe ones.
+- `--view programs` collapses subcommands to their leading program (`git`,
+  `npm`); `--view commands` shows whole command lines instead.
+- `--json` emits a stable object for scripting.
+
+### Bounded storage
+
+History lives under your config directory (e.g.
+`~/.config/allowlister/history/`), user-global and tagged per project, never in
+version control. It never grows without bound: raw events accumulate in a small
+recent log that is periodically folded into a cumulative `summary.json`, whose
+size is bounded by the number of *distinct* commands — not by how many ran. The
+summary is the precomputed full history, so the report stays fast no matter how
+long you have been recording. `allowlister history clear` wipes it.
 
 ## Rule schema
 

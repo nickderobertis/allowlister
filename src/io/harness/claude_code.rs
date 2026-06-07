@@ -14,9 +14,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// Claude Code's shell tool. Everything else is a non-shell tool call.
@@ -60,10 +60,10 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        domain::evaluate(command, &loaded.rules)
+        gate::evaluate_shell(&loaded, "claude-code", cwd, command)
     } else {
         let call = normalize::claude(&input.tool_name, &input.tool_input);
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        gate::evaluate_tool(&loaded, "claude-code", cwd, &call)
     };
 
     let decision = match result.verdict {

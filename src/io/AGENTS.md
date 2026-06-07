@@ -16,3 +16,13 @@
   or reads a blocking exit code, express every non-deny verdict — ask and defer
   alike — and any internal read/parse failure through its no-decision
   fall-through, so an internal error can never become a deny.
+- Every adapter routes its decision through the shared `gate` (engine call plus
+  history recording), never the engine directly, so recording is defined once;
+  `check`/`explain` call the engine directly and do not record.
+- Usage history is opt-in and best-effort: recording runs inside the hook hot
+  path, so it must never block, slow, or alter a decision — every error is
+  swallowed. The hot path only appends (atomic per line); the read-modify-write
+  fold into the durable summary is serialized by an exclusive-create lock so
+  concurrent hook processes can never double-count. Keep the store bounded: raw
+  events are folded and cleared, and the summary's per-key maps are capped with
+  an overflow bucket, so disk use tracks distinct commands, not call volume.

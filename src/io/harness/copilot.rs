@@ -29,9 +29,9 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// The tool name Copilot uses for shell commands. Any other tool is not a shell
@@ -75,10 +75,11 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // every tool, so no settings change is needed; an unrecognized tool with no
     // matching rule defers, emitting nothing — exactly the prior non-shell flow.
     let result = if input.tool_name == SHELL_TOOL {
-        domain::evaluate(&command_from(&input.tool_args), &loaded.rules)
+        let command = command_from(&input.tool_args);
+        gate::evaluate_shell(&loaded, "copilot", dir, &command)
     } else {
         let call = normalize::copilot(&input.tool_name, &input.tool_args);
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        gate::evaluate_tool(&loaded, "copilot", dir, &call)
     };
 
     if matches!(result.verdict, Verdict::Defer) {

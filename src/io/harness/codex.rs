@@ -30,9 +30,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// The canonical tool name Codex uses for shell commands. Any other tool is not
@@ -75,10 +75,11 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // the tool-rule engine. An unrecognized tool with no matching rule defers,
     // emitting nothing — exactly the prior non-shell behavior.
     let result = if input.tool_name == SHELL_TOOL {
-        domain::evaluate(&command_from(&input.tool_input), &loaded.rules)
+        let command = command_from(&input.tool_input);
+        gate::evaluate_shell(&loaded, "codex", dir, &command)
     } else {
         let call = normalize::codex(&input.tool_name, &input.tool_input);
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        gate::evaluate_tool(&loaded, "codex", dir, &call)
     };
 
     // Codex honors only `deny` on `PreToolUse`. An allow or defer verdict emits

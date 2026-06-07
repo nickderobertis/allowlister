@@ -42,6 +42,9 @@ pub struct InitArgs {
     pub yes: bool,
     /// Overwrite an existing config instead of refusing.
     pub force: bool,
+    /// `Some(true)` for `--history`, `Some(false)` for `--no-history`, `None`
+    /// when neither was passed (ask interactively; default off otherwise).
+    pub history: Option<bool>,
 }
 
 /// The settings snippet `install` (and `init --no-hooks`) print for manual
@@ -214,9 +217,20 @@ pub fn run(args: InitArgs) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     let plan = resolve_plan(&args, interactive, &mut input, &mut out)?;
+    // Asked after the plan so the history prompt comes last; reads from the same
+    // stdin the plan prompts used.
+    let history = resolve_history(&args, interactive, &mut input, &mut out)?;
     let env = Env::from_process();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    execute(&plan, args.force, &cwd, &env, &mut out)
+    let code = execute(&plan, args.force, &cwd, &env, &mut out)?;
+    // Persist the history choice into the config `execute` just wrote. Only when
+    // the user made an explicit choice, so a default non-interactive run leaves
+    // the profile byte-for-byte as written.
+    if let Some(enabled) = history {
+        let path = config_target(plan.global, &cwd, &env)?;
+        apply_history(&path, enabled, &mut out)?;
+    }
+    Ok(code)
 }
 
 /// Fill in each decision the user did not pin on the command line: from a prompt
@@ -320,6 +334,63 @@ fn resolve_hooks<R: BufRead, W: Write>(
         ),
     )?;
     Ok(!matches!(answer.to_ascii_lowercase().as_str(), "n" | "no"))
+}
+
+/// Resolve whether to record command history: the flag wins; otherwise ask when
+/// interactive (default no), or leave it unset — `None` — when not, so a
+/// non-interactive run records nothing and writes no history key.
+fn resolve_history<R: BufRead, W: Write>(
+    args: &InitArgs,
+    interactive: bool,
+    input: &mut R,
+    out: &mut W,
+) -> Result<Option<bool>> {
+    if let Some(history) = args.history {
+        return Ok(Some(history));
+    }
+    if !interactive {
+        return Ok(None);
+    }
+    let answer = ask(
+        input,
+        out,
+        "Record a local history of evaluated commands? It logs each command's \
+         verdict and parsed subcommands under your config dir to help you refine \
+         your allowlist (clear anytime with `allowlister history clear`). [y/N]\n> ",
+    )?;
+    Ok(Some(matches!(
+        answer.to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    )))
+}
+
+/// Persist the history choice into the config `execute` just wrote, then report
+/// it. Reads the file back as JSON and inserts a `history` object, leaving the
+/// rest untouched.
+fn apply_history<W: Write>(path: &Path, enabled: bool, out: &mut W) -> Result<()> {
+    let mut doc = profile::read_target(path)?;
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert(
+            "history".to_string(),
+            serde_json::json!({ "enabled": enabled }),
+        );
+    }
+    profile::write_config(path, &doc)?;
+    let _ = writeln!(out);
+    if enabled {
+        let _ = writeln!(
+            out,
+            "Command history recording is ON. Review it with `allowlister history`; \
+             clear it with `allowlister history clear`."
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Command history recording is OFF. Enable it later by re-running init or \
+             setting \"history\": {{ \"enabled\": true }} in your config."
+        );
+    }
+    Ok(())
 }
 
 /// Write the prompt, flush it, and read one trimmed line. An empty line (the
@@ -782,6 +853,7 @@ mod tests {
             interactive: false,
             yes: true,
             force: false,
+            history: None,
         }
     }
 
@@ -800,6 +872,7 @@ mod tests {
                 interactive: true,
                 yes: false,
                 force: false,
+                history: None,
             },
             true,
             &mut input,
@@ -826,6 +899,7 @@ mod tests {
                 interactive: false,
                 yes: true,
                 force: false,
+                history: None,
             },
             false,
             &mut input,
@@ -853,6 +927,7 @@ mod tests {
                 interactive: true,
                 yes: false,
                 force: false,
+                history: None,
             },
             true,
             &mut input,
@@ -880,6 +955,7 @@ mod tests {
                 interactive: true,
                 yes: false,
                 force: false,
+                history: None,
             },
             true,
             &mut input,
@@ -889,6 +965,74 @@ mod tests {
         assert!(plan.global);
         assert_eq!(plan.source, "read-only");
         assert!(!plan.hooks);
+    }
+
+    #[test]
+    fn resolve_history_flag_wins_over_prompt() {
+        let mut a = args();
+        a.history = Some(true);
+        let mut input = io::Cursor::new(b"");
+        let mut out = Vec::new();
+        assert_eq!(
+            resolve_history(&a, true, &mut input, &mut out).unwrap(),
+            Some(true)
+        );
+        assert!(out.is_empty(), "the flag short-circuits the prompt");
+    }
+
+    #[test]
+    fn resolve_history_non_interactive_defaults_to_unset() {
+        let mut a = args();
+        a.history = None;
+        let mut input = io::Cursor::new(b"");
+        let mut out = Vec::new();
+        // Unset (None) means "write no history key", the default-off path.
+        assert_eq!(
+            resolve_history(&a, false, &mut input, &mut out).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_history_interactive_reads_yes_or_default_no() {
+        let mut a = args();
+        a.history = None;
+        let mut yes = io::Cursor::new(b"y\n");
+        let mut out = Vec::new();
+        assert_eq!(
+            resolve_history(&a, true, &mut yes, &mut out).unwrap(),
+            Some(true)
+        );
+        // Empty line (just enter) takes the default: no.
+        let mut no = io::Cursor::new(b"\n");
+        let mut out = Vec::new();
+        assert_eq!(
+            resolve_history(&a, true, &mut no, &mut out).unwrap(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn apply_history_persists_the_flag_into_the_config() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(
+            &path,
+            r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        apply_history(&path, true, &mut out).unwrap();
+        let loaded = crate::config::load_from_paths(std::slice::from_ref(&path));
+        assert!(loaded.history.enabled, "history must be turned on");
+        assert!(loaded.warnings.is_empty(), "the rewrite must stay valid");
+        assert_eq!(loaded.rules.len(), 1, "existing rules survive");
+        assert!(String::from_utf8(out).unwrap().contains("ON"));
+        // Re-applying with false rewrites the flag.
+        let mut out = Vec::new();
+        apply_history(&path, false, &mut out).unwrap();
+        assert!(!crate::config::load_from_paths(&[path]).history.enabled);
+        assert!(String::from_utf8(out).unwrap().contains("OFF"));
     }
 
     /// An `Env` whose home and XDG both point inside `dir`, so global writes stay

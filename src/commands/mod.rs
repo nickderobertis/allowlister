@@ -3,6 +3,7 @@
 
 pub mod check;
 pub mod explain;
+pub mod history;
 pub mod hook;
 pub mod init;
 pub mod install;

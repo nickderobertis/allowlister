@@ -30,9 +30,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::normalize;
+use super::{gate, normalize};
 use crate::config;
-use crate::domain::{self, Verdict};
+use crate::domain::Verdict;
 use crate::errors::Result;
 
 /// Whether this call is a shell command: the shim labels OpenCode's shell tool
@@ -83,10 +83,11 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // every other tool is normalized and gated by the tool-rule engine. An
     // unrecognized tool with no matching rule emits nothing — the prior behavior.
     let result = if is_shell_call(&input) {
-        domain::evaluate(&command_from(&input.tool_input), &loaded.rules)
+        let command = command_from(&input.tool_input);
+        gate::evaluate_shell(&loaded, "opencode", dir, &command)
     } else {
         let call = normalize::opencode(&input.tool_name, &input.tool_input);
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        gate::evaluate_tool(&loaded, "opencode", dir, &call)
     };
 
     // Only `deny` is asserted. An allow or defer verdict emits nothing — the shim
