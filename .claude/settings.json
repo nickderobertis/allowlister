@@ -1,5 +1,41 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "allowlister hook claude-code",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "allowlister hook claude-code",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Read|Edit|Write|Glob|Grep|WebFetch|WebSearch|NotebookEdit|mcp__.*"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/session-setup.sh\"",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "startup|resume|clear"
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(just bootstrap)",
@@ -83,20 +119,11 @@
       "Bash(cat clippy.toml)",
       "Bash(cat deny.toml)",
       "Bash(cat justfile)"
-    ]
-  },
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume|clear",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PROJECT_DIR}/scripts/session-setup.sh\"",
-            "timeout": 30
-          }
-        ]
-      }
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf /*)"
     ]
   }
 }
