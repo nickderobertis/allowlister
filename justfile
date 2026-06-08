@@ -163,6 +163,10 @@ test-goose:
 test-opencode:
     @bash scripts/e2e-opencode.sh
 
+# Install the refine-allowlist skill via `gh skill` and assert its CLI contract (needs gh 2.93+; opt-in, not in full-check).
+verify-skill:
+    @bash scripts/verify-skill-install.sh
+
 # Enforce line, function, and region coverage across all tests; a miss in any
 # one fails the command.
 test-cov:
