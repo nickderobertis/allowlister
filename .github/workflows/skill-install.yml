@@ -1,0 +1,80 @@
+name: Skill install
+
+# Verifies the `refine-allowlist` agent skill installs via `gh skill` and that
+# the allowlister CLI contract it drives still holds (scripts/verify-skill-install.sh).
+#
+# Informational, like the live-harness checks: it is NOT part of `just full-check`
+# and is not a required check. It needs the `gh skill` preview command (not the
+# pinned Rust toolchain alone), so it lives in its own workflow. It is hermetic
+# (no network, no secrets) and runs only when the skill or the binary changes —
+# the skill depends on the binary's `history`/`install`/`explain`/`check` surface.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "skills/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/verify-skill-install.sh"
+      - ".github/workflows/skill-install.yml"
+  pull_request:
+    paths:
+      - "skills/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/verify-skill-install.sh"
+      - ".github/workflows/skill-install.yml"
+  workflow_dispatch:
+
+# Least privilege: only needs to read the repository. No secrets are used, so
+# this is safe to run on fork pull requests.
+permissions:
+  contents: read
+
+concurrency:
+  group: skill-install-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Satisfies gh's auth check; only local `gh skill` operations are performed.
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  verify:
+    name: gh skill install + CLI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure gh has the skill command
+        run: |
+          if gh skill --help >/dev/null 2>&1; then
+            echo "gh skill available: $(gh --version | head -1)"
+          else
+            echo "Upgrading GitHub CLI to a version with 'gh skill'…"
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+            sudo apt-get update
+            sudo apt-get install -y gh
+            gh --version | head -1
+            gh skill --help >/dev/null 2>&1 \
+              || { echo "::error::gh skill still unavailable after upgrade"; exit 1; }
+          fi
+
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - run: just build
+      - run: just verify-skill

@@ -350,6 +350,32 @@ size is bounded by the number of *distinct* commands — not by how many ran. Th
 summary is the precomputed full history, so the report stays fast no matter how
 long you have been recording. `allowlister history clear` wipes it.
 
+## Refine your allowlist (skill)
+
+`history` tells you what fell through; turning that into rules is the next step. The
+**`refine-allowlist`** agent skill (in [`skills/refine-allowlist/`](skills/refine-allowlist))
+closes that loop. It reads your recorded history and proposes rule changes — allow the safe,
+frequent deferrals; allow the commands you keep approving; flag risky ones as `deny`/`ask` —
+then shows you the plan. You edit it (add, remove, retarget global↔local, loosen, tighten)
+and confirm; only then does it apply the approved rules with
+[`install`](#recommended-profiles) and verify the new verdicts with `explain`/`check`. It
+never edits config JSON by hand and never silently widens access.
+
+The skill follows the open [Agent Skills spec](https://agentskills.io), so it installs with
+the GitHub CLI (`gh` 2.93+):
+
+```sh
+# user scope — available in every project you work in (history is user-global)
+gh skill install nickderobertis/allowlister refine-allowlist --agent claude-code --scope user
+
+# or project scope — into the current repo only
+gh skill install nickderobertis/allowlister refine-allowlist --agent claude-code --scope project
+```
+
+`--agent` accepts any supported harness (`cursor`, `codex`, …), not just `claude-code`.
+Until a release tag includes the skill, add `--pin main` to install it from the default
+branch. Then ask your agent to "refine my allowlist from history".
+
 ## Rule schema
 
 Rules live in JSON config files (see [`examples/`](examples/)). `//` line and
