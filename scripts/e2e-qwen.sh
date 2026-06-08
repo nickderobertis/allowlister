@@ -60,6 +60,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -131,24 +138,24 @@ if al_have_python; then
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * `qwen -p` is the non-interactive entry point.
-#  * --auth-type openai + -m select the provider/model non-interactively; without
-#    an explicit auth type Qwen refuses to run in `-p` mode ("No auth type is
-#    selected") unless all three OPENAI_* env vars are set.
-#  * --yolo auto-approves every tool call, so the ONLY thing that can block a
-#    command is our PreToolUse hook — making the deny case a true test of the
-#    hook's authority in a full-auto run.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `qwen --yolo -m … -p …` invocation) and captured
+# into $stream / $stream.err by al_run.
+#  * --model selects the model; --auth-type openai is passed verbatim after `--`
+#    (oneharness's qwen adapter takes no auth-type flag). Without an explicit auth
+#    type Qwen refuses to run in `-p` mode ("No auth type is selected") unless all
+#    three OPENAI_* env vars are set.
+#  * bypass-by-default maps to --yolo, which auto-approves every tool call, so the
+#    ONLY thing that can block a command is our PreToolUse hook — making the deny
+#    case a true test of the hook's authority in a full-auto run.
+#  * --bin honors the QWEN_BIN override; --cwd/--timeout replace the cd+timeout
+#    wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
-    ( cd "$proj" && timeout 180 "$agent_bin" --yolo \
-        --auth-type openai \
-        -m "$model" \
-        -p "$prompt" \
-        </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    al_run qwen "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --model "$model" \
+        --bin qwen="$agent_bin" \
+        -- --auth-type openai
 }
 
 # True if allowlister's own reason text reached the Qwen transcript. Qwen may

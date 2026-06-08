@@ -53,6 +53,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -126,21 +133,24 @@ if al_have_python; then
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * `goose run -t` is the non-interactive entry point.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `goose run --with-builtin developer -t …`
+# invocation) and captured into $stream / $stream.err by al_run.
 #  * --with-builtin developer guarantees the developer__shell/developer__write
-#    tools are loaded; --with-extension adds the MCP server fixture when present.
-#  * GOOSE_MODE=auto auto-approves every tool call, so the ONLY thing that can
-#    block a command is our PreToolUse hook — making the deny case a true test of
-#    the hook's authority in a full-auto run.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+#    tools are loaded; the MCP server fixture is added verbatim after `--` as
+#    --with-extension (oneharness's goose adapter takes no extension flag).
+#  * GOOSE_MODE=auto (exported above, inherited by the child) auto-approves every
+#    tool call, so the ONLY thing that can block a command is our PreToolUse hook —
+#    making the deny case a true test of the hook's authority in a full-auto run.
+#    Goose reads its provider/model from the inherited environment, so oneharness
+#    maps neither --model nor a bypass flag here.
+#  * --bin honors the GOOSE_BIN override; --cwd/--timeout replace the cd+timeout
+#    wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
-    ( cd "$proj" && timeout 180 "$agent_bin" run --with-builtin developer \
-        "${goose_ext_args[@]}" -t "$prompt" \
-        </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    al_run goose "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --bin goose="$agent_bin" \
+        -- "${goose_ext_args[@]}"
 }
 
 # True if allowlister's own reason text reached the Goose transcript. Goose may

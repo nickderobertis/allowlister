@@ -52,6 +52,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -119,23 +126,22 @@ JSON
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * `opencode run` is the non-interactive entry point.
-#  * --dangerously-skip-permissions relaxes OpenCode's OWN permission system (it
-#    otherwise auto-rejects every request headless). Our plugin's throw fires
-#    regardless, so this makes the deny case a true test of the plugin's authority.
-#  * -m sets the model; --format json keeps output machine-readable.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `opencode run …` invocation) and captured into
+# $stream / $stream.err by al_run.
+#  * bypass-by-default maps to --dangerously-skip-permissions: it relaxes
+#    OpenCode's OWN permission system (it otherwise auto-rejects every request
+#    headless). Our plugin's throw fires regardless, so the deny case is a true
+#    test of the plugin's authority.
+#  * --model sets the model; --output-format json keeps output machine-readable
+#    (oneharness spells OpenCode's flag `--format`).
+#  * --bin honors the OPENCODE_BIN override; --cwd/--timeout replace the cd+timeout
+#    wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
-    ( cd "$proj" && timeout 180 "$agent_bin" run \
-        --dangerously-skip-permissions \
-        --format json \
-        -m "$model" \
-        "$prompt" \
-        </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    al_run opencode "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --model "$model" \
+        --output-format json --bin opencode="$agent_bin"
 }
 
 # True if allowlister's own reason text reached the OpenCode transcript. OpenCode

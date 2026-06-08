@@ -53,6 +53,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -117,22 +124,22 @@ if al_have_python; then
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * `crush run` is the non-interactive entry point; it auto-approves the whole
-#    session, so the ONLY thing that can block a command is our PreToolUse hook —
-#    making the deny case a true test of the hook's authority in an unattended run.
-#  * -q suppresses the spinner.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `crush run -q [-m …] …` invocation) and captured
+# into $stream / $stream.err by al_run.
+#  * `crush run` auto-approves the whole session, so the ONLY thing that can block
+#    a command is our PreToolUse hook — making the deny case a true test of the
+#    hook's authority in an unattended run. oneharness maps no bypass flag here
+#    (Crush has none) and passes -m only when a model is set.
+#  * --bin honors the CRUSH_BIN override; --cwd/--timeout replace the cd+timeout
+#    wrapper (oneharness runs the child with stdin from /dev/null and -q quiets it).
 run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
-    [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(-m "$ALLOWLISTER_E2E_MODEL")
-    ( cd "$proj" && timeout 180 "$agent_bin" run -q \
-        "${model_args[@]}" \
-        "$prompt" \
-        </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    al_run crush "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --bin crush="$agent_bin" \
+        "${model_args[@]}"
 }
 
 # True if allowlister's own reason text reached the Crush transcript. Crush may

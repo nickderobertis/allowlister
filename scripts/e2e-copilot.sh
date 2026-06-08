@@ -52,6 +52,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -127,29 +134,28 @@ if al_have_python; then
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * --allow-all-tools / --allow-all-paths: no human approver exists in a headless
-#    run, so these stop Copilot blocking on its own confirmation and let it write
-#    the sentinel paths absent our gate. The preToolUse hook still runs and a hook
-#    `deny` still blocks (it is consulted before the permission service), so the
-#    hook remains the sole decider for the cases we assert.
-#  * --no-ask-user: never pause for input in a non-interactive run.
-#  * XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user config
-#    leaks in; COPILOT_HOME (set above) isolates Copilot's own config.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `copilot -p … --allow-all-tools …` invocation) and
+# captured into $stream / $stream.err by al_run.
+#  * bypass-by-default maps to --allow-all-tools --allow-all-paths --no-ask-user:
+#    no human approver exists in a headless run, so these stop Copilot blocking on
+#    its own confirmation and let it write the sentinel paths absent our gate. The
+#    preToolUse hook still runs and a hook `deny` still blocks (it is consulted
+#    before the permission service), so the hook remains the sole decider for the
+#    cases we assert. -m is passed only when a model is set.
+#  * --env XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user
+#    config leaks in; COPILOT_HOME (exported above, inherited) isolates Copilot's
+#    own config.
+#  * --bin honors the COPILOT_BIN override; --cwd/--timeout replace the cd+timeout
+#    wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
-    ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
-        timeout 180 "$agent_bin" -p "$prompt" \
-            --allow-all-tools \
-            --allow-all-paths \
-            --no-ask-user \
-            "${model_args[@]}" \
-            </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    al_run copilot "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --bin copilot="$agent_bin" \
+        --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        "${model_args[@]}"
 }
 
 # True if allowlister's own reason text reached the agent transcript. Copilot may
