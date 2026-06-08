@@ -172,3 +172,35 @@ al_mcp_conclude() {
         note "  note: could not independently confirm the MCP call was attempted (token/reason not echoed)"
     fi
 }
+
+# Drive one harness through the `oneharness` CLI and write its raw stdout/stderr
+# to the `$stream` / `$stream.err` files the assertions above already read.
+#
+# `oneharness` encapsulates each harness's non-interactive invocation (its
+# `-p`/`run` entry, permission-bypass flag, model flag, and output format), so the
+# per-script run logic — timeout, output capture, skip-if-missing — lives here
+# once instead of being re-hand-rolled in every e2e script. The harness's exact
+# extra flags (those `oneharness` does not model, e.g. `--max-turns`, `--verbose`,
+# `--mcp-config`) are passed verbatim after a `--`.
+#
+# Usage: al_run <harness-id> <prompt> <stream> [extra `oneharness run` args...]
+#   Common extras: --cwd "$proj" --timeout N --model "$m" --output-format stream-json
+#                  --env KEY=VALUE --no-bypass -- <verbatim harness args>
+al_run() {
+    local id="$1" prompt="$2" stream="$3"
+    shift 3
+    local od
+    od="$(mktemp -d)"
+    # The JSON report on stdout is discarded (the assertions read the stream
+    # files); --output-dir gives us the raw transcript without needing a JSON
+    # parser. A non-zero harness exit is not fatal here — the outcome is judged by
+    # the stream and the command's side effects, exactly as before.
+    oneharness run --harness "$id" --prompt "$prompt" \
+        --output-dir "$od" --compact "$@" >/dev/null 2>"$od/oneharness.err" || true
+    cp -f "$od/$id.stdout" "$stream" 2>/dev/null || : >"$stream"
+    cp -f "$od/$id.stderr" "$stream.err" 2>/dev/null || : >"$stream.err"
+    # Append oneharness's own diagnostics (a spawn failure or timeout note) so a
+    # CI failure points straight at the cause.
+    [ -s "$od/oneharness.err" ] && cat "$od/oneharness.err" >>"$stream.err"
+    rm -rf "$od"
+}
