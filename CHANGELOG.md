@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/nickderobertis/allowlister/compare/v0.4.2...v0.4.3) - 2026-06-08
+
+### Added
+
+- add refine-allowlist agent skill to tune configs from history ([#48](https://github.com/nickderobertis/allowlister/pull/48))
+
 ## [0.4.2](https://github.com/nickderobertis/allowlister/compare/v0.4.1...v0.4.2) - 2026-06-07
 
 ### Added
