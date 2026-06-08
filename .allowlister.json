@@ -1,0 +1,741 @@
+{
+  "name": "repo-write",
+  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is permissive by design and is NOT a sandbox: build/test/run tools and interpreters can execute arbitrary project code the gate never sees; the tiers are guardrails against obvious mistakes, not a containment boundary.",
+  "rules": [
+    // Verdict tiers (see examples/AGENTS.md for the full rationale):
+    //   allow  -- auto-approved.
+    //   ask    -- surfaced for human approval. Outranks a broad allow, so a risky
+    //             variant (force-push, publish, curl|sh, rm -rf, gh api writes) is
+    //             held for confirmation without narrowing the allow it sits under.
+    //   deny   -- hard-blocked, no prompt. Reserved for the never-legitimate core:
+    //             reading secrets, disk/partition wipes, dd to a block device, and
+    //             recursive chmod/chown on absolute/home paths.
+    //   (defer)-- anything unmatched falls through to the harness's own prompt.
+    // Denies are deliberately minimal: a deny cannot be overridden in a user or
+    // project overlay, so anything a legitimate workflow might need is an ask.
+    {
+      "name": "scratch: any allowed command may redirect to /tmp",
+      "description": "Redirection-only grant (never authorizes a command): any command already allowed by another rule may redirect stdout/stderr to throwaway scratch under /tmp, including macOS's real /private/tmp. Source and system paths stay denied, and `..` traversal that escapes /tmp is rejected by the engine. This widens scratch targets profile-wide without repeating a redirection policy on every run/build/test rule.",
+      "argv": ["**"],
+      "action": "allow",
+      "grants": "redirections",
+      "redirections": {
+        "write_glob": [
+          "/tmp/*",
+          "/tmp/**",
+          "/private/tmp/*",
+          "/private/tmp/**"
+        ]
+      }
+    },
+    {
+      "name": "read: shell inspection commands",
+      "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo) or has a file-writing mode (tee, sort -o).",
+      "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|xxd|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq|man|less|more)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "read: echo/printf/cat may write scratch under /tmp",
+      "description": "Output redirection is otherwise denied; permit only throwaway scratch files under /tmp.",
+      "match": "@(echo|printf|cat) *",
+      "action": "allow",
+      "redirections": {
+        "write_glob": [
+          "/tmp/*",
+          "/tmp/**"
+        ]
+      }
+    },
+    {
+      "name": "read: stream filters in pipes and substitutions",
+      "description": "Stream editors that are safe reading stdin in a pipe but can write files when run standalone (sed -i, sort -o, awk print>file); scope them to pipe/substitution roles.",
+      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|less|more|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr)?( *)",
+      "action": "allow",
+      "roles": [
+        "pipe_filter",
+        "substitution"
+      ]
+    },
+    {
+      "name": "git read-only: always-safe subcommands",
+      "match": "git @(status|log|show|diff|range-diff|shortlog|describe|blame|annotate|rev-parse|rev-list|name-rev|merge-base|cherry|whatchanged|show-ref|for-each-ref|ls-files|ls-tree|ls-remote|cat-file|diff-tree|diff-files|diff-index|count-objects|verify-commit|verify-tag|check-ignore|check-attr|check-mailmap|fsck|version|help|grep|var)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: reflog (show only)",
+      "match": "git reflog?( show*|)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: branch listing",
+      "match": "git branch?( @(-a|-r|-v|-vv|--all|--remotes|--list|--verbose|--merged|--no-merged|--contains|--no-contains|--points-at|--show-current|--format|--sort|--color|--column|-l)*|)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: tag listing",
+      "match": "git tag?( @(-l|--list|-n*|--contains|--no-contains|--points-at|--sort|--merged|--no-merged|--format|--column)*|)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: remote listing",
+      "match": "git remote?( @(-v|--verbose|show|get-url)*|)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: stash list/show",
+      "match": "git stash @(list|show)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: config get/list",
+      "match": "git config @(-l|--list|--get|--get-all|--get-regexp|--get-urlmatch|--name-only)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "git read-only: worktree/submodule/notes listings",
+      "match": "git @(worktree list|submodule|submodule status|submodule summary|notes list|notes show)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: pr/issue inspection",
+      "argv": [
+        "gh",
+        "@(pr|issue)",
+        "@(list|view|status|diff|checks)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: run/release/repo/workflow inspection",
+      "argv": [
+        "gh",
+        "@(run|release|repo|workflow)",
+        "@(list|view|watch)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: list resources",
+      "argv": [
+        "gh",
+        "@(label|gist|cache|variable|secret|ssh-key|gpg-key|extension|alias)",
+        "list",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: gist view",
+      "argv": [
+        "gh",
+        "gist",
+        "view",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: search",
+      "argv": [
+        "gh",
+        "search",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: auth/status",
+      "match": "gh @(auth status|status)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "gh read-only: api GET",
+      "description": "Raw API reads. Write methods and body-field flags are held for approval below, so GET-style reads pass while a write surfaces a prompt.",
+      "argv": [
+        "gh",
+        "api",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "node read-only: version only (node runs arbitrary code)",
+      "match": "node @(--version|-v)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "npm read-only",
+      "match": "npm @(list|ls|view|info|show|outdated|search|ping|whoami|root|prefix|bin|why|explain|docs|repo|home|fund|doctor|help|--version|-v)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "npm read-only: config get / pkg get / audit (report only)",
+      "match": "npm @(config @(get|list|ls)|pkg get|audit)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "pnpm read-only",
+      "match": "pnpm @(list|ls|why|outdated|view|info|licenses|root|bin|store status|config get|audit|doctor|--version|-v|help)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "yarn read-only",
+      "match": "yarn @(list|info|why|outdated|licenses|versions|node|config @(get|list)|--version|-v|help)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "bun read-only",
+      "match": "bun @(--version|-v|outdated|pm @(ls|hash|hash-string|cache))?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "deno read-only",
+      "match": "deno @(--version|-V|info|doc|lint|fmt --check)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "pip read-only",
+      "match": "@(pip|pip3) @(list|show|freeze|check|inspect|debug|help|--version|-V|config @(list|get|debug)|cache @(list|info|dir)|index versions)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "python read-only: version, pip reads, json formatter",
+      "match": "@(python|python3) @(--version|-V|-m pip @(list|show|freeze|check)|-m json.tool)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "uv read-only",
+      "match": "uv @(--version|tree|pip @(list|show|freeze|check|tree)|python @(list|find|dir)|tool @(list|dir)|cache dir)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "uv version (read; a bare report, not a bump)",
+      "match": "uv version",
+      "action": "allow"
+    },
+    {
+      "name": "poetry read-only",
+      "match": "poetry @(show|about|check|search|--version|env @(info|list)|config --list|lock --check)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "poetry version (read; a bare report, not a bump)",
+      "match": "poetry version",
+      "action": "allow"
+    },
+    {
+      "name": "cargo read-only",
+      "match": "cargo @(--version|-V|version|tree|metadata|search|locate-project|verify-project|pkgid|read-manifest|help|config get)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "rust toolchain read-only",
+      "match": "@(rustc|rustfmt) @(--version|-V|--help)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "rustup read-only",
+      "match": "rustup @(show|which|--version|toolchain list|target list|component list)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "go read-only",
+      "match": "go @(version|doc|list)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "go env read-only (deny -w/-u which mutate config)",
+      "match": "go env?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "go mod read-only",
+      "match": "go mod @(graph|verify|why|edit -print)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "make read-only: dry-run / introspection",
+      "match": "make @(-n|--dry-run|--just-print|-p|--print-data-base|-q|--question|--version|-v|--help|-h)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "just read-only: list / show recipes (does not run them)",
+      "match": "just @(--list|-l|--summary|--show|-s|--dump|--variables|--evaluate|--fmt --check|--version|--help)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: stream editors in any role (sed -i, sort -o, etc.)",
+      "description": "In repo-write these may edit files (recoverable via git); they are not restricted to pipe roles.",
+      "match": "@(sed|awk|sort|uniq|tr) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: create directories and touch files",
+      "match": "@(mkdir|touch) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: text filters redirect to scratch and build outputs",
+      "description": "Text read/transform filters may redirect stdout only to scratch and build locations (/tmp, build/dist/target, logs, caches); any other target stays denied, so an allowed reader cannot leak into source or system paths. Source edits go through the harness's file tools, not shell redirection. The redirect policy gates only >/>>, so tools that write via an argument (tee, sort -o, sed -i) are not granted by this rule.",
+      "match": "@(echo|printf|cat|head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr) *",
+      "action": "allow",
+      "redirections": {
+        "write_glob": [
+          "/tmp/*",
+          "/tmp/**",
+          "build/**",
+          "./build/**",
+          "dist/**",
+          "./dist/**",
+          "target/**",
+          "./target/**",
+          "*.log",
+          "./*.log",
+          ".cache/**",
+          "./.cache/**"
+        ]
+      }
+    },
+    {
+      "name": "write: git stage/move/remove",
+      "match": "git @(add|mv|rm)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git commit",
+      "match": "git commit?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git restore --staged (unstage only)",
+      "match": "git restore --staged?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git reset (soft/mixed; --hard asks below)",
+      "match": "git reset?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git stash (drop/clear asks below)",
+      "match": "git stash?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git branch create/list (delete/rename/force asks below)",
+      "match": "git branch?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git switch (force/discard asks below)",
+      "match": "git switch?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git checkout -b (create+switch; ambiguous file-discard forms defer)",
+      "match": "git checkout -b?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git merge/cherry-pick/revert (recoverable via reflog)",
+      "match": "git @(merge|cherry-pick|revert)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git rebase (interactive/exec asks below)",
+      "match": "git rebase?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git fetch/pull/push (force/delete asks below)",
+      "match": "git @(fetch|pull|push)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git tag create/list (delete asks below)",
+      "match": "git tag?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git remote add/set/rename/show",
+      "match": "git remote @(add|set-url|set-branches|set-head|rename|prune|show|get-url|-v|--verbose)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git apply (patch into worktree)",
+      "match": "git apply?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git clean dry-run only (-f asks below)",
+      "match": "git clean @(-n|--dry-run)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git init/clone",
+      "match": "git @(init|clone)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git worktree add/list/prune",
+      "match": "git worktree @(add|list|prune)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git submodule init/update/sync/add/status",
+      "match": "git submodule @(init|update|sync|add|status|summary)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git config local (global/system asks below)",
+      "match": "git config?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git notes add/append/edit/copy",
+      "match": "git notes @(add|append|edit|copy|list|show)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: git bisect (navigates commits, recoverable)",
+      "match": "git bisect?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: gh pr collaboration (merge defers)",
+      "argv": [
+        "gh",
+        "pr",
+        "@(create|edit|comment|ready|review|checkout|diff|status|list|view|checks|close|reopen|sync)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh issue collaboration",
+      "argv": [
+        "gh",
+        "issue",
+        "@(create|edit|comment|close|reopen|list|view|status|develop|pin|unpin)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh repo clone/fork/sync/edit (create defers, delete asks)",
+      "argv": [
+        "gh",
+        "repo",
+        "@(clone|fork|sync|set-default|view|list|edit)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh gist create/edit",
+      "argv": [
+        "gh",
+        "gist",
+        "@(create|edit|list|view)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh workflow run",
+      "argv": [
+        "gh",
+        "workflow",
+        "@(run|list|view)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh run rerun/cancel",
+      "argv": [
+        "gh",
+        "run",
+        "@(rerun|cancel|list|view|watch)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: gh label create/edit",
+      "argv": [
+        "gh",
+        "label",
+        "@(create|edit|list|clone)",
+        "**"
+      ],
+      "action": "allow"
+    },
+    {
+      "name": "write: node package managers (install/run/test/build/exec)",
+      "match": "@(npm|pnpm|yarn|bun) @(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|prune|dedupe|rebuild|run|run-script|test|start|build|exec|x|dlx|create|init|import|fetch|patch|patch-commit|deploy|link|unlink|store|pkg|config|set|why|node|workspace|workspaces)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: yarn bare (install in v1)",
+      "match": "yarn",
+      "action": "allow"
+    },
+    {
+      "name": "write: npx/bunx run packages (arbitrary code; trusts the agent)",
+      "match": "@(npx|bunx) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: pip install/uninstall/etc",
+      "match": "@(pip|pip3) @(install|uninstall|download|wheel|freeze|hash|config|cache)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: uv project ops (publish/self-uninstall asks below)",
+      "match": "uv @(pip|add|remove|sync|lock|run|build|venv|init|tool|python|export|tree|cache|version)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: poetry project ops (publish asks below)",
+      "match": "poetry @(install|add|remove|update|lock|run|build|shell|env|version|source|cache|export|init|check|show)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: cargo build/test/etc (publish/yank/login asks below)",
+      "match": "cargo @(build|b|check|c|test|t|run|r|clippy|fmt|bench|doc|d|add|remove|update|fetch|fix|clean|vendor|generate-lockfile|install|uninstall|expand|nextest|tree|metadata|init|new)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: rustup toolchain/target/component (self uninstall asks below)",
+      "match": "rustup @(install|update|default|toolchain|target|component|override|set|show|which|completions)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: go build/test/run/mod/etc",
+      "match": "go @(build|test|run|vet|fmt|get|install|mod|generate|work|clean|tool|fix|env|version|doc|list)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: deno tasks",
+      "match": "deno @(run|task|test|bench|compile|install|cache|add|remove|fmt|lint|check|doc|eval)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: bundler/gem (push asks below)",
+      "match": "@(bundle|gem) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: run interpreters and project code (trusts the agent; not a sandbox)",
+      "match": "@(python|python3|node|ruby|tsx|ts-node) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: make/just run targets (arbitrary code; trusts the agent)",
+      "match": "@(make|just)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: formatters and linters (rewrite files; recoverable via git)",
+      "match": "@(prettier|eslint|biome|stylelint|black|ruff|isort|autopep8|yapf|flake8|pylint|mypy|pyright|gofmt|goimports|golangci-lint|rustfmt|clang-format|clang-tidy|stylua|shfmt|dprint|taplo|yamllint|markdownlint|cspell) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: test runners (execute project tests)",
+      "match": "@(pytest|jest|vitest|mocha|tap|ava|nyc|c8|tox|nox|playwright|cypress) *",
+      "action": "allow"
+    },
+    {
+      "name": "write: build tools",
+      "match": "@(tsc|vite|webpack|rollup|esbuild|babel|swc|turbo|nx|parcel) *",
+      "action": "allow"
+    },
+    {
+      "name": "ask: gh api write methods",
+      "match": "gh api*@( -X| --method) @(POST|PUT|PATCH|DELETE|post|put|patch|delete)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: gh api body fields (imply a write request)",
+      "match": "gh api*@( -f| -F| --field| --raw-field| --input)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: npm audit fix (writes)",
+      "match": "npm audit*@( fix)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: pnpm audit fix (writes)",
+      "match": "pnpm audit*@( --fix| fix)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: bun pm cache rm (writes)",
+      "match": "bun pm cache*@( rm)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: go env -w/-u (writes go config)",
+      "match": "go env*@( -w| -u)*",
+      "action": "ask"
+    },
+    {
+      "name": "deny: never read private keys or credentials",
+      "description": "Block reading well-known secret material (SSH/private keys, cloud and registry credentials, the gh OAuth token store) through common file readers, to limit accidental exfiltration. The engine also applies this to input-redirection targets, so `cat < ~/.ssh/id_rsa` is denied like `cat ~/.ssh/id_rsa`.",
+      "match": "@(cat|bat|head|tail|less|more|nl|od|xxd|hexdump|strings|base64|base32|grep|egrep|fgrep|rg|awk|sed|cut|sort|jq|tr) *@(id_rsa|id_dsa|id_ecdsa|id_ed25519|*.pem|*.ppk|.ssh/*|*/.ssh/*|.aws/credentials|*/.aws/credentials|.netrc|*/.netrc|.pgpass|.git-credentials|*/.git-credentials|.config/gh/hosts.yml|*/.config/gh/hosts.yml)*",
+      "action": "deny"
+    },
+    {
+      "name": "ask: recursive rm",
+      "description": "Recursive delete is never auto-allowed; route file removal through git or a human prompt. Flags are matched as whole space-delimited tokens so a filename like '--preserve-root' or 'my-report' is not mistaken for '-r'.",
+      "match": "rm*@( -r| -R| --recursive| -fr| -fR)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git branch delete/rename/copy/force",
+      "description": "git branch lists branches read-only, but -d/-D/-m/-M/-c/-C/--force mutate refs; hold them for approval in every position.",
+      "match": "git branch*@( -d| -D| --delete| -m| -M| --move| -c| -C| --copy| -f| --force)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git tag delete",
+      "match": "git tag*@( -d| --delete)*",
+      "action": "ask"
+    },
+    {
+      "name": "deny: filesystem and partition destroyers",
+      "match": "@(mkfs|mkfs.*|fdisk|sfdisk|gdisk|cfdisk|parted|wipefs|blkdiscard|shred)?( *)",
+      "action": "deny"
+    },
+    {
+      "name": "deny: dd to a block device",
+      "match": "dd *of=/dev/@(sd|nvme|vd|hd|mmcblk|disk|loop)*",
+      "action": "deny"
+    },
+    {
+      "name": "deny: recursive chmod/chown on absolute or home paths",
+      "match": "@(chmod|chown|chgrp)*@( -R| --recursive)*@( /| ~)*",
+      "action": "deny"
+    },
+    {
+      "name": "ask: shell as a pipe target (curl | sh)",
+      "argv": [
+        "@(sh|bash|zsh|fish|dash|ksh|ash|csh|tcsh)",
+        "**"
+      ],
+      "action": "ask",
+      "roles": [
+        "pipe_filter"
+      ]
+    },
+    {
+      "name": "ask: git push --force / --delete / --mirror",
+      "match": "git push*@( -f| --force| --force-with-lease*| --delete| -d| --mirror| --prune)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git reset --hard / --merge / --keep",
+      "match": "git reset*@( --hard| --merge| --keep)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git clean force",
+      "match": "git clean*@( -f| --force)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git checkout force / explicit discard",
+      "match": "git checkout*@( -f| --force| -- )*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git switch force / discard / force-create / orphan",
+      "match": "git switch*@( -f| --force| --discard-changes| -C| --force-create| --orphan)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git stash drop / clear",
+      "match": "git stash*@( drop| clear)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git restore worktree discard",
+      "match": "git restore*@( --worktree| -W)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git rebase interactive / exec",
+      "match": "git rebase*@( -i| --interactive| --exec| -x)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git history rewrite (filter-branch / filter-repo)",
+      "match": "git @(filter-branch|filter-repo)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git update-ref delete",
+      "match": "git update-ref*@( -d| --delete)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git reflog expire / delete",
+      "match": "git reflog*@( expire| delete)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git pull --force",
+      "match": "git pull*@( -f| --force)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: git config --global / --system",
+      "match": "git config*@( --global| --system)*",
+      "action": "ask"
+    },
+    {
+      "name": "ask: package registry publish",
+      "match": "@(npm|pnpm|yarn|bun) @(publish|unpublish|deprecate)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: npm auth / registry mutation",
+      "match": "npm @(adduser|login|logout|token|access|owner|star|unstar)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: cargo publish / yank / auth",
+      "match": "cargo @(publish|yank|login|logout|owner)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: poetry/uv/pypi publish",
+      "match": "@(poetry publish|uv publish|twine @(upload|register))?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: uv/rustup self-uninstall",
+      "match": "@(uv self uninstall|rustup self uninstall)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: gem push (publish)",
+      "match": "gem push?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: gh repo/release delete",
+      "argv": [
+        "gh",
+        "@(repo|release)",
+        "delete",
+        "**"
+      ],
+      "action": "ask"
+    }
+  ]
+}
