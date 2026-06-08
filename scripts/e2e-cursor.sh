@@ -46,6 +46,13 @@ if ! command -v "$agent_bin" >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_agent / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -104,33 +111,36 @@ if al_have_python; then
     have_mcp=1
 fi
 
-# Run one headless turn steered toward a single exact command.
-#  * --force: no human approver exists in a headless run, so this stops Cursor
-#    from blocking on its own confirmation. Hooks still run and a hook `deny`
-#    still blocks, so the hook remains the sole decider for the cases we assert.
-#  * XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user config
-#    leaks in; HOME is left intact so `cursor-agent` keeps its credentials.
-#  * stdin from /dev/null avoids any interactive "waiting for stdin" delay.
+# Run one headless turn steered toward a single exact command, driven through
+# `oneharness` (which owns the `cursor-agent -p … --output-format stream-json`
+# invocation) and captured into $stream / $stream.err by al_run.
+#  * bypass-by-default maps to --force: no human approver exists in a headless run,
+#    so this stops Cursor from blocking on its own confirmation. Hooks still run
+#    and a hook `deny` still blocks, so the hook remains the sole decider for the
+#    cases we assert.
+#  * The ask case ("trust" mode) needs --trust WITHOUT --force: --force
+#    auto-approves an `ask` (turning it into a yes), so an ask can only be shown to
+#    HOLD when the confirmation flow is left intact. oneharness has no --trust flag,
+#    so trust mode drops --force via --no-bypass and adds --trust verbatim after `--`.
+#  * --env XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user
+#    config leaks in; HOME is left intact (inherited) so `cursor-agent` keeps its
+#    credentials.
+#  * --bin honors the CURSOR_AGENT_BIN override; --cwd/--timeout replace the
+#    cd+timeout wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
-    # The ask case passes "no-force" to drop --force: --force auto-approves an
-    # `ask` (turning it into a yes), so an ask can only be shown to HOLD when the
-    # confirmation flow is left intact. deny/allow are unaffected (a hook `deny`
-    # blocks under --force, a hook `allow` runs).
-    local approve=(--force)
+    local approve=()
     case "${3:-}" in
-        trust) approve=(--trust) ;;
+        trust) approve=(--no-bypass -- --trust) ;;
     esac
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
-    ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
-        timeout 180 "$agent_bin" -p "$prompt" \
-            "${approve[@]}" \
-            "${model_args[@]}" \
-            --output-format stream-json \
-            </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  ($agent_bin exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    al_run cursor "$prompt" "$stream" \
+        --cwd "$proj" --timeout 180 --bin cursor="$agent_bin" \
+        --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        --output-format stream-json \
+        "${model_args[@]}" \
+        "${approve[@]}"
 }
 
 # True if the deny stream shows Cursor's structured hook rejection: a

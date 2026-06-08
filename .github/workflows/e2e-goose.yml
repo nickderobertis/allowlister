@@ -54,6 +54,13 @@ jobs:
         with:
           tool: just
 
+      # The live check drives the harness through oneharness; without it the
+      # script skips (a missing oneharness is a skip, like a missing harness).
+      - name: Install oneharness (drives the live check)
+        run: |
+          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.1.1 --locked
+          oneharness --version
+
       - name: Install Goose CLI
         run: |
           curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash

@@ -658,6 +658,17 @@ Each needs its harness binary, network, and a model call, so none is part of
 running fully autonomous (no human approver) — the hook is consulted before the
 agent's own permission flow, so allowlister is the authoritative gate.
 
+The agent itself is launched through [`oneharness`](https://github.com/nickderobertis/oneharness),
+a single cross-harness CLI that owns each agent's non-interactive invocation
+(its `-p`/`run` entry, permission-bypass flag, model and output-format flags) so
+the run/capture/timeout/skip logic lives in one place (`al_run` in
+`scripts/e2e-lib.sh`) instead of being re-hand-rolled per script. Install it too
+(`cargo install --git https://github.com/nickderobertis/oneharness`); a check
+skips if it is missing. Every live check drives its agent through this driver
+**except `test-codex`**, which keeps its own driver on purpose: `codex exec` does
+not load hooks, so it must drive the interactive TUI in a PTY, which `oneharness`
+does not model.
+
 ## Releasing
 
 Releases are automated from [Conventional Commits](https://www.conventionalcommits.org)

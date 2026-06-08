@@ -47,6 +47,13 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 0
 fi
 
+# The agent is driven through the `oneharness` CLI (see run_claude / al_run), so a
+# missing `oneharness` is a skip too — the same way a missing harness binary is.
+if ! command -v oneharness >/dev/null 2>&1; then
+    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    exit 0
+fi
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || fail "release binary not found at $bin"
@@ -108,29 +115,31 @@ if al_have_python; then
 JSON
 fi
 
-# Run one headless turn that is steered toward a single exact command.
-#  * bypassPermissions: no human approver exists in a headless run, so this stops
-#    `default` mode from hanging on a prompt. Hooks still run and a hook `deny`
-#    still blocks, so the hook remains the sole decider for the cases we assert.
-#  * --mcp-config + --strict-mcp-config load ONLY our test server (when present),
-#    so the MCP tool names are the predictable `mcp__altest__*`.
+# Run one headless turn that is steered toward a single exact command, driven
+# through `oneharness` (which owns the `claude -p … --permission-mode … --model …
+# --output-format …` invocation) and captured into $stream / $stream.err by al_run.
+#  * mode=bypassPermissions: no human approver exists in a headless run, so this
+#    stops `default` mode from hanging on a prompt. Hooks still run and a hook
+#    `deny` still blocks, so the hook remains the sole decider for the cases we
+#    assert. `default` maps to oneharness `--no-bypass`.
+#  * --output-format stream-json so the hook's reason string is echoed back per
+#    tool result (what denied_in/asked_in below grep for).
+#  * passed verbatim after `--`: --max-turns (bound the turn), --verbose (required
+#    by stream-json), and --mcp-config/--strict-mcp-config to load ONLY our test
+#    server (when present) so MCP tool names are the predictable `mcp__altest__*`.
 #  * XDG_CONFIG_HOME points at an empty dir so no ambient user config leaks in;
-#    HOME is left intact so `claude` keeps its credentials.
-#  * stdin from /dev/null avoids the interactive "waiting for stdin" delay.
+#    HOME is left intact (inherited) so `claude` keeps its credentials.
 run_claude() {
     local prompt="$1" stream="$2" mode="${3:-bypassPermissions}"
     local mcp_args=()
     [ -f "$mcp_config" ] && mcp_args=(--mcp-config "$mcp_config" --strict-mcp-config)
-    ( cd "$proj" && env XDG_CONFIG_HOME="$sandbox/xdg" \
-        timeout 150 claude -p "$prompt" \
-            --permission-mode "$mode" \
-            --model "$model" \
-            --max-turns 6 \
-            "${mcp_args[@]}" \
-            --output-format stream-json --verbose \
-            </dev/null ) >"$stream" 2>"$stream.err" || {
-        note "  (claude exited non-zero; stderr tail:)"; tail -3 "$stream.err" >&2 || true
-    }
+    local bypass=()
+    [ "$mode" = default ] && bypass=(--no-bypass)
+    al_run claude-code "$prompt" "$stream" \
+        --cwd "$proj" --timeout 150 --model "$model" \
+        --output-format stream-json --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        "${bypass[@]}" \
+        -- --max-turns 6 --verbose "${mcp_args[@]}"
 }
 
 # True if the transcript shows allowlister denying a command (its reason string
