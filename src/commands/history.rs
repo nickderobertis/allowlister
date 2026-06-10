@@ -2,11 +2,13 @@
 //! from real behavior.
 //!
 //! The default view is a per-parsed-subcommand frequency table broken down by
-//! verdict (allowed / asked / denied / deferred-to-harness); `--view commands`
-//! shows whole command lines instead, and `--view programs` collapses each
-//! subcommand to its leading program. The `recent`, `compact`, `clear`, and
-//! `path` subcommands manage the store. Recording is opt-in (see `init`); this
-//! command only reads (and, for `compact`/`clear`, maintains) what was recorded.
+//! verdict (allowed / asked / denied / deferred-to-harness), with a count of how
+//! many projects each subcommand ran in; `--view commands` shows whole command
+//! lines instead, and `--view programs` collapses each subcommand to its leading
+//! program. `--by-project` expands every subcommand/program row into a per-project
+//! verdict breakdown. The `recent`, `compact`, `clear`, and `path` subcommands
+//! manage the store. Recording is opt-in (see `init`); this command only reads
+//! (and, for `compact`/`clear`, maintains) what was recorded.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -37,6 +39,9 @@ pub struct ShowArgs {
     pub verdict: Option<Verdict>,
     /// Show at most this many rows.
     pub top: usize,
+    /// Expand each row into a per-project verdict breakdown (subcommand/program
+    /// views only; the whole-command view is not split by project).
+    pub by_project: bool,
     /// Emit machine-readable JSON.
     pub json: bool,
 }
@@ -128,7 +133,7 @@ fn show_in<W: Write>(dir: &Path, args: &ShowArgs, out: &mut W) -> Result<i32> {
     let _ = writeln!(out);
     let _ = writeln!(out, "{}:", title(args));
     let _ = writeln!(out);
-    print_table(out, &rows, &args.view);
+    print_table(out, &rows, &args.view, args.by_project);
 
     let truncated = match args.view {
         View::Commands => summary.commands_truncated,
@@ -171,9 +176,13 @@ fn title(args: &ShowArgs) -> String {
 }
 
 /// Print the frequency table with right-aligned counts and a left-aligned key.
-/// For subcommand/program views a trailing column names the dominant rule.
-fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View) {
-    let show_rule = !matches!(view, View::Commands);
+/// For subcommand/program views trailing columns count the projects the key ran
+/// in and name the dominant rule; with `by_project`, each row is followed by an
+/// indented per-project verdict breakdown.
+fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View, by_project: bool) {
+    // The whole-command view is not broken down by project, so it carries
+    // neither the rule nor the projects columns.
+    let show_detail = !matches!(view, View::Commands);
     let key_header = match view {
         View::Commands => "COMMAND",
         View::Programs => "PROGRAM",
@@ -194,14 +203,23 @@ fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View) {
         .max()
         .unwrap_or(0)
         .max(key_header.len());
+    // The projects column holds a distinct-project count (e.g. `4`, or `64+`
+    // once the per-fragment cap overflows).
+    let proj_header = "PROJECTS";
+    let proj_width = rows
+        .iter()
+        .map(|r| project_count_label(&r.projects).len())
+        .max()
+        .unwrap_or(0)
+        .max(proj_header.len());
 
     let mut header = String::new();
     for (i, name) in nums.iter().enumerate() {
         header.push_str(&format!("{:>w$}  ", name, w = widths[i]));
     }
     header.push_str(&format!("{:<kw$}", key_header, kw = key_width));
-    if show_rule {
-        header.push_str("  RULE");
+    if show_detail {
+        header.push_str(&format!("  {:>pw$}  RULE", proj_header, pw = proj_width));
     }
     let _ = writeln!(out, "  {}", header.trim_end());
 
@@ -211,12 +229,47 @@ fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View) {
             line.push_str(&format!("{:>w$}  ", value, w = widths[i]));
         }
         line.push_str(&format!("{:<kw$}", row.key, kw = key_width));
-        if show_rule {
+        if show_detail {
+            line.push_str(&format!(
+                "  {:>pw$}",
+                project_count_label(&row.projects),
+                pw = proj_width
+            ));
             if let Some(rule) = dominant_rule(&row.rules) {
                 line.push_str(&format!("  {rule}"));
             }
         }
         let _ = writeln!(out, "  {}", line.trim_end());
+        if by_project && show_detail {
+            print_project_breakdown(out, &row.projects);
+        }
+    }
+}
+
+/// `N`, or `N+` when the per-fragment project map overflowed its cap (the
+/// synthetic overflow bucket means "and more").
+fn project_count_label(projects: &BTreeMap<String, Counts>) -> String {
+    if projects.contains_key(history::OVERFLOW) {
+        // Drop the synthetic bucket from the count and flag the remainder.
+        format!("{}+", projects.len().saturating_sub(1))
+    } else {
+        projects.len().to_string()
+    }
+}
+
+/// Indented per-project verdict lines for one row, busiest project first.
+fn print_project_breakdown<W: Write>(out: &mut W, projects: &BTreeMap<String, Counts>) {
+    let mut entries: Vec<(&String, &Counts)> = projects.iter().collect();
+    entries.sort_by(|a, b| b.1.total().cmp(&a.1.total()).then_with(|| a.0.cmp(b.0)));
+    let key_width = entries.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
+    for (project, counts) in entries {
+        let _ = writeln!(
+            out,
+            "        {:<kw$}  {}",
+            project,
+            verdict_line(counts),
+            kw = key_width
+        );
     }
 }
 
@@ -253,6 +306,12 @@ struct RowJson<'a> {
     defer: u64,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     rules: &'a BTreeMap<String, u64>,
+    /// Distinct projects this key ran in (the overflow bucket, if present, counts
+    /// as one).
+    project_count: usize,
+    /// The full per-project verdict breakdown, included only under `--by-project`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    projects: Option<&'a BTreeMap<String, Counts>>,
 }
 
 #[derive(Serialize)]
@@ -294,6 +353,8 @@ fn print_json<W: Write>(out: &mut W, summary: &Summary, args: &ShowArgs, rows: &
                 deny: row.counts.deny,
                 defer: row.counts.defer,
                 rules: &row.rules,
+                project_count: row.projects.len(),
+                projects: args.by_project.then_some(&row.projects),
             })
             .collect(),
     };
@@ -411,6 +472,24 @@ mod tests {
         record("ls foo | grep bar");
     }
 
+    /// Append one shell event under an explicit project, for project-dimension
+    /// tests.
+    fn seed_in_project(dir: &Path, command: &str, project: &str) {
+        let cfg = config::compile_str(
+            r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
+            "t",
+        );
+        let result = evaluate(command, &cfg.rules);
+        let event = crate::io::history::build_event_for_test(
+            "claude-code",
+            project,
+            Subject::Shell(command),
+            &result,
+            7,
+        );
+        append_event(dir, &event).unwrap();
+    }
+
     fn out_string(buf: Vec<u8>) -> String {
         String::from_utf8(buf).unwrap()
     }
@@ -420,6 +499,7 @@ mod tests {
             view,
             verdict,
             top: 20,
+            by_project: false,
             json: false,
         }
     }
@@ -446,6 +526,73 @@ mod tests {
         assert!(text.contains("ls")); // rule column
         assert!(text.contains("grep bar"));
         assert!(text.contains("Tip:"));
+    }
+
+    #[test]
+    fn fragment_report_shows_project_count_by_default() {
+        let dir = TempDir::new().unwrap();
+        seed_in_project(dir.path(), "ls -la", "/repo-a");
+        seed_in_project(dir.path(), "ls -la", "/repo-b");
+        let mut out = Vec::new();
+        show_in(dir.path(), &show(View::Fragments, None), &mut out).unwrap();
+        let text = out_string(out);
+        // The summary column appears with the distinct-project count, but no
+        // per-project breakdown without the flag.
+        assert!(text.contains("PROJECTS"));
+        let ls_row = text.lines().find(|l| l.contains("ls -la")).unwrap();
+        assert!(
+            ls_row.contains('2'),
+            "expected project count 2 in: {ls_row}"
+        );
+        assert!(!text.contains("/repo-a"));
+    }
+
+    #[test]
+    fn by_project_expands_per_project_breakdown() {
+        let dir = TempDir::new().unwrap();
+        seed_in_project(dir.path(), "ls -la", "/repo-a");
+        seed_in_project(dir.path(), "ls -la", "/repo-b");
+        seed_in_project(dir.path(), "ls -la", "/repo-b");
+        let args = ShowArgs {
+            view: View::Fragments,
+            verdict: None,
+            top: 20,
+            by_project: true,
+            json: false,
+        };
+        let mut out = Vec::new();
+        show_in(dir.path(), &args, &mut out).unwrap();
+        let text = out_string(out);
+        // Both projects are listed with their own verdict tallies.
+        assert!(text.contains("/repo-a"));
+        assert!(text.contains("/repo-b"));
+        assert!(text.contains("allow 2")); // /repo-b ran ls twice
+    }
+
+    #[test]
+    fn by_project_json_includes_per_project_map() {
+        let dir = TempDir::new().unwrap();
+        seed_in_project(dir.path(), "ls -la", "/repo-a");
+        seed_in_project(dir.path(), "ls -la", "/repo-b");
+        let args = ShowArgs {
+            view: View::Fragments,
+            verdict: None,
+            top: 20,
+            by_project: true,
+            json: true,
+        };
+        let mut out = Vec::new();
+        show_in(dir.path(), &args, &mut out).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out_string(out)).unwrap();
+        let row = value["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["key"] == "ls -la")
+            .unwrap();
+        assert_eq!(row["project_count"], 2);
+        assert_eq!(row["projects"]["/repo-a"]["allow"], 1);
+        assert_eq!(row["projects"]["/repo-b"]["allow"], 1);
     }
 
     #[test]
@@ -493,6 +640,7 @@ mod tests {
                 view: View::Fragments,
                 verdict: None,
                 top: 20,
+                by_project: false,
                 json: true,
             },
             &mut out,

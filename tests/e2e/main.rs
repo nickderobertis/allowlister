@@ -1893,6 +1893,49 @@ fn history_records_hook_evaluations_and_reports_them() {
 }
 
 #[test]
+fn history_reports_the_project_dimension() {
+    let sandbox = Sandbox::new();
+    for command in ["gh pr list | head -20", "some_unknown_tool --flag"] {
+        sandbox
+            .command()
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(sandbox.payload(command))
+            .assert()
+            .success();
+    }
+
+    // The default report carries the per-subcommand project-count column.
+    sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PROJECTS"));
+
+    // `--by-project --json` exposes the full per-project verdict breakdown. Both
+    // events ran in the one sandbox project, so every row names exactly one.
+    let out = sandbox
+        .command()
+        .args(["history", "--by-project", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    let rows = value["rows"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert_eq!(row["project_count"], 1, "{row}");
+        let projects = row["projects"].as_object().unwrap();
+        assert_eq!(projects.len(), 1, "{row}");
+        let counts = projects.values().next().unwrap();
+        assert!(counts["allow"].as_u64().unwrap() + counts["defer"].as_u64().unwrap() > 0);
+    }
+}
+
+#[test]
 fn history_filter_recent_path_compact_and_clear() {
     let sandbox = Sandbox::new();
     for command in ["some_unknown_tool --flag", "gh pr list | head -20"] {

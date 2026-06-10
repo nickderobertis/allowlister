@@ -132,6 +132,10 @@ enum Command {
         /// Show at most this many rows.
         #[arg(long, default_value_t = 20)]
         top: usize,
+        /// Expand each subcommand/program row into a per-project verdict
+        /// breakdown (the whole-command view is not split by project).
+        #[arg(long = "by-project")]
+        by_project: bool,
         /// Emit machine-readable JSON instead of a table.
         #[arg(long)]
         json: bool,
@@ -346,6 +350,7 @@ impl Cli {
                 view,
                 verdict,
                 top,
+                by_project,
                 json,
             } => commands::history::run(
                 action.map(HistoryAction::into_command),
@@ -353,6 +358,7 @@ impl Cli {
                     view: view.into(),
                     verdict: verdict.map(Into::into),
                     top,
+                    by_project,
                     json,
                 },
             ),
