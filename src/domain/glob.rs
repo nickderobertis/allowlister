@@ -2,9 +2,12 @@
 //!
 //! The standard glob crates do not implement extended globbing
 //! (`@(a|b)`, `?(a|b)`, `*(a|b)`, `+(a|b)`, `!(a|b)`), which is exactly the
-//! syntax that makes allow/deny rules compact and readable. Patterns are
-//! translated once into an anchored, full-match regular expression and then
-//! reused for every fragment evaluated in a process.
+//! syntax that makes allow/deny rules compact and readable. A pattern is
+//! translated into an anchored, full-match regular expression — built at most
+//! once per process and reused for every fragment evaluated — but for most
+//! glob rules construction is deferred until a candidate value passes the
+//! rule's literal-prefix gate, which in a spawn-per-call binary usually means
+//! never.
 //!
 //! Translation rules:
 //! - `*` matches any run of characters, `?` matches a single character.
@@ -16,14 +19,31 @@
 // `fancy_regex` (not the `regex` crate) backs the matcher because extglob
 // negation `!(a|b)` compiles to a negative look-ahead, which the `regex` crate
 // does not support. `regex::escape` is still used to quote literal characters.
+use std::sync::OnceLock;
+
 use fancy_regex::Regex;
 
-/// A compiled command matcher. Glob and regex kinds become a full-match
-/// [`Regex`]; the literal kind keeps the raw string for exact comparison.
+/// A compiled command matcher. The regex kind is a full-match [`Regex`]; the
+/// literal kind keeps the raw string for exact comparison; the lazy-glob kind
+/// defers regex construction until a candidate value first passes its
+/// literal-prefix gate.
 #[derive(Debug, Clone)]
 pub(crate) enum Matcher {
     Regex(Regex),
     Literal(String),
+    /// A glob whose regex is built on first use. Regex construction is the
+    /// dominant per-spawn cost (the binary recompiles every rule on each
+    /// invocation) and most rules never see a value that could match them, so
+    /// the gate — a value must start with one of the pattern's necessary
+    /// literal prefixes — lets almost every rule skip compilation entirely.
+    LazyGlob {
+        pattern: String,
+        /// Necessary literal prefixes (see [`literal_prefixes`]). An empty
+        /// string gates nothing, so the gate only ever skips work, never a
+        /// match.
+        prefixes: Vec<String>,
+        compiled: OnceLock<Option<Regex>>,
+    },
 }
 
 impl Matcher {
@@ -33,22 +53,99 @@ impl Matcher {
             // match" rather than propagated: the engine must never panic.
             Matcher::Regex(re) => re.is_match(value).unwrap_or(false),
             Matcher::Literal(lit) => lit == value,
+            Matcher::LazyGlob {
+                pattern,
+                prefixes,
+                compiled,
+            } => {
+                if !prefixes.iter().any(|p| value.starts_with(p.as_str())) {
+                    return false;
+                }
+                // A compile failure (only reachable through pathological
+                // patterns, e.g. nesting past the regex engine's limits) is
+                // "never matches", mirroring the backtracking-error policy.
+                compiled
+                    .get_or_init(|| compile_glob(pattern).ok())
+                    .as_ref()
+                    .is_some_and(|re| re.is_match(value).unwrap_or(false))
+            }
         }
     }
 }
 
-/// Compile an extglob pattern into a matcher, skipping regex construction when
-/// the pattern has no glob syntax. A metacharacter-free glob's anchored
-/// full-match is exactly string equality (this dialect has no escapes; every
-/// non-meta char matches itself), so such patterns become a [`Matcher::Literal`]
-/// rather than a compiled automaton — building a regex is the dominant
-/// per-invocation cost and the binary recompiles every rule on each spawn.
+/// Compile an extglob pattern into a matcher, avoiding regex construction
+/// wherever possible — building a regex is the dominant per-invocation cost and
+/// the binary recompiles every rule on each spawn.
+///
+/// - No glob syntax at all: a metacharacter-free glob's anchored full-match is
+///   exactly string equality (this dialect has no escapes; every non-meta char
+///   matches itself), so the pattern becomes a [`Matcher::Literal`].
+/// - A character class (`[`): compiled eagerly. Class content is copied into
+///   the regex verbatim, making it the one construct whose translation can fail
+///   to compile, and an invalid pattern must surface at config-load time.
+/// - Everything else: a [`Matcher::LazyGlob`]. The translation is valid regex
+///   by construction, so deferring compilation behind the literal-prefix gate
+///   loses no load-time validation.
 pub(crate) fn compile_glob_matcher(pattern: &str) -> Result<Matcher, fancy_regex::Error> {
-    if pattern_has_glob_meta(pattern) {
-        Ok(Matcher::Regex(compile_glob(pattern)?))
-    } else {
-        Ok(Matcher::Literal(pattern.to_string()))
+    if !pattern_has_glob_meta(pattern) {
+        return Ok(Matcher::Literal(pattern.to_string()));
     }
+    if pattern.contains('[') {
+        return Ok(Matcher::Regex(compile_glob(pattern)?));
+    }
+    Ok(Matcher::LazyGlob {
+        pattern: pattern.to_string(),
+        prefixes: literal_prefixes(pattern),
+        compiled: OnceLock::new(),
+    })
+}
+
+/// Necessary literal prefixes of any value matching `pattern`: every value the
+/// compiled (anchored, full-match) pattern accepts starts with at least one of
+/// the returned strings. The scan walks literal characters until the first glob
+/// construct. An `@(…|…)`/`+(…|…)` group must match one alternative immediately,
+/// so it forks the prefix per alternative (recursively); every other construct —
+/// `*`, `?`, `[`, an optional or negated group, an unbalanced group — pins down
+/// nothing further, so the scan stops with the literal accumulated so far. The
+/// result only ever under-promises: a prefix may be shorter than what the
+/// pattern truly requires (the empty string gates nothing), never longer.
+fn literal_prefixes(pattern: &str) -> Vec<String> {
+    // Past this many forks the gate's linear scan stops being clearly cheaper
+    // than compiling; fall back to the unforked base prefix.
+    const MAX_PREFIXES: usize = 64;
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut base = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if matches!(c, '@' | '?' | '*' | '+' | '!') && i + 1 < chars.len() && chars[i + 1] == '(' {
+            if matches!(c, '@' | '+') {
+                if let Some((alts, _)) = parse_extglob(&chars, i + 2) {
+                    let mut out = Vec::new();
+                    for alt in &alts {
+                        for sub in literal_prefixes(alt) {
+                            out.push(format!("{base}{sub}"));
+                        }
+                        if out.len() > MAX_PREFIXES {
+                            return vec![base];
+                        }
+                    }
+                    return out;
+                }
+            }
+            // `?(…)`/`*(…)` match zero times and `!(…)` matches the empty
+            // string, so nothing after `base` is certain. An unbalanced group
+            // is matched literally by `translate`, so `base` remains a true
+            // (if shortened) prefix there too.
+            return vec![base];
+        }
+        match c {
+            '*' | '?' | '[' => return vec![base],
+            other => base.push(other),
+        }
+        i += 1;
+    }
+    vec![base]
 }
 
 /// Whether a pattern contains any glob syntax that `translate` would turn into
@@ -288,23 +385,161 @@ mod tests {
     }
 
     #[test]
-    fn glob_syntax_still_compiles_to_regex() {
-        // Anything `translate` would turn into regex must stay a compiled regex.
-        for pattern in [
-            "ls*",
-            "git ?",
-            "file[0-9]",
-            "@(a|b)",
-            "?(a)",
-            "*(a)",
-            "+(a)",
-            "!(x)",
-        ] {
+    fn char_class_globs_compile_eagerly_others_lazily() {
+        // A character class can make translation fail, so it must surface a
+        // compile error at build time (an eager regex)…
+        for pattern in ["file[0-9]", "a[!x]b", "@(a|b)[0-9]"] {
             assert!(
                 matches!(compile_glob_matcher(pattern).unwrap(), Matcher::Regex(_)),
-                "expected {pattern:?} to compile to a regex matcher",
+                "expected {pattern:?} to compile to an eager regex matcher",
             );
         }
+        // …while every other glob construct translates to valid-by-construction
+        // regex and defers compilation behind the prefix gate.
+        for pattern in ["ls*", "git ?", "@(a|b)", "?(a)", "*(a)", "+(a)", "!(x)"] {
+            assert!(
+                matches!(
+                    compile_glob_matcher(pattern).unwrap(),
+                    Matcher::LazyGlob { .. }
+                ),
+                "expected {pattern:?} to compile to a lazy glob matcher",
+            );
+        }
+    }
+
+    #[test]
+    fn lazy_glob_matches_exactly_like_the_eager_regex() {
+        // Laziness must be transparent: for a matrix of patterns and values the
+        // lazy matcher agrees with the eager regex it replaced.
+        let patterns = [
+            "ls*",
+            "git @(status|diff)*",
+            "@(true|false|:)*",
+            "@(head|tail) *",
+            "+(ab|c)d",
+            "?(re)build",
+            "*(x)y",
+            "!(foo)",
+            "x@(y|z)w",
+            "@(a|@(b|c))t",
+            "rm -rf*",
+        ];
+        let values = [
+            "ls -la",
+            "git status",
+            "git diff --stat",
+            "git push",
+            "true && echo",
+            "head -5",
+            "tail -n 1",
+            "abd",
+            "cd",
+            "d",
+            "build",
+            "rebuild",
+            "y",
+            "xy",
+            "foo",
+            "bar",
+            "xyw",
+            "xzw",
+            "at",
+            "bt",
+            "rm -rf /",
+            "",
+        ];
+        for pattern in patterns {
+            let lazy = compile_glob_matcher(pattern).unwrap();
+            assert!(matches!(lazy, Matcher::LazyGlob { .. }));
+            let eager = Matcher::Regex(compile_glob(pattern).unwrap());
+            for value in values {
+                assert_eq!(
+                    lazy.is_match(value),
+                    eager.is_match(value),
+                    "lazy disagrees with eager for pattern {pattern:?} on {value:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn literal_prefixes_fork_on_required_groups_only() {
+        let prefixes = |p: &str| literal_prefixes(p);
+        // Literal text up to the first wildcard.
+        assert_eq!(prefixes("git *"), vec!["git ".to_string()]);
+        assert_eq!(prefixes("git ?"), vec!["git ".to_string()]);
+        assert_eq!(prefixes("a[0-9]b"), vec!["a".to_string()]);
+        // A required group forks per alternative, recursively.
+        assert_eq!(prefixes("@(a|b)c"), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            prefixes("x@(y|z)w"),
+            vec!["xy".to_string(), "xz".to_string()]
+        );
+        assert_eq!(
+            prefixes("+(ab|c)d"),
+            vec!["ab".to_string(), "c".to_string()]
+        );
+        assert_eq!(
+            prefixes("@(a@(b|c)|d)"),
+            vec!["ab".to_string(), "ac".to_string(), "d".to_string()]
+        );
+        // Alternatives that start with a wildcard contribute the base alone.
+        assert_eq!(
+            prefixes("git @(*x|pull)"),
+            vec!["git ".to_string(), "git pull".to_string()]
+        );
+        // Optional and negated groups pin nothing down.
+        assert_eq!(prefixes("?(a)b"), vec![String::new()]);
+        assert_eq!(prefixes("*(a)b"), vec![String::new()]);
+        assert_eq!(prefixes("!(x)y"), vec![String::new()]);
+        // An unbalanced group stops the scan conservatively.
+        assert_eq!(prefixes("a@(b"), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn oversized_prefix_fork_falls_back_to_base() {
+        // More alternatives than the fork cap: the gate degrades to the base
+        // prefix (here empty, gating nothing) rather than a huge prefix list.
+        let alts = (0..70).map(|i| format!("cmd{i}")).collect::<Vec<_>>();
+        let pattern = format!("@({}) *", alts.join("|"));
+        assert_eq!(literal_prefixes(&pattern), vec![String::new()]);
+        // Matching still works — the gate never rejects, it just stops helping.
+        let matcher = compile_glob_matcher(&pattern).unwrap();
+        assert!(matcher.is_match("cmd42 --flag"));
+        assert!(!matcher.is_match("other --flag"));
+    }
+
+    #[test]
+    fn gate_rejection_skips_regex_construction() {
+        // The perf contract itself: a value that fails the prefix gate must be
+        // rejected without ever building the regex.
+        let matcher = compile_glob_matcher("git @(status|diff)*").unwrap();
+        assert!(!matcher.is_match("npm install"));
+        let Matcher::LazyGlob { compiled, .. } = &matcher else {
+            panic!("expected a lazy glob matcher");
+        };
+        assert!(
+            compiled.get().is_none(),
+            "gate rejection must not compile the regex"
+        );
+        assert!(matcher.is_match("git status --short"));
+        assert!(
+            compiled.get().is_some(),
+            "a gate pass compiles exactly once"
+        );
+    }
+
+    #[test]
+    fn lazy_compile_failure_is_no_match_not_a_panic() {
+        // compile_glob_matcher never builds a lazy matcher whose translation
+        // fails, but the engine's never-panic guarantee must hold even if that
+        // invariant ever drifts: a failed lazy compile is simply "no match".
+        let matcher = Matcher::LazyGlob {
+            pattern: "[z-a]".to_string(),
+            prefixes: vec![String::new()],
+            compiled: OnceLock::new(),
+        };
+        assert!(!matcher.is_match("anything"));
     }
 
     #[test]
