@@ -1,6 +1,6 @@
 {
   "name": "read-only",
-  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp.",
+  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp and discards to /dev/null and the standard-stream devices.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -13,6 +13,13 @@
     //   (defer)-- anything unmatched falls through to the harness's own prompt.
     // Denies are deliberately minimal: a deny cannot be overridden in a user or
     // project overlay, so anything a legitimate workflow might need is an ask.
+
+    { "name": "discard: any allowed command may redirect to the null and standard-stream devices",
+      "description": "Redirection-only grant (never authorizes a command): any command another rule already allows may send stdout/stderr to the discard or standard-stream devices. /dev/null discards output; /dev/stdout, /dev/stderr, and /dev/fd/N only re-route to an already-open descriptor. None creates or truncates a real file, so -- unlike /tmp scratch -- they are safe to permit profile-wide, including in read-only. `>/dev/null`, `2>/dev/null`, and `>/dev/null 2>&1` are the ubiquitous 'discard this output' idiom; the engine still rejects `..` escapes and real device files under /dev.",
+      "argv": ["**"],
+      "action": "allow",
+      "grants": "redirections",
+      "redirections": { "write_glob": ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/*"] } },
 
     { "name": "read: shell inspection commands",
       "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo), has a file-writing mode (tee, sort -o, shuf -o, xxd's output-file positional), or is an interactive pager that can spawn a shell (less/more via !cmd or LESSOPEN, man via -P). shuf stays (its only write mode, -o, surfaces for approval below).",
