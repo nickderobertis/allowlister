@@ -2,8 +2,10 @@
 //!
 //! A rule matches a fragment by argv (joined-string or per-element pattern)
 //! and, optionally, by role. Allow rules additionally carry a redirection
-//! policy. Patterns are compiled once when the rule is built; matching is a
-//! cheap regex/string test thereafter.
+//! policy. Pattern validation happens once when the rule is built; glob
+//! matchers defer the expensive regex construction until a candidate value
+//! first passes their literal-prefix gate (see the `glob` module), so a rule
+//! the evaluated command can never match costs almost nothing per spawn.
 
 use fancy_regex::Regex;
 use serde_json::Value;
