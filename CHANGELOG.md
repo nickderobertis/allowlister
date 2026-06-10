@@ -6,6 +6,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.9](https://github.com/nickderobertis/allowlister/compare/v0.4.8...v0.4.9) - 2026-06-10
+
+### Added
+
+- surface the projects each subcommand ran in via history ([#60](https://github.com/nickderobertis/allowlister/pull/60))
+- list every asking fragment in the ask verdict reason ([#58](https://github.com/nickderobertis/allowlister/pull/58))
+- tier allowlister's own commands in the recommended profiles ([#56](https://github.com/nickderobertis/allowlister/pull/56))
+- allow discard redirects to /dev/null and standard-stream devices ([#54](https://github.com/nickderobertis/allowlister/pull/54))
+- add refine-allowlist agent skill to tune configs from history ([#48](https://github.com/nickderobertis/allowlister/pull/48))
+- record and report allowlister usage history ([#46](https://github.com/nickderobertis/allowlister/pull/46))
+- [**breaking**] add ask verdict and re-tier recommended profiles
+- *(tools)* complete tool-use gating with OpenCode and Cursor ([#34](https://github.com/nickderobertis/allowlister/pull/34))
+- *(tools)* extend tool-use gating to Codex, Copilot, Qwen, Crush, Goose
+- *(tools)* gate non-shell tool calls (engine + config + Claude Code) ([#32](https://github.com/nickderobertis/allowlister/pull/32))
+- add redirection-only rule type for profile-wide scratch writes ([#30](https://github.com/nickderobertis/allowlister/pull/30))
+- *(opencode)* add OpenCode support via a tool.execute.before plugin shim ([#28](https://github.com/nickderobertis/allowlister/pull/28))
+- *(goose)* add full Goose support via the PreToolUse hook plugin ([#27](https://github.com/nickderobertis/allowlister/pull/27))
+- *(qwen)* add full Qwen Code support via the PreToolUse hook ([#26](https://github.com/nickderobertis/allowlister/pull/26))
+- *(crush)* add full Crush support via the PreToolUse hook ([#25](https://github.com/nickderobertis/allowlister/pull/25))
+- *(codex)* add full OpenAI Codex CLI support via the PreToolUse hook ([#24](https://github.com/nickderobertis/allowlister/pull/24))
+- *(copilot)* [**breaking**] add full GitHub Copilot CLI support via the preToolUse hook ([#23](https://github.com/nickderobertis/allowlister/pull/23))
+- *(cursor)* add full Cursor support via the beforeShellExecution hook ([#21](https://github.com/nickderobertis/allowlister/pull/21))
+- *(repo-write)* let text filters redirect stdout to scratch/build paths
+- [**breaking**] promote the init setup consolidation to the 0.2.0 milestone ([#16](https://github.com/nickderobertis/allowlister/pull/16))
+- *(init)* consolidate setup into init and automate releases ([#13](https://github.com/nickderobertis/allowlister/pull/13))
+
+### Documentation
+
+- advertise the cross-platform allowlist with a support matrix ([#29](https://github.com/nickderobertis/allowlister/pull/29))
+- add asdf plugin as an install option ([#7](https://github.com/nickderobertis/allowlister/pull/7))
+
+### Fixed
+
+- harden read-only profile against secret-read, write, and code-exec bypasses ([#18](https://github.com/nickderobertis/allowlister/pull/18))
+
+### Other
+
+- Add `install` command to merge allowlists/profiles into a config ([#6](https://github.com/nickderobertis/allowlister/pull/6))
+- Add recommended read-only and repo-write allowlist profiles ([#5](https://github.com/nickderobertis/allowlister/pull/5))
+- Match metacharacter-free globs as literals, skipping regex build
+- Add cross-platform install script for prebuilt binaries ([#3](https://github.com/nickderobertis/allowlister/pull/3))
+- Add performance benchmarking and profiling suite
+- Initial release: structural allow/deny/defer engine for agent shell commands
+
+### Performance
+
+- skip redundant validation when installing a built-in profile ([#9](https://github.com/nickderobertis/allowlister/pull/9))
+
 ## [0.4.8](https://github.com/nickderobertis/allowlister/compare/v0.4.7...v0.4.8) - 2026-06-10
 
 ### Added
