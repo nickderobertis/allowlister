@@ -29,6 +29,21 @@
       }
     },
     {
+      "name": "discard: any allowed command may redirect to the null and standard-stream devices",
+      "description": "Redirection-only grant (never authorizes a command): any command another rule already allows may send stdout/stderr to the discard or standard-stream devices. /dev/null discards output; /dev/stdout, /dev/stderr, and /dev/fd/N only re-route to an already-open descriptor. None creates or truncates a real file, so -- unlike /tmp scratch -- they are safe to permit profile-wide. `>/dev/null`, `2>/dev/null`, and `>/dev/null 2>&1` are the ubiquitous 'discard this output' idiom; the engine still rejects `..` escapes and real device files under /dev.",
+      "argv": ["**"],
+      "action": "allow",
+      "grants": "redirections",
+      "redirections": {
+        "write_glob": [
+          "/dev/null",
+          "/dev/stdout",
+          "/dev/stderr",
+          "/dev/fd/*"
+        ]
+      }
+    },
+    {
       "name": "read: shell inspection commands",
       "description": "Builtins and coreutils that read state or transform stdin→stdout but never write files or mutate the system. Excludes anything that runs another command (env, command, xargs, watch, sudo) or has a file-writing mode (tee, sort -o).",
       "match": "@(ls|pwd|echo|printf|cat|bat|head|tail|wc|nl|stat|file|tree|du|df|basename|dirname|realpath|readlink|true|false|:|test|date|cal|printenv|whoami|id|groups|hostname|uname|uptime|which|whereis|type|locale|getconf|tty|arch|nproc|seq|sleep|clear|cksum|md5sum|sha1sum|sha256sum|sha512sum|b2sum|shuf|factor|numfmt|diff|cmp|comm|strings|od|xxd|hexdump|base32|base64|pr|paste|join|cut|grep|egrep|fgrep|rg|ag|ack|jq|man|less|more)?( *)",

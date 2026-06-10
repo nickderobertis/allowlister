@@ -116,6 +116,26 @@ fn read_only_blocks_output_redirection_but_allows_tmp_scratch() {
 }
 
 #[test]
+fn read_only_allows_discard_redirection_to_null_and_std_devices() {
+    // /dev/null and the standard-stream devices are pure discards / fd reroutes —
+    // the ubiquitous `2>/dev/null` idiom — so any allowed read may target them,
+    // even though read-only otherwise permits writes only to /tmp scratch.
+    let r = load("read-only");
+    check(&r, "echo hi > /dev/null", Verdict::Allow);
+    check(&r, "git status 2> /dev/null", Verdict::Allow);
+    check(&r, "ls -la > /dev/null 2>&1", Verdict::Allow);
+    check(&r, "git log > /dev/stdout", Verdict::Allow);
+    check(&r, "cat README.md 2> /dev/stderr", Verdict::Allow);
+    check(&r, "grep TODO src 1> /dev/fd/2", Verdict::Allow);
+    // The grant is redirection-only: it never authorizes an unknown command.
+    check(&r, "frobnicate > /dev/null", Verdict::Defer);
+    // It does not open real device files or look-alikes — only the discard set.
+    check(&r, "echo x > /dev/sda", Verdict::Deny);
+    check(&r, "echo x > /devnull", Verdict::Deny);
+    check(&r, "echo x > /dev/null/../etc/passwd", Verdict::Deny);
+}
+
+#[test]
 fn read_only_denies_only_the_irreversible_core() {
     // The hard wall is reserved for operations with no legitimate agent use:
     // host destruction and secret exfiltration. A deny cannot be overridden in a
@@ -318,6 +338,31 @@ fn repo_write_lets_any_allowed_command_redirect_to_tmp() {
     // A command the profile does not authorize still defers, redirect or not — the
     // redirection-only rule never authorizes a command on its own.
     check(&r, "frobnicate > /tmp/x", Verdict::Defer);
+}
+
+#[test]
+fn repo_write_allows_discard_redirection_to_null_and_std_devices() {
+    // The discard devices (/dev/null and the standard streams) are safe for any
+    // authorized command to target: a discard or fd reroute, never a real file.
+    let r = load("repo-write");
+    check(&r, "echo x > /dev/null", Verdict::Allow);
+    check(&r, "cargo test 2> /dev/null", Verdict::Allow);
+    check(&r, "node server.js > /dev/null 2>&1", Verdict::Allow);
+    check(
+        &r,
+        "python app.py > /dev/stdout 2> /dev/stderr",
+        Verdict::Allow,
+    );
+    check(&r, "git status 2> /dev/null", Verdict::Allow);
+    check(&r, "jq . a > /dev/fd/1", Verdict::Allow);
+    // Redirection-only grant: an unauthorized command still defers.
+    check(&r, "frobnicate > /dev/null", Verdict::Defer);
+    // The grant does not open real device files, look-alikes, or `..` escapes.
+    check(&r, "echo x > /dev/sda", Verdict::Deny);
+    check(&r, "node server.js > /dev/null/../etc/x", Verdict::Deny);
+    // Deny and ask still outrank the discard grant.
+    check(&r, "dd if=/dev/zero of=/dev/sda > /dev/null", Verdict::Deny);
+    check(&r, "rm -rf / 2> /dev/null", Verdict::Ask);
 }
 
 #[test]
