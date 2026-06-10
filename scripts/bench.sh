@@ -19,6 +19,8 @@
 # Environment overrides:
 #   BENCH_OUT       output directory (default: <repo>/target/bench)
 #   BENCH_WARMUP    warmup runs before timing (default: 10)
+#   BENCH_SEED      distinct synthetic commands seeded into the usage history
+#                   (default: 500; 5 under --dry-run)
 #   BENCH_KEEP      set to 1 to keep the temp sandbox for inspection
 #
 # Every benchmarked command runs through a shell (hyperfine's default) because
@@ -52,12 +54,16 @@ if ! command -v hyperfine >/dev/null 2>&1; then
 fi
 
 # A `--dry-run` proves the harness and commands work without spending time on
-# statistics; the full run warms up and lets hyperfine sample adaptively.
+# statistics; the full run warms up and lets hyperfine sample adaptively. The
+# history seed shrinks with it so the smoke check stays fast.
 runs_opt=()
+seed_default=500
 if [[ "$mode" == "--dry-run" ]]; then
     warmup=0
     runs_opt=(--runs 1)
+    seed_default=5
 fi
+seed="${BENCH_SEED:-$seed_default}"
 
 note "» building release binary"
 (cd "$repo_root" && cargo build --release --locked --quiet)
@@ -89,28 +95,43 @@ printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"comman
 export XDG_CONFIG_HOME="$sandbox/xdg"
 export HOME="$sandbox"
 
-# Seed a usage-history store so the `history` report benchmarks a non-trivial
-# aggregate rather than the empty fast path. Recording is opt-in, so force it on
-# for the seed only (the timed `history` rows read with it off). This writes under
-# the hermetic XDG dir, never the host.
-note "» seeding usage history"
+# Seed a usage-history store so the `history` report and the recording hook
+# benchmark a grown store, not the empty fast path. Report cost scales with the
+# number of *distinct* commands in the store, so beyond a handful of realistic
+# mixed-verdict commands, seed BENCH_SEED distinct synthetic ones (each via the
+# real hook so the on-disk format can never drift from the binary). Recording is
+# opt-in, so force it on for the seed only (the timed `history` rows read with
+# it off). This writes under the hermetic XDG dir, never the host.
+note "» seeding usage history (5 + $seed distinct commands)"
 for cmd in 'gh pr list | head -20' 'git status' 'npm run build' 'cargo test' 'some_unknown_tool'; do
     printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"},"cwd":"%s"}\n' \
         "$cmd" "$proj" | ALLOWLISTER_HISTORY=1 "$bin" hook claude-code >/dev/null
 done
+for ((i = 0; i < seed; i++)); do
+    printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"tool%d build --input file%d.txt"},"cwd":"%s"}\n' \
+        "$i" "$i" "$proj" | ALLOWLISTER_HISTORY=1 "$bin" hook claude-code >/dev/null
+done
+
+# Snapshot the seeded store and restore it before every timed run (hyperfine's
+# --prepare): the hook:record row appends on each run, and without the reset the
+# later history rows would read a store that grew during the benchmark itself.
+hist="$sandbox/xdg/allowlister/history"
+hist_seed="$sandbox/history-seed"
+[ -d "$hist" ] || fail "history seeding produced no store at $hist"
+cp -a "$hist" "$hist_seed"
 
 mkdir -p "$out"
 
 note "» benchmarking $bin"
 # One invocation so a single export holds every command. `--prepare` clears the
 # write targets before each run — `init` refuses to overwrite, and `install`
-# should measure the create-from-empty path each time, not an idempotent re-run;
-# removing both is a harmless no-op for the read-only commands. The deny case
-# exits 2 by design, so it is wrapped with `|| true` to keep hyperfine from
-# treating it as a failure.
+# should measure the create-from-empty path each time, not an idempotent re-run —
+# and resets the history store to the seeded snapshot; both are harmless no-ops
+# for the read-only commands. The deny case exits 2 by design, so it is wrapped
+# with `|| true` to keep hyperfine from treating it as a failure.
 hyperfine \
     --warmup "$warmup" "${runs_opt[@]}" \
-    --prepare "rm -f '$initdir/.allowlister.json' '$installdir/config.json'" \
+    --prepare "rm -f '$initdir/.allowlister.json' '$installdir/config.json' && rm -rf '$hist' && cp -a '$hist_seed' '$hist'" \
     --export-json "$out/results.json" \
     --export-markdown "$out/results.md" \
     -n "version" "'$bin' --version" \

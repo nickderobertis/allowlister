@@ -10,46 +10,21 @@
 //! Rules come from the canonical `examples/` fixtures (the same files the e2e
 //! suite loads), read once outside every timed loop so the numbers reflect the
 //! engine rather than fixture parsing. That rule set is intentionally small
-//! (~15 rules); `decide` cost scales with rule count and regex complexity, so
-//! these are a floor, not a worst case.
+//! (~15 rules), so those groups are a realistic floor; the `decide_scaling` and
+//! `config_load/synthetic` groups chart how cost grows with rule count and
+//! fragment count, using synthetic worst-case rule sets where nothing matches
+//! and every rule is scanned.
 
 use std::hint::black_box;
-use std::path::PathBuf;
 
 use allowlister::config;
-use allowlister::domain::{self, Analysis, Rule};
+use allowlister::domain::{self, Analysis};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-/// Labelled commands covering the structural shapes the analyzer handles: a
-/// bare command, a multi-stage pipeline, a redirection, command substitution,
-/// an unsupported construct (a function definition, which must defer), and a
-/// long `&&` chain that stresses fragment composition.
-fn corpus() -> Vec<(&'static str, String)> {
-    let chain = (0..32)
-        .map(|i| format!("echo step{i}"))
-        .collect::<Vec<_>>()
-        .join(" && ");
-    vec![
-        ("simple", "ls -la".to_string()),
-        ("pipeline", "gh pr list | head -20 | wc -l".to_string()),
-        ("redirection", "echo hi > /tmp/x.txt".to_string()),
-        ("substitution", "echo $(cat foo.txt | grep bar)".to_string()),
-        ("unsupported", "f() { rm -rf /; }; f".to_string()),
-        ("chain", chain),
-    ]
-}
+#[path = "support/mod.rs"]
+mod support;
 
-/// The example user + project rules, merged exactly as the e2e tests do.
-/// `load_from_paths` touches the filesystem, so callers hoist it out of the
-/// timed loop.
-fn example_rules() -> Vec<Rule> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    config::load_from_paths(&[
-        manifest.join("examples/user-config.json"),
-        manifest.join("examples/project-config.json"),
-    ])
-    .rules
-}
+use support::{corpus, example_rules, synthetic_config_file, synthetic_rules};
 
 fn bench_analyze(c: &mut Criterion) {
     let mut group = c.benchmark_group("analyze");
@@ -89,15 +64,60 @@ fn bench_evaluate(c: &mut Criterion) {
     group.finish();
 }
 
+/// How `decide` scales with rule count: a fixed three-stage pipeline against
+/// synthetic rule sets where nothing matches, so every rule is tried for every
+/// fragment — the full-scan worst case that bounds large user allowlists.
+fn bench_decide_rule_scaling(c: &mut Criterion) {
+    let analysis = domain::analyze("gh pr list | head -20 | wc -l");
+    let mut group = c.benchmark_group("decide_scaling/rules");
+    for n in [10usize, 100, 1000] {
+        let rules = synthetic_rules(n);
+        group.bench_with_input(BenchmarkId::from_parameter(n), &rules, |b, rules| {
+            b.iter(|| domain::decide(black_box(&analysis), black_box(rules.as_slice())));
+        });
+    }
+    group.finish();
+}
+
+/// How `decide` scales with fragment count: `&&` chains of growing length
+/// against a fixed 100-rule synthetic set. Together with `decide_scaling/rules`
+/// this charts both axes of the fragments × rules scan.
+fn bench_decide_fragment_scaling(c: &mut Criterion) {
+    let rules = synthetic_rules(100);
+    let mut group = c.benchmark_group("decide_scaling/fragments");
+    for len in [4usize, 16, 64] {
+        let analysis = domain::analyze(&support::chain(len));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(len),
+            &analysis,
+            |b, analysis| {
+                b.iter(|| domain::decide(black_box(analysis), black_box(rules.as_slice())));
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_config_load(c: &mut Criterion) {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let paths = [
-        manifest.join("examples/user-config.json"),
-        manifest.join("examples/project-config.json"),
-    ];
+    let paths = support::example_config_paths();
     c.bench_function("config_load/examples", |b| {
         b.iter(|| config::load_from_paths(black_box(&paths)));
     });
+}
+
+/// How config load + rule compilation scales with rule count — the startup
+/// cost a large allowlist adds to every spawned invocation.
+fn bench_config_load_scaling(c: &mut Criterion) {
+    let mut group = c.benchmark_group("config_load/synthetic");
+    for n in [10usize, 100, 1000] {
+        // The TempDir must outlive the timed loop that reads the file.
+        let (_dir, path) = synthetic_config_file(n);
+        let paths = [path];
+        group.bench_with_input(BenchmarkId::from_parameter(n), &paths, |b, paths| {
+            b.iter(|| config::load_from_paths(black_box(paths)));
+        });
+    }
+    group.finish();
 }
 
 criterion_group!(
@@ -105,6 +125,9 @@ criterion_group!(
     bench_analyze,
     bench_decide,
     bench_evaluate,
-    bench_config_load
+    bench_decide_rule_scaling,
+    bench_decide_fragment_scaling,
+    bench_config_load,
+    bench_config_load_scaling
 );
 criterion_main!(benches);

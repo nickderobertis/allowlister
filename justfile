@@ -243,8 +243,16 @@ bench-cli:
 bench-cli-smoke:
     @bash scripts/bench.sh --dry-run
 
-# Run both benchmark layers (Criterion + hyperfine).
-bench-all: bench bench-cli
+# Deterministic engine allocation counts (counting allocator; exact, comparable across commits).
+bench-allocs:
+    cargo bench --locked --quiet --bench engine_allocs
+
+# Deterministic end-to-end CLI instruction counts (cachegrind; Linux-only, needs valgrind).
+bench-instructions:
+    @bash scripts/bench-instructions.sh
+
+# Run the portable benchmark layers (Criterion + hyperfine + allocation counts).
+bench-all: bench bench-cli bench-allocs
 
 # Record a sampling profile to find bottlenecks (samply); see scripts/profile.sh for modes.
 profile *args:
@@ -276,7 +284,7 @@ clean:
 doctor:
     @echo "## toolchain" && rustc --version && cargo --version
     @echo "## components" && (rustup component list --installed 2>/dev/null || echo "rustup not present")
-    @echo "## tools" && for t in just cargo-nextest cargo-llvm-cov cargo-deny cargo-machete lefthook hyperfine critcmp samply; do printf '%-16s ' "$t"; command -v "$t" || echo "MISSING"; done
+    @echo "## tools" && for t in just cargo-nextest cargo-llvm-cov cargo-deny cargo-machete lefthook hyperfine critcmp samply valgrind; do printf '%-16s ' "$t"; command -v "$t" || echo "MISSING"; done
     @echo "## outdated (informational)" && (cargo outdated 2>/dev/null || echo "cargo-outdated not installed")
 
 # Print the full dependency tree (diagnostic).
