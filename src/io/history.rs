@@ -40,7 +40,7 @@ const SUMMARY: &str = "summary.json";
 const LOCK: &str = "compact.lock";
 /// The key distinct commands/subcommands collapse into once a map is full, so
 /// totals stay exact even though the long tail loses its per-key breakdown.
-const OVERFLOW: &str = "(other)";
+pub(crate) const OVERFLOW: &str = "(other)";
 
 /// Fold `events.jsonl` into the summary once it exceeds this many bytes (~1 MiB).
 const SEGMENT_CAP: u64 = 1_000_000;
@@ -50,6 +50,10 @@ const MAX_KEYS: usize = 5_000;
 const MAX_DIM_KEYS: usize = 1_000;
 /// Cap on distinct rule names tracked per subcommand.
 const MAX_RULES: usize = 16;
+/// Cap on distinct projects tracked per subcommand (with an overflow bucket), so
+/// the per-fragment project breakdown stays bounded regardless of how many
+/// repositories a fragment is ever run in.
+const MAX_FRAG_PROJECTS: usize = 64;
 /// Cap on fragments recorded per event (defends against pathological input).
 const MAX_FRAGMENTS: usize = 64;
 /// Cap on the character length of a stored command/subcommand/project string,
@@ -172,7 +176,8 @@ impl Counts {
     }
 }
 
-/// A subcommand's tallies plus a histogram of the rules that decided it.
+/// A subcommand's tallies plus a histogram of the rules that decided it and the
+/// projects it ran in.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FragCounts {
     /// Per-verdict tallies for this subcommand.
@@ -181,6 +186,10 @@ pub struct FragCounts {
     /// How often each named rule decided this subcommand.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, u64>,
+    /// Per-verdict tallies split by the project/cwd the subcommand ran in. Bounded
+    /// by [`MAX_FRAG_PROJECTS`], with the long tail collapsed into [`OVERFLOW`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub projects: BTreeMap<String, Counts>,
 }
 
 /// The durable cumulative aggregate: the full history, precomputed.
@@ -254,8 +263,10 @@ impl Summary {
             self.last_ts = event.ts;
         }
         self.overall.bump(&event.verdict, event.ts);
-        dim_entry(&mut self.projects, &event.project).bump(&event.verdict, event.ts);
-        dim_entry(&mut self.harnesses, &event.harness).bump(&event.verdict, event.ts);
+        capped_counts_entry(&mut self.projects, &event.project, MAX_DIM_KEYS)
+            .bump(&event.verdict, event.ts);
+        capped_counts_entry(&mut self.harnesses, &event.harness, MAX_DIM_KEYS)
+            .bump(&event.verdict, event.ts);
         counts_entry(
             &mut self.commands,
             &event.command,
@@ -274,6 +285,8 @@ impl Summary {
             if let Some(rule) = &fragment.rule {
                 bump_rule(&mut entry.rules, rule);
             }
+            capped_counts_entry(&mut entry.projects, &event.project, MAX_FRAG_PROJECTS)
+                .bump(&fragment.verdict, event.ts);
         }
     }
 }
@@ -308,10 +321,16 @@ fn frag_entry<'a>(
     }
 }
 
-/// Low-cardinality dimension entry (projects/harnesses): same overflow rule, no
-/// `truncated` flag since these rarely fill.
-fn dim_entry<'a>(map: &'a mut BTreeMap<String, Counts>, key: &str) -> &'a mut Counts {
-    let key = if map.contains_key(key) || map.len() < MAX_DIM_KEYS {
+/// A `Counts` dimension entry that collapses into [`OVERFLOW`] once the map holds
+/// `cap` distinct keys — same overflow rule as [`counts_entry`] but without a
+/// `truncated` flag, for the low-to-moderate-cardinality dimensions
+/// (projects/harnesses, and per-fragment projects) that rarely fill.
+fn capped_counts_entry<'a>(
+    map: &'a mut BTreeMap<String, Counts>,
+    key: &str,
+    cap: usize,
+) -> &'a mut Counts {
+    let key = if map.contains_key(key) || map.len() < cap {
         key.to_string()
     } else {
         OVERFLOW.to_string()
@@ -604,8 +623,8 @@ pub fn clear(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// One row of a frequency report: an aggregation key with its tallies and the
-/// rules that decided it.
+/// One row of a frequency report: an aggregation key with its tallies, the
+/// rules that decided it, and the projects it ran in.
 #[derive(Debug, Clone)]
 pub struct Row {
     /// The command line, subcommand, or program this row aggregates.
@@ -614,6 +633,9 @@ pub struct Row {
     pub counts: Counts,
     /// Rule-attribution histogram (empty for whole-command rows).
     pub rules: BTreeMap<String, u64>,
+    /// Per-project verdict tallies (empty for whole-command rows, which the store
+    /// does not break down by project).
+    pub projects: BTreeMap<String, Counts>,
 }
 
 /// Per-subcommand frequency rows. With `program`, subcommands are collapsed to
@@ -627,7 +649,8 @@ pub fn fragment_rows(
     verdict: Option<Verdict>,
     top: usize,
 ) -> Vec<Row> {
-    let mut grouped: BTreeMap<String, (Counts, BTreeMap<String, u64>)> = BTreeMap::new();
+    type Grouped = (Counts, BTreeMap<String, u64>, BTreeMap<String, Counts>);
+    let mut grouped: BTreeMap<String, Grouped> = BTreeMap::new();
     for (key, frag) in &summary.fragments {
         let key = if program {
             program_of(key)
@@ -639,10 +662,18 @@ pub fn fragment_rows(
         for (rule, count) in &frag.rules {
             *entry.1.entry(rule.clone()).or_default() += count;
         }
+        for (project, counts) in &frag.projects {
+            entry.2.entry(project.clone()).or_default().merge(counts);
+        }
     }
     let mut rows: Vec<Row> = grouped
         .into_iter()
-        .map(|(key, (counts, rules))| Row { key, counts, rules })
+        .map(|(key, (counts, rules, projects))| Row {
+            key,
+            counts,
+            rules,
+            projects,
+        })
         .collect();
     sort_and_take(&mut rows, verdict, top);
     rows
@@ -657,6 +688,7 @@ pub fn command_rows(summary: &Summary, verdict: Option<Verdict>, top: usize) -> 
             key: key.clone(),
             counts: counts.clone(),
             rules: BTreeMap::new(),
+            projects: BTreeMap::new(),
         })
         .collect();
     sort_and_take(&mut rows, verdict, top);
@@ -790,6 +822,10 @@ mod tests {
         assert_eq!(summary.fragments["grep x"].counts.defer, 1);
         assert_eq!(summary.projects["/a"].allow, 2);
         assert_eq!(summary.harnesses["claude-code"].total(), 3);
+        // Each fragment is also broken down by the project it ran in.
+        assert_eq!(summary.fragments["ls -la"].projects["/a"].allow, 2);
+        assert_eq!(summary.fragments["ls foo"].projects["/b"].allow, 1);
+        assert_eq!(summary.fragments["grep x"].projects["/b"].defer, 1);
     }
 
     #[test]
@@ -891,6 +927,36 @@ mod tests {
         let ls = rows.iter().find(|r| r.key == "ls").unwrap();
         assert_eq!(ls.counts.allow, 2);
         assert!(ls.rules.contains_key("ls"));
+    }
+
+    #[test]
+    fn fragment_rows_carry_and_merge_projects() {
+        let mut summary = Summary::default();
+        summary.record(&shell_event("ls -la", "/a", 1));
+        summary.record(&shell_event("ls -la", "/b", 1));
+        summary.record(&shell_event("ls foo", "/a", 1));
+        // Subcommand view keeps each fragment's own project split.
+        let rows = fragment_rows(&summary, false, None, 10);
+        let la = rows.iter().find(|r| r.key == "ls -la").unwrap();
+        assert_eq!(la.projects.len(), 2);
+        assert_eq!(la.projects["/a"].allow, 1);
+        assert_eq!(la.projects["/b"].allow, 1);
+        // Program view merges the project splits of every collapsed subcommand.
+        let programs = fragment_rows(&summary, true, None, 10);
+        let ls = programs.iter().find(|r| r.key == "ls").unwrap();
+        assert_eq!(ls.projects["/a"].allow, 2); // ls -la + ls foo, both in /a
+        assert_eq!(ls.projects["/b"].allow, 1);
+    }
+
+    #[test]
+    fn per_fragment_projects_overflow_into_a_single_bucket() {
+        let mut summary = Summary::default();
+        for i in 0..(MAX_FRAG_PROJECTS + 3) {
+            summary.record(&shell_event("ls -la", &format!("/p{i}"), 1));
+        }
+        let projects = &summary.fragments["ls -la"].projects;
+        assert_eq!(projects.len(), MAX_FRAG_PROJECTS + 1); // capped keys + overflow
+        assert_eq!(projects[OVERFLOW].allow, 3);
     }
 
     #[test]
