@@ -45,6 +45,11 @@ jobs:
         with:
           tool: just,hyperfine,critcmp
 
+      # cachegrind backs the deterministic instruction counts; a system package,
+      # not a cargo tool.
+      - name: Install valgrind
+        run: sudo apt-get update -q && sudo apt-get install -y -q valgrind
+
       # Fresh baselines every run: rust-cache may carry a stale target/criterion
       # across runs, which would silently corrupt the base-vs-PR comparison.
       - name: Clear stale Criterion baselines
@@ -56,20 +61,40 @@ jobs:
       - name: Benchmark this revision (hyperfine CLI)
         run: just bench-cli
 
-      # Best effort: the PR base may predate the engine bench (e.g. the PR that
+      # Exact counts, no statistics: these two are the only layers where a
+      # small delta is meaningful on a shared runner.
+      - name: Allocation counts (deterministic)
+        run: |
+          mkdir -p target/bench
+          just bench-allocs | tee target/bench/allocs.md
+
+      - name: Instruction counts (cachegrind)
+        run: just bench-instructions
+
+      # Best effort: the PR base may predate a bench (e.g. the PR that
       # introduces it), so a failure here is expected and non-fatal — the job
       # still reports absolute numbers, just without a regression delta.
-      - name: Compare against PR base (Criterion)
+      - name: Compare against PR base (Criterion + cachegrind)
         id: basecmp
         if: github.event_name == 'pull_request'
         continue-on-error: true
         run: |
           set -euo pipefail
           base='${{ github.event.pull_request.base.sha }}'
+          # The harness script must be the PR's copy even while the worktree sits
+          # at base (where it may not exist yet); parked one level under the repo
+          # root so its own root resolution still finds this repo.
+          cp scripts/bench-instructions.sh target/bench-instructions-pr.sh
           git checkout -q "$base"
           cargo bench --locked --bench engine -- --measurement-time 3 --save-baseline base
+          BENCH_OUT="$PWD/target/bench-base" bash target/bench-instructions-pr.sh || true
           git checkout -q -
           critcmp base pr | tee target/bench/critcmp.txt
+          if [ -s target/bench-base/instructions.tsv ]; then
+            bash scripts/bench-instructions.sh report \
+              target/bench-base/instructions.tsv target/bench/instructions.tsv \
+              | tee target/bench/instructions-delta.md
+          fi
 
       - name: Assemble report
         run: |
@@ -96,6 +121,18 @@ jobs:
               echo "ref yet (expected on the PR that introduces it). Future PRs will"
               echo "show the regression delta here._"
             fi
+            echo
+            echo "### CLI instruction counts (cachegrind; deterministic)"
+            echo
+            if [ -s target/bench/instructions-delta.md ]; then
+              cat target/bench/instructions-delta.md
+            else
+              cat target/bench/instructions.md
+            fi
+            echo
+            echo "### Engine allocation counts (deterministic)"
+            echo
+            cat target/bench/allocs.md
           } > "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
@@ -107,6 +144,10 @@ jobs:
             target/bench/results.json
             target/bench/results.md
             target/bench/critcmp.txt
+            target/bench/instructions.tsv
+            target/bench/instructions.md
+            target/bench/instructions-delta.md
+            target/bench/allocs.md
           if-no-files-found: warn
 
       # Same-repo PRs only: fork PRs carry a read-only token and cannot comment,

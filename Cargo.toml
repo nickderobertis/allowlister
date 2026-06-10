@@ -85,3 +85,10 @@ path = "tests/e2e/main.rs"
 [[bench]]
 name = "engine"
 harness = false
+
+# Deterministic allocation tallies for the same hot paths: a plain `main` with a
+# counting global allocator, no Criterion. Exact counts compare across runs and
+# commits without statistics; informational like every bench target.
+[[bench]]
+name = "engine_allocs"
+harness = false
