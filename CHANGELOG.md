@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.7](https://github.com/nickderobertis/allowlister/compare/v0.4.6...v0.4.7) - 2026-06-10
+
+### Added
+
+- list every asking fragment in the ask verdict reason ([#58](https://github.com/nickderobertis/allowlister/pull/58))
+
 ## [0.4.6](https://github.com/nickderobertis/allowlister/compare/v0.4.5...v0.4.6) - 2026-06-10
 
 ### Added
