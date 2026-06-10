@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8](https://github.com/nickderobertis/allowlister/compare/v0.4.7...v0.4.8) - 2026-06-10
+
+### Added
+
+- surface the projects each subcommand ran in via history ([#60](https://github.com/nickderobertis/allowlister/pull/60))
+
 ## [0.4.7](https://github.com/nickderobertis/allowlister/compare/v0.4.6...v0.4.7) - 2026-06-10
 
 ### Added
