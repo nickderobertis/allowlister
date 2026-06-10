@@ -111,16 +111,35 @@ pub fn decide(analysis: &Analysis, rules: &[Rule]) -> DecisionResult {
         return result(Verdict::Deny, reason, decisions, analysis);
     }
 
-    // No deny: any ask → overall ask (report the first asked fragment). Ask
-    // outranks allow, so one fragment needing confirmation holds the whole
-    // command for approval.
-    if let Some(asked) = decisions.iter().find(|d| d.verdict == Verdict::Ask) {
-        let reason = format!(
+    // No deny: any ask → overall ask. Ask outranks allow, so one asking fragment
+    // holds the whole command for approval — and approving it greenlights the
+    // entire command, so the reason names *every* fragment that tripped ask, not
+    // just the first. Otherwise an approver shown one command would have to read
+    // the rest of the script to learn what else they were waving through.
+    // Identical lines are collapsed so a long script that repeats a command stays
+    // scannable.
+    let mut asked: Vec<String> = Vec::new();
+    for decision in decisions.iter().filter(|d| d.verdict == Verdict::Ask) {
+        let line = format!(
             "`{}` ({}): {}",
-            asked.fragment.cmd_string(),
-            asked.fragment.role.as_str(),
-            asked.reason
+            decision.fragment.cmd_string(),
+            decision.fragment.role.as_str(),
+            decision.reason
         );
+        if !asked.contains(&line) {
+            asked.push(line);
+        }
+    }
+    if !asked.is_empty() {
+        let reason = if asked.len() == 1 {
+            asked.into_iter().next().expect("one asking fragment")
+        } else {
+            format!(
+                "{} commands need approval: {}",
+                asked.len(),
+                asked.join("; ")
+            )
+        };
         return result(Verdict::Ask, reason, decisions, analysis);
     }
 
@@ -387,6 +406,50 @@ mod tests {
     fn ask_rule_surfaces_for_approval() {
         let rules = vec![ask("publish", "npm publish*")];
         assert_eq!(evaluate("npm publish", &rules).verdict, Verdict::Ask);
+    }
+
+    #[test]
+    fn single_ask_reason_keeps_the_concise_one_command_form() {
+        let rules = vec![ask("publish", "npm publish*")];
+        let result = evaluate("npm publish", &rules);
+        assert_eq!(result.verdict, Verdict::Ask);
+        assert_eq!(
+            result.reason,
+            "`npm publish` (standalone): needs approval per rule 'publish'"
+        );
+    }
+
+    #[test]
+    fn ask_reason_lists_every_asking_fragment_not_just_the_first() {
+        // A multi-command script with two distinct asks: the approver must see
+        // both, not the first alone, since approving greenlights the whole line.
+        let rules = vec![
+            allow("git log", "git log*"),
+            ask("publish", "npm publish*"),
+            ask("force push", "git push*--force*"),
+        ];
+        let result = evaluate(
+            "npm publish && git log && git push --force origin main",
+            &rules,
+        );
+        assert_eq!(result.verdict, Verdict::Ask);
+        assert!(result.reason.starts_with("2 commands need approval:"));
+        assert!(result.reason.contains("`npm publish`"));
+        assert!(result.reason.contains("`git push --force origin main`"));
+        // The allowed fragment is not part of the approval prompt.
+        assert!(!result.reason.contains("git log"));
+    }
+
+    #[test]
+    fn ask_reason_collapses_identical_repeated_commands() {
+        // The same asking command twice adds no decision value; it is listed once.
+        let rules = vec![ask("publish", "npm publish*")];
+        let result = evaluate("npm publish && npm publish", &rules);
+        assert_eq!(result.verdict, Verdict::Ask);
+        assert_eq!(
+            result.reason,
+            "`npm publish` (standalone): needs approval per rule 'publish'"
+        );
     }
 
     #[test]
