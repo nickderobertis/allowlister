@@ -136,6 +136,35 @@ fn read_only_allows_discard_redirection_to_null_and_std_devices() {
 }
 
 #[test]
+fn read_only_handles_allowlister_own_commands() {
+    // allowlister's own read verbs auto-allow: check/explain evaluate and print a
+    // verdict (they never run what they evaluate), and history reports inspect the
+    // local usage store.
+    let r = load("read-only");
+    check(&r, "allowlister check 'rm -rf /'", Verdict::Allow);
+    check(&r, "allowlister explain 'git push --force'", Verdict::Allow);
+    check(&r, "allowlister history", Verdict::Allow);
+    check(&r, "allowlister history --json", Verdict::Allow);
+    check(&r, "allowlister history recent", Verdict::Allow);
+    check(&r, "allowlister history compact", Verdict::Allow);
+    check(&r, "allowlister history path", Verdict::Allow);
+    // Mutating its own config / harness settings, or deleting the history store,
+    // changes the gate the agent runs under, so it surfaces for approval.
+    check(&r, "allowlister history clear", Verdict::Ask);
+    check(&r, "allowlister history clear -y", Verdict::Ask);
+    check(&r, "allowlister init", Verdict::Ask);
+    check(
+        &r,
+        "allowlister init --global --profile repo-write -y",
+        Verdict::Ask,
+    );
+    check(&r, "allowlister install repo-write", Verdict::Ask);
+    check(&r, "allowlister install read-only --local", Verdict::Ask);
+    // The harness-hook verb is left unclassified — an agent never runs it by hand.
+    check(&r, "allowlister hook claude-code", Verdict::Defer);
+}
+
+#[test]
 fn read_only_denies_only_the_irreversible_core() {
     // The hard wall is reserved for operations with no legitimate agent use:
     // host destruction and secret exfiltration. A deny cannot be overridden in a
@@ -363,6 +392,23 @@ fn repo_write_allows_discard_redirection_to_null_and_std_devices() {
     // Deny and ask still outrank the discard grant.
     check(&r, "dd if=/dev/zero of=/dev/sda > /dev/null", Verdict::Deny);
     check(&r, "rm -rf / 2> /dev/null", Verdict::Ask);
+}
+
+#[test]
+fn repo_write_handles_allowlister_own_commands() {
+    // Same tiering as read-only: read verbs allow, the config-mutating and
+    // history-clearing verbs ask, the harness hook defers.
+    let r = load("repo-write");
+    check(&r, "allowlister check 'rm -rf /'", Verdict::Allow);
+    check(&r, "allowlister explain 'git push --force'", Verdict::Allow);
+    check(&r, "allowlister history", Verdict::Allow);
+    check(&r, "allowlister history recent --json", Verdict::Allow);
+    check(&r, "allowlister history compact", Verdict::Allow);
+    check(&r, "allowlister history clear", Verdict::Ask);
+    check(&r, "allowlister history clear -y", Verdict::Ask);
+    check(&r, "allowlister init -y", Verdict::Ask);
+    check(&r, "allowlister install read-only --local", Verdict::Ask);
+    check(&r, "allowlister hook claude-code", Verdict::Defer);
 }
 
 #[test]

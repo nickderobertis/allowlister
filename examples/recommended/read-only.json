@@ -107,6 +107,25 @@
       "match": "gh api*@( -f| -F| --field| --raw-field| --input)*",
       "action": "ask" },
 
+    { "name": "allowlister read-only: evaluate and explain",
+      "description": "allowlister's own read-only verbs: check/explain evaluate a command or tool call against the rules and print a verdict -- they touch no files and run nothing of what they evaluate. The config-mutating verbs (init, install) and the history delete are held for approval below.",
+      "match": "allowlister @(check|explain)?( *)",
+      "action": "allow" },
+
+    { "name": "allowlister read-only: history reports",
+      "description": "Inspecting recorded usage. recent/path are reads; compact only folds the local event log into its own summary in place (no data loss). `history clear` deletes the store, so it is carved out as an ask below.",
+      "match": "allowlister history?( *)",
+      "action": "allow" },
+
+    { "name": "ask: allowlister history clear (deletes recorded usage)",
+      "match": "allowlister history clear*",
+      "action": "ask" },
+
+    { "name": "ask: allowlister init/install (write config and harness settings)",
+      "description": "init writes a config and edits the harness's settings; install merges an allowlist into your config. Both change the gate the agent itself runs under -- a self-modification and permission-widening path -- so they surface for human approval rather than auto-allowing.",
+      "match": "allowlister @(init|install)?( *)",
+      "action": "ask" },
+
     { "name": "node read-only: version only (node runs arbitrary code)",
       "match": "node @(--version|-v)?( *)",
       "action": "allow" },
