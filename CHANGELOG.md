@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.10](https://github.com/nickderobertis/allowlister/compare/v0.4.9...v0.4.10) - 2026-06-10
+
+### Performance
+
+- defer glob regex compilation behind a literal-prefix gate
+
 ## [0.4.9](https://github.com/nickderobertis/allowlister/compare/v0.4.8...v0.4.9) - 2026-06-10
 
 ### Added
