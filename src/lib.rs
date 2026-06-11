@@ -23,6 +23,7 @@ pub mod errors;
 mod cli;
 mod commands;
 mod io;
+mod jsonc;
 
 /// Parse process arguments and run the CLI, returning the process exit code.
 ///

@@ -105,13 +105,13 @@ ${AL_TOOL_RULES}
 JSON
 
 # Set the project up exactly the way a user would: `init` writes the project
-# `.allowlister.json` (here from our deterministic rules file) AND registers the
+# `.allowlister.jsonc` (here from our deterministic rules file) AND registers the
 # PreToolUse hook plugin under .agents/plugins/allowlister/. Exercising init here
 # means the live check also covers the plugin-registration path end to end.
 note "» wiring the project with \`allowlister init --harness goose\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness goose --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
-[ -f "$proj/.allowlister.json" ] || fail "init did not write the project config"
+[ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 grep -q 'allowlister hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
     || fail "init did not register the hook in the plugin's hooks.json"
 

@@ -1,17 +1,22 @@
 //! `allowlister install` — merge an allowlist (or a built-in profile) into a
 //! target config, creating it if absent. The merge is by rule name, so
 //! re-running is idempotent: a rule already present is left in place rather than
-//! duplicated. This is the "layer a curated ruleset onto what you already have"
-//! path; `init` writes a fresh config (and wires up the hook). Both share the
-//! source resolution and merge in [`super::profile`].
+//! duplicated. An existing target is edited in place — its comments and
+//! formatting survive — and a new one receives the source text verbatim, so a
+//! profile's explanatory comments land in the file. This is the "layer a curated
+//! ruleset onto what you already have" path; `init` writes a fresh config (and
+//! wires up the hook). Both share the source resolution and merge in
+//! [`super::profile`].
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::errors::Error;
 use crate::io::configfs::{self, Env};
 use crate::{commands::profile, errors::Result};
 
 /// Merge `source` into the chosen target config. `--global` (the default)
-/// targets the user config, `--local` a project `.allowlister.json`, and
+/// targets the user config, `--local` a project `.allowlister.jsonc`, and
 /// `output` an explicit path. `source` is a built-in profile name or a file
 /// path.
 pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> Result<i32> {
@@ -21,9 +26,28 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
 
     let target = target_path(local, output)?;
     let created = !target.exists();
-    let mut target_doc = profile::read_target(&target)?;
-    let merge = profile::merge_rules(&mut target_doc, &target, incoming)?;
-    profile::write_config(&target, &target_doc)?;
+    let merge = if created {
+        // A fresh target gets the source text verbatim, so a built-in profile's
+        // explanatory comments land in the file (matching what `init` writes).
+        let total = incoming.len();
+        profile::write_file(&target, &source.text)?;
+        profile::Merge {
+            added: total,
+            skipped: 0,
+            total,
+        }
+    } else {
+        let text = fs::read_to_string(&target).map_err(|err| Error::Read {
+            path: target.clone(),
+            source: err,
+        })?;
+        let label = target.display().to_string();
+        let (updated, merge) = profile::merge_rules_text(&text, &label, incoming)?;
+        if updated != text {
+            profile::write_file(&target, &updated)?;
+        }
+        merge
+    };
 
     let verb = if created { "Created" } else { "Updated" };
     println!("{verb} {} from {}.", target.display(), source.label);
@@ -65,8 +89,11 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    // A created target carries the profile text verbatim — comments included —
+    // so strip them the way the loader does before a strict parse.
     fn read(path: &Path) -> Value {
-        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+        let text = fs::read_to_string(path).unwrap();
+        serde_json::from_str(&config::strip_jsonc_comments(&text)).unwrap()
     }
 
     fn rule_names(doc: &Value) -> Vec<String> {
@@ -149,6 +176,48 @@ mod tests {
 
         run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
         assert_eq!(rule_names(&read(&target)), vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn a_new_target_receives_the_profile_text_with_its_comments() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.jsonc");
+        run("read-only", true, false, Some(target.as_path())).unwrap();
+        let text = fs::read_to_string(&target).unwrap();
+        assert!(
+            text.contains("//"),
+            "the profile's explanatory comments must land in the file"
+        );
+    }
+
+    #[test]
+    fn merging_preserves_the_targets_comments_and_formatting() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("config.jsonc");
+        let original = "{\n  // hand-written notes\n  \"rules\": [\n    { \"name\": \"keep\", \"match\": \"ls*\", \"action\": \"allow\" } // why I allow this\n  ]\n}\n";
+        fs::write(&target, original).unwrap();
+        let src = dir.path().join("src.json");
+        fs::write(
+            &src,
+            r#"{"rules":[{"name":"x","match":"x*","action":"allow"}]}"#,
+        )
+        .unwrap();
+
+        run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
+        let text = fs::read_to_string(&target).unwrap();
+        // Everything up to the appended rule is byte-for-byte untouched; the
+        // trailing comment stays attached to its rule, after the new comma.
+        assert!(
+            text.starts_with(
+                "{\n  // hand-written notes\n  \"rules\": [\n    { \"name\": \"keep\", \"match\": \"ls*\", \"action\": \"allow\" }, // why I allow this\n"
+            ),
+            "comments and formatting must survive the merge: {text}"
+        );
+        assert_eq!(rule_names(&read(&target)), vec!["keep", "x"]);
+
+        // A re-install adds nothing and leaves the file byte-identical.
+        run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), text);
     }
 
     #[test]

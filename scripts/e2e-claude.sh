@@ -88,13 +88,13 @@ ${AL_TOOL_RULES}
 JSON
 
 # Set the project up exactly the way a user would: `init` writes the project
-# `.allowlister.json` (here from our deterministic rules file) AND registers the
+# `.allowlister.jsonc` (here from our deterministic rules file) AND registers the
 # Bash PreToolUse hook in `.claude/settings.json`. Exercising init here means the
 # live check also covers the hook-registration path end to end.
 note "» wiring the project with \`allowlister init\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
-[ -f "$proj/.allowlister.json" ] || fail "init did not write the project config"
+[ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 grep -q 'allowlister hook claude-code' "$proj/.claude/settings.json" \
     || fail "init did not register the hook in .claude/settings.json"
 

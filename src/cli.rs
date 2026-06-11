@@ -75,11 +75,12 @@ enum Command {
         /// Write the user-level config (the default).
         #[arg(long, conflicts_with = "local")]
         global: bool,
-        /// Write a project-level `.allowlister.json` in the current directory.
+        /// Write a project-level `.allowlister.jsonc` in the current directory
+        /// (updates an existing `.allowlister.json` in place).
         #[arg(long)]
         local: bool,
         /// Starting ruleset: a built-in (`starter`, `read-only`, `repo-write`)
-        /// or a path to an allowlist JSON file. Defaults to `starter`.
+        /// or a path to an allowlist JSON/JSONC file. Defaults to `starter`.
         #[arg(long, value_name = "SOURCE")]
         profile: Option<String>,
         /// Which coding harness to wire the hook into; see `--help` for the
@@ -145,12 +146,13 @@ enum Command {
     /// never duplicates rules, so it is safe to layer profiles.
     Install {
         /// A built-in profile name (`read-only` or `repo-write`) or a path to an
-        /// allowlist JSON file.
+        /// allowlist JSON/JSONC file.
         source: String,
         /// Merge into the user-level config (the default).
         #[arg(long, conflicts_with_all = ["local", "output"])]
         global: bool,
-        /// Merge into a project `.allowlister.json` in the current directory.
+        /// Merge into a project `.allowlister.jsonc` in the current directory
+        /// (updates an existing `.allowlister.json` in place).
         #[arg(long, conflicts_with = "output")]
         local: bool,
         /// Merge into an explicit file path instead of a discovered config.
