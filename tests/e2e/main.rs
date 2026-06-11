@@ -1973,8 +1973,22 @@ fn history_records_hook_evaluations_and_reports_them() {
     assert_eq!(value["overall"]["allow"], 1);
     assert_eq!(value["overall"]["deny"], 1);
     assert_eq!(value["overall"]["defer"], 1);
+    // Time survives aggregation: the report carries its decay anchor and every
+    // row keeps first/last use plus a fresh (just-recorded) recency weight.
+    assert!(value["as_of"].as_u64().unwrap() > 0);
+    let row = value["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "some_unknown_tool --flag")
+        .unwrap();
+    assert!(row["last_ts"].as_u64().unwrap() > 0, "{row}");
+    assert!(row["first_ts"].as_u64().unwrap() > 0, "{row}");
+    assert!(row["recent_total"].as_f64().unwrap() > 0.9, "{row}");
+    assert!(row["recent"]["defer"].as_f64().unwrap() > 0.9, "{row}");
 
-    // The text report names a deferred subcommand and offers the refine tip.
+    // The text report names a deferred subcommand, shows the recency columns,
+    // and offers the refine tip.
     let text = sandbox
         .command()
         .args(["history"])
@@ -1986,6 +2000,9 @@ fn history_records_hook_evaluations_and_reports_them() {
     let text = String::from_utf8(text).unwrap();
     assert!(text.contains("3 event(s) recorded"), "{text}");
     assert!(text.contains("some_unknown_tool --flag"), "{text}");
+    assert!(text.contains("RECENT"), "{text}");
+    assert!(text.contains("LAST"), "{text}");
+    assert!(text.contains("<1h"), "{text}");
     assert!(text.contains("Tip:"), "{text}");
 }
 

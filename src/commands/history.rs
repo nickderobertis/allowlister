@@ -19,7 +19,7 @@ use serde::Serialize;
 use crate::domain::Verdict;
 use crate::errors::Result;
 use crate::io::configfs::{self, Env};
-use crate::io::history::{self, Counts, Event, Row, Summary};
+use crate::io::history::{self, Counts, Event, Recency, Row, Summary};
 
 /// Which frequency table the default view shows.
 pub enum View {
@@ -87,9 +87,10 @@ pub fn run(action: Option<Action>, show: ShowArgs) -> Result<i32> {
     };
     let stdout = io::stdout();
     let mut out = stdout.lock();
+    let now = history::now_secs();
     match action {
-        None => show_in(&dir, &show, &mut out),
-        Some(Action::Recent(args)) => recent_in(&dir, &args, &mut out),
+        None => show_in(&dir, &show, now, &mut out),
+        Some(Action::Recent(args)) => recent_in(&dir, &args, now, &mut out),
         Some(Action::Compact) => compact_in(&dir, &mut out),
         Some(Action::Clear { yes }) => {
             let stdin = io::stdin();
@@ -104,8 +105,8 @@ pub fn run(action: Option<Action>, show: ShowArgs) -> Result<i32> {
 }
 
 /// Render the frequency report. Separated from [`run`] so it is testable with an
-/// explicit directory and writer.
-fn show_in<W: Write>(dir: &Path, args: &ShowArgs, out: &mut W) -> Result<i32> {
+/// explicit directory, report time, and writer.
+fn show_in<W: Write>(dir: &Path, args: &ShowArgs, now: u64, out: &mut W) -> Result<i32> {
     let summary = history::aggregate(dir);
     let rows = match args.view {
         View::Fragments => history::fragment_rows(&summary, false, args.verdict, args.top),
@@ -114,7 +115,7 @@ fn show_in<W: Write>(dir: &Path, args: &ShowArgs, out: &mut W) -> Result<i32> {
     };
 
     if args.json {
-        print_json(out, &summary, args, &rows);
+        print_json(out, &summary, args, &rows, now);
         return Ok(0);
     }
 
@@ -133,7 +134,7 @@ fn show_in<W: Write>(dir: &Path, args: &ShowArgs, out: &mut W) -> Result<i32> {
     let _ = writeln!(out);
     let _ = writeln!(out, "{}:", title(args));
     let _ = writeln!(out);
-    print_table(out, &rows, &args.view, args.by_project);
+    print_table(out, &rows, &args.view, args.by_project, args.verdict, now);
 
     let truncated = match args.view {
         View::Commands => summary.commands_truncated,
@@ -176,10 +177,20 @@ fn title(args: &ShowArgs) -> String {
 }
 
 /// Print the frequency table with right-aligned counts and a left-aligned key.
-/// For subcommand/program views trailing columns count the projects the key ran
-/// in and name the dominant rule; with `by_project`, each row is followed by an
-/// indented per-project verdict breakdown.
-fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View, by_project: bool) {
+/// Beyond the verdict tallies, `RECENT` is the recency-weighted activity (the
+/// filtered verdict's when one is set, else the total) decayed to `now`, and
+/// `LAST` is the age of the latest use — together they separate live keys from
+/// heavy-but-stale ones. For subcommand/program views trailing columns count the
+/// projects the key ran in and name the dominant rule; with `by_project`, each
+/// row is followed by an indented per-project verdict breakdown.
+fn print_table<W: Write>(
+    out: &mut W,
+    rows: &[Row],
+    view: &View,
+    by_project: bool,
+    verdict: Option<Verdict>,
+    now: u64,
+) {
     // The whole-command view is not broken down by project, so it carries
     // neither the rule nor the projects columns.
     let show_detail = !matches!(view, View::Commands);
@@ -189,11 +200,11 @@ fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View, by_project: boo
         View::Fragments => "SUBCOMMAND",
     };
 
-    // Numeric columns: header plus every row's value decides the width.
-    let nums = ["TOTAL", "ALLOW", "ASK", "DENY", "DEFER"];
+    // Right-aligned columns: header plus every row's value decides the width.
+    let nums = ["TOTAL", "ALLOW", "ASK", "DENY", "DEFER", "RECENT", "LAST"];
     let mut widths: Vec<usize> = nums.iter().map(|h| h.len()).collect();
     for row in rows {
-        for (i, value) in cells(&row.counts).iter().enumerate() {
+        for (i, value) in cells(&row.counts, verdict, now).iter().enumerate() {
             widths[i] = widths[i].max(value.len());
         }
     }
@@ -225,7 +236,7 @@ fn print_table<W: Write>(out: &mut W, rows: &[Row], view: &View, by_project: boo
 
     for row in rows {
         let mut line = String::new();
-        for (i, value) in cells(&row.counts).iter().enumerate() {
+        for (i, value) in cells(&row.counts, verdict, now).iter().enumerate() {
             line.push_str(&format!("{:>w$}  ", value, w = widths[i]));
         }
         line.push_str(&format!("{:<kw$}", row.key, kw = key_width));
@@ -273,14 +284,45 @@ fn print_project_breakdown<W: Write>(out: &mut W, projects: &BTreeMap<String, Co
     }
 }
 
-fn cells(counts: &Counts) -> [String; 5] {
+fn cells(counts: &Counts, verdict: Option<Verdict>, now: u64) -> [String; 7] {
+    let recent = counts.recent_at(now);
+    let recent_value = match verdict {
+        Some(v) => recent.get(v),
+        None => recent.total(),
+    };
     [
         counts.total().to_string(),
         counts.allow.to_string(),
         counts.ask.to_string(),
         counts.deny.to_string(),
         counts.defer.to_string(),
+        format!("{recent_value:.1}"),
+        age_label(counts.last_ts, now),
     ]
+}
+
+/// Compact age of the latest use (`<1h`, `3h`, `5d`, `2w`, `6mo`, `1y`), or `-`
+/// when no timestamp was recorded.
+fn age_label(ts: u64, now: u64) -> String {
+    const HOUR: u64 = 3_600;
+    const DAY: u64 = 86_400;
+    if ts == 0 {
+        return "-".to_string();
+    }
+    let secs = now.saturating_sub(ts);
+    if secs < HOUR {
+        "<1h".to_string()
+    } else if secs < DAY {
+        format!("{}h", secs / HOUR)
+    } else if secs < 7 * DAY {
+        format!("{}d", secs / DAY)
+    } else if secs < 30 * DAY {
+        format!("{}w", secs / (7 * DAY))
+    } else if secs < 365 * DAY {
+        format!("{}mo", secs / (30 * DAY))
+    } else {
+        format!("{}y", secs / (365 * DAY))
+    }
 }
 
 /// The most-cited rule for a subcommand, annotated with `(+N)` when others also
@@ -304,6 +346,15 @@ struct RowJson<'a> {
     ask: u64,
     deny: u64,
     defer: u64,
+    /// Unix seconds of this key's earliest recorded use (0 when unknown).
+    first_ts: u64,
+    /// Unix seconds of this key's latest recorded use.
+    last_ts: u64,
+    /// Recency-weighted per-verdict activity decayed to `as_of` (30-day
+    /// half-life): compare against the raw counts to spot heavy-but-stale keys.
+    #[serde(skip_serializing_if = "Recency::is_empty")]
+    recent: Recency,
+    recent_total: f64,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     rules: &'a BTreeMap<String, u64>,
     /// Distinct projects this key ran in (the overflow bucket, if present, counts
@@ -319,6 +370,9 @@ struct ShowJson<'a> {
     events_total: u64,
     first_ts: u64,
     last_ts: u64,
+    /// The report time (Unix seconds) every `recent` weight was decayed to; ages
+    /// are `as_of - last_ts`.
+    as_of: u64,
     overall: &'a Counts,
     view: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -327,11 +381,27 @@ struct ShowJson<'a> {
     rows: Vec<RowJson<'a>>,
 }
 
-fn print_json<W: Write>(out: &mut W, summary: &Summary, args: &ShowArgs, rows: &[Row]) {
+/// Round a decayed weight for output: two decimals carry all the signal a
+/// refine pass needs and keep the JSON stable to assert on.
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn rounded(recent: &Recency) -> Recency {
+    Recency {
+        allow: round2(recent.allow),
+        deny: round2(recent.deny),
+        ask: round2(recent.ask),
+        defer: round2(recent.defer),
+    }
+}
+
+fn print_json<W: Write>(out: &mut W, summary: &Summary, args: &ShowArgs, rows: &[Row], now: u64) {
     let payload = ShowJson {
         events_total: summary.events_total,
         first_ts: summary.first_ts,
         last_ts: summary.last_ts,
+        as_of: now,
         overall: &summary.overall,
         view: match args.view {
             View::Fragments => "fragments",
@@ -345,16 +415,23 @@ fn print_json<W: Write>(out: &mut W, summary: &Summary, args: &ShowArgs, rows: &
         },
         rows: rows
             .iter()
-            .map(|row| RowJson {
-                key: &row.key,
-                total: row.counts.total(),
-                allow: row.counts.allow,
-                ask: row.counts.ask,
-                deny: row.counts.deny,
-                defer: row.counts.defer,
-                rules: &row.rules,
-                project_count: row.projects.len(),
-                projects: args.by_project.then_some(&row.projects),
+            .map(|row| {
+                let recent = rounded(&row.counts.recent_at(now));
+                RowJson {
+                    key: &row.key,
+                    total: row.counts.total(),
+                    allow: row.counts.allow,
+                    ask: row.counts.ask,
+                    deny: row.counts.deny,
+                    defer: row.counts.defer,
+                    first_ts: row.counts.first_ts,
+                    last_ts: row.counts.last_ts,
+                    recent,
+                    recent_total: round2(recent.total()),
+                    rules: &row.rules,
+                    project_count: row.projects.len(),
+                    projects: args.by_project.then_some(&row.projects),
+                }
             })
             .collect(),
     };
@@ -363,8 +440,8 @@ fn print_json<W: Write>(out: &mut W, summary: &Summary, args: &ShowArgs, rows: &
     }
 }
 
-/// List the recent raw events (newest first), filtered.
-fn recent_in<W: Write>(dir: &Path, args: &RecentArgs, out: &mut W) -> Result<i32> {
+/// List the recent raw events (newest first), filtered, each with its age.
+fn recent_in<W: Write>(dir: &Path, args: &RecentArgs, now: u64, out: &mut W) -> Result<i32> {
     let mut events = history::read_events(dir);
     events.reverse();
     let selected: Vec<&Event> = events
@@ -395,9 +472,10 @@ fn recent_in<W: Write>(dir: &Path, args: &RecentArgs, out: &mut W) -> Result<i32
     for event in selected {
         let _ = writeln!(
             out,
-            "{:<6} {:<11} {}   [{}]",
+            "{:<6} {:<11} {:>4}  {}   [{}]",
             event.verdict.to_uppercase(),
             event.harness,
+            age_label(event.ts, now),
             event.command,
             event.project
         );
@@ -450,44 +528,38 @@ mod tests {
     use std::io::Cursor;
     use tempfile::TempDir;
 
+    /// The fixed report time most tests use; seeding at the same instant keeps
+    /// the recency weights equal to the raw counts.
+    const NOW: u64 = 7;
+
     fn seed(dir: &Path) {
-        let cfg = config::compile_str(
-            r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
-            "t",
-        );
-        let record = |command: &str| {
-            let result = evaluate(command, &cfg.rules);
-            // Build via the public record path by appending a constructed event.
-            let event = crate::io::history::build_event_for_test(
-                "claude-code",
-                "/repo",
-                Subject::Shell(command),
-                &result,
-                7,
-            );
-            append_event(dir, &event).unwrap();
-        };
-        record("ls -la");
-        record("ls -la");
-        record("ls foo | grep bar");
+        seed_at(dir, "ls -la", "/repo", NOW);
+        seed_at(dir, "ls -la", "/repo", NOW);
+        seed_at(dir, "ls foo | grep bar", "/repo", NOW);
     }
 
-    /// Append one shell event under an explicit project, for project-dimension
-    /// tests.
-    fn seed_in_project(dir: &Path, command: &str, project: &str) {
+    /// Append one shell event with an explicit project and timestamp.
+    fn seed_at(dir: &Path, command: &str, project: &str, ts: u64) {
         let cfg = config::compile_str(
             r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
             "t",
         );
         let result = evaluate(command, &cfg.rules);
+        // Build via the public record path by appending a constructed event.
         let event = crate::io::history::build_event_for_test(
             "claude-code",
             project,
             Subject::Shell(command),
             &result,
-            7,
+            ts,
         );
         append_event(dir, &event).unwrap();
+    }
+
+    /// Append one shell event under an explicit project, for project-dimension
+    /// tests.
+    fn seed_in_project(dir: &Path, command: &str, project: &str) {
+        seed_at(dir, command, project, NOW);
     }
 
     fn out_string(buf: Vec<u8>) -> String {
@@ -508,7 +580,7 @@ mod tests {
     fn empty_store_prints_enable_hint() {
         let dir = TempDir::new().unwrap();
         let mut out = Vec::new();
-        show_in(dir.path(), &show(View::Fragments, None), &mut out).unwrap();
+        show_in(dir.path(), &show(View::Fragments, None), NOW, &mut out).unwrap();
         assert!(out_string(out).contains("No usage recorded yet"));
     }
 
@@ -517,7 +589,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         seed(dir.path());
         let mut out = Vec::new();
-        show_in(dir.path(), &show(View::Fragments, None), &mut out).unwrap();
+        show_in(dir.path(), &show(View::Fragments, None), NOW, &mut out).unwrap();
         let text = out_string(out);
         assert!(text.contains("3 event(s) recorded"));
         assert!(text.contains("ls -la"));
@@ -534,7 +606,7 @@ mod tests {
         seed_in_project(dir.path(), "ls -la", "/repo-a");
         seed_in_project(dir.path(), "ls -la", "/repo-b");
         let mut out = Vec::new();
-        show_in(dir.path(), &show(View::Fragments, None), &mut out).unwrap();
+        show_in(dir.path(), &show(View::Fragments, None), NOW, &mut out).unwrap();
         let text = out_string(out);
         // The summary column appears with the distinct-project count, but no
         // per-project breakdown without the flag.
@@ -561,7 +633,7 @@ mod tests {
             json: false,
         };
         let mut out = Vec::new();
-        show_in(dir.path(), &args, &mut out).unwrap();
+        show_in(dir.path(), &args, NOW, &mut out).unwrap();
         let text = out_string(out);
         // Both projects are listed with their own verdict tallies.
         assert!(text.contains("/repo-a"));
@@ -582,7 +654,7 @@ mod tests {
             json: true,
         };
         let mut out = Vec::new();
-        show_in(dir.path(), &args, &mut out).unwrap();
+        show_in(dir.path(), &args, NOW, &mut out).unwrap();
         let value: serde_json::Value = serde_json::from_str(&out_string(out)).unwrap();
         let row = value["rows"]
             .as_array()
@@ -603,6 +675,7 @@ mod tests {
         show_in(
             dir.path(),
             &show(View::Fragments, Some(Verdict::Defer)),
+            NOW,
             &mut out,
         )
         .unwrap();
@@ -620,10 +693,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         seed(dir.path());
         let mut programs = Vec::new();
-        show_in(dir.path(), &show(View::Programs, None), &mut programs).unwrap();
+        show_in(dir.path(), &show(View::Programs, None), NOW, &mut programs).unwrap();
         assert!(out_string(programs).contains("PROGRAM"));
         let mut commands = Vec::new();
-        show_in(dir.path(), &show(View::Commands, None), &mut commands).unwrap();
+        show_in(dir.path(), &show(View::Commands, None), NOW, &mut commands).unwrap();
         let text = out_string(commands);
         assert!(text.contains("COMMAND"));
         assert!(text.contains("ls foo | grep bar"));
@@ -643,6 +716,7 @@ mod tests {
                 by_project: false,
                 json: true,
             },
+            NOW,
             &mut out,
         )
         .unwrap();
@@ -652,6 +726,78 @@ mod tests {
         assert_eq!(value["view"], "fragments");
         let rows = value["rows"].as_array().unwrap();
         assert!(rows.iter().any(|r| r["key"] == "ls -la" && r["allow"] == 2));
+    }
+
+    #[test]
+    fn table_carries_recent_and_last_columns() {
+        const DAY: u64 = 86_400;
+        let dir = TempDir::new().unwrap();
+        let now = 100 * DAY;
+        seed_at(dir.path(), "ls -la", "/repo", now - 3 * DAY);
+        let mut out = Vec::new();
+        show_in(dir.path(), &show(View::Fragments, None), now, &mut out).unwrap();
+        let text = out_string(out);
+        assert!(text.contains("RECENT"), "{text}");
+        assert!(text.contains("LAST"), "{text}");
+        let row = text.lines().find(|l| l.contains("ls -la")).unwrap();
+        // Last used three days before the report time.
+        assert!(row.contains("3d"), "expected age 3d in: {row}");
+        // One event, slightly decayed over those three days: 0.9-ish.
+        assert!(row.contains("0.9"), "expected decayed weight in: {row}");
+    }
+
+    #[test]
+    fn json_separates_fresh_from_heavy_but_stale_keys() {
+        let half_life = crate::io::history::RECENT_HALF_LIFE_SECS;
+        let dir = TempDir::new().unwrap();
+        let now = 100 * half_life;
+        // A burst of use long ago vs a single use now.
+        for _ in 0..5 {
+            seed_at(
+                dir.path(),
+                "ls stale | grep old",
+                "/repo",
+                now - 20 * half_life,
+            );
+        }
+        seed_at(dir.path(), "ls fresh | grep new", "/repo", now);
+        let args = ShowArgs {
+            view: View::Fragments,
+            verdict: Some(Verdict::Defer),
+            top: 20,
+            by_project: false,
+            json: true,
+        };
+        let mut out = Vec::new();
+        show_in(dir.path(), &args, now, &mut out).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out_string(out)).unwrap();
+        assert_eq!(value["as_of"], now);
+        let rows = value["rows"].as_array().unwrap();
+        let row = |key: &str| rows.iter().find(|r| r["key"] == key).unwrap();
+        let stale = row("grep old");
+        // Five raw defers, but the recency weight has fully decayed away.
+        assert_eq!(stale["defer"], 5);
+        assert_eq!(stale["recent_total"], 0.0);
+        assert!(stale.get("recent").is_none(), "decayed weights are omitted");
+        assert_eq!(stale["last_ts"], now - 20 * half_life);
+        let fresh = row("grep new");
+        assert_eq!(fresh["defer"], 1);
+        assert_eq!(fresh["recent_total"], 1.0);
+        assert_eq!(fresh["recent"]["defer"], 1.0);
+        assert_eq!(fresh["first_ts"], now);
+    }
+
+    #[test]
+    fn age_labels_cover_the_unit_ladder() {
+        const DAY: u64 = 86_400;
+        let now = 10 * 365 * DAY;
+        assert_eq!(age_label(0, now), "-");
+        assert_eq!(age_label(now - 30, now), "<1h");
+        assert_eq!(age_label(now - 5 * 3_600, now), "5h");
+        assert_eq!(age_label(now - 2 * DAY, now), "2d");
+        assert_eq!(age_label(now - 20 * DAY, now), "2w");
+        assert_eq!(age_label(now - 200 * DAY, now), "6mo");
+        assert_eq!(age_label(now - 800 * DAY, now), "2y");
     }
 
     #[test]
@@ -666,7 +812,7 @@ mod tests {
             json: false,
         };
         let mut out = Vec::new();
-        recent_in(dir.path(), &args, &mut out).unwrap();
+        recent_in(dir.path(), &args, NOW, &mut out).unwrap();
         let text = out_string(out);
         assert!(text.contains("DEFER"));
         assert!(text.contains("ls foo | grep bar"));
@@ -685,7 +831,7 @@ mod tests {
             json: true,
         };
         let mut out = Vec::new();
-        recent_in(dir.path(), &json_args, &mut out).unwrap();
+        recent_in(dir.path(), &json_args, NOW, &mut out).unwrap();
         assert_eq!(out_string(out).trim(), "[]");
 
         let text_args = RecentArgs {
@@ -696,7 +842,7 @@ mod tests {
             json: false,
         };
         let mut out = Vec::new();
-        recent_in(dir.path(), &text_args, &mut out).unwrap();
+        recent_in(dir.path(), &text_args, NOW, &mut out).unwrap();
         assert!(out_string(out).contains("No recent events"));
     }
 
@@ -709,7 +855,7 @@ mod tests {
         assert!(out_string(out).contains("3 event(s)"));
         // After folding, the report still sees everything via the summary.
         let mut out = Vec::new();
-        show_in(dir.path(), &show(View::Fragments, None), &mut out).unwrap();
+        show_in(dir.path(), &show(View::Fragments, None), NOW, &mut out).unwrap();
         assert!(out_string(out).contains("ls -la"));
     }
 

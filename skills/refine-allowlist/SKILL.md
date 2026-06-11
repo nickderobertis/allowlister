@@ -43,7 +43,12 @@ allowlister history --view fragments --verdict deny  --top 50 --json   # already
 ```
 
 Each row has `key` (the subcommand), `total`, per-verdict counts (`allow`/`ask`/`deny`/`defer`),
-and `rules` (which named rule decided it). For project context use `--view commands`, and
+`rules` (which named rule decided it), and its time shape: `first_ts`/`last_ts` (Unix seconds
+of first/latest use), `recent` (per-verdict recency weight, 30-day half-life, decayed to the
+report's `as_of`), and `recent_total`. **Weigh recency, not just totals**: a key whose
+`recent` is near zero (or missing — fully decayed) was a burst of past use that stopped; raw
+counts alone overstate it. Compare `recent_total` to `total` and `as_of - last_ts` to judge
+whether a candidate is still live. For project context use `--view commands`, and
 `allowlister history recent --json` to see real invocations and their `project` tag.
 
 ## Step 2 — Read the current config (avoid duplicates)
@@ -65,9 +70,10 @@ broad ones, and toward **fewer, legible** rules.
 
 | Signal | Proposal |
 | --- | --- |
-| Frequent `defer`, clearly safe (read-only / build / test / VCS-read) | `allow` |
-| Frequent `ask`, clearly safe and only prompting out of caution | `allow` (cut the prompt) |
-| Risky: `rm -rf`, `curl … \| sh`, `chmod 777`, `sudo`, secret/key reads, writes outside the repo, history rewrite, force-push | `deny` (hard) or `ask` (sometimes-legit) — **never `allow`** |
+| Frequent **and recent** `defer` (healthy `recent.defer`), clearly safe (read-only / build / test / VCS-read) | `allow` |
+| Frequent `ask` with recent activity, clearly safe and only prompting out of caution | `allow` (cut the prompt) |
+| Heavy counts but stale (`recent` ≈ 0, last use months ago) | skip, or mention as low priority — past bursts don't justify widening access now |
+| Risky: `rm -rf`, `curl … \| sh`, `chmod 777`, `sudo`, secret/key reads, writes outside the repo, history rewrite, force-push | `deny` (hard) or `ask` (sometimes-legit) — **never `allow`** (recency does not soften this) |
 | Already decided by a matching rule | skip (don't restate) |
 
 **Target (global vs local):**
@@ -89,12 +95,14 @@ evidence and a one-line rationale per rule:
 
 ```
 GLOBAL — allow
-  cargo test      (defer ×12)   safe test runner
-  git status      (defer ×9)    read-only VCS
+  cargo test      (defer ×12, recent 9.1, last 2d)   safe test runner, in active use
+  git status      (defer ×9,  recent 7.4, last 1d)   read-only VCS
 LOCAL (.allowlister.jsonc) — allow
-  just check      (ask ×6)      project gate, always confirmed
+  just check      (ask ×6, recent 4.2, last 3d)      project gate, always confirmed
 LOCAL — deny
-  rm -rf *        (defer ×2)    destructive; block outright
+  rm -rf *        (defer ×2, last 1d)                destructive; block outright
+SKIPPED — stale
+  npm run build   (defer ×40, recent 0, last 4mo)    heavy past use, dead since
 ```
 
 Explicitly invite the user to **add, remove, retarget (global↔local), loosen, or tighten**
@@ -141,7 +149,8 @@ the allowlist keeps converging on real behavior.
 
 - Never propose `allow` for destructive, credential-exposing, or network-piped-to-shell
   commands. Route them to `deny`/`ask`.
-- Stay within the evidence: don't widen a pattern beyond what the history shows.
+- Stay within the evidence: don't widen a pattern beyond what the history shows, and don't
+  let stale counts stand in for current need — an `allow` needs recent activity behind it.
 - Don't restate rules that already decide a command; don't reuse a name unless you intend to
   overwrite that rule.
 - Apply only after explicit user confirmation, and only via `allowlister install`.

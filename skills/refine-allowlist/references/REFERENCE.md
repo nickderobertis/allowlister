@@ -82,15 +82,25 @@ allowlister check --json "<command>"                                # machine-re
 {
   "events_total": 123,
   "first_ts": 1680000000, "last_ts": 1680086400,
-  "overall": { "allow": 95, "deny": 10, "ask": 5, "defer": 13, "last_ts": 1680086400 },
+  "as_of": 1680090000,                  // report time every `recent` weight is decayed to
+  "overall": { "allow": 95, "deny": 10, "ask": 5, "defer": 13, "first_ts": 1680000000, "last_ts": 1680086400 },
   "view": "fragments", "verdict": "defer", "truncated": false,
   "rows": [
     { "key": "cargo test", "total": 12,
       "allow": 0, "ask": 0, "deny": 0, "defer": 12,
+      "first_ts": 1679000000, "last_ts": 1680086400,   // first / latest use (Unix seconds)
+      "recent": { "defer": 9.1 },       // per-verdict recency weight (zeros omitted)
+      "recent_total": 9.1,
       "rules": {} }
   ]
 }
 ```
+
+Recency semantics: each `recent` weight is the sum of `0.5^(age / 30 days)` over that
+verdict's events, decayed to `as_of` — steady current use scores near its monthly volume,
+while a burst that ended months ago decays toward `0` (and the `recent` field disappears
+entirely once fully decayed). Use `recent`/`recent_total` vs the raw counts, plus
+`as_of - last_ts`, to tell live candidates from heavy-but-stale ones.
 
 `history recent --json` is instead an array of events, each:
 `{ "ts", "harness", "project", "kind", "command", "verdict", "fragments": [ { "cmd", "role", "verdict", "rule? } ] }`.
