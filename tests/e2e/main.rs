@@ -2171,6 +2171,1061 @@ fn history_views_and_recent_project_filter() {
         .stdout(predicate::str::contains("No recent events"));
 }
 
+// ---- broken config: skipped with a warning, never a deny or a crash --------
+//
+// Config loading never fails the caller: a malformed file is skipped and
+// recorded as a warning. These pin the user-visible halves of that contract —
+// remaining valid configs still gate, nothing escalates to a deny, and
+// `explain` names the skipped file.
+
+#[test]
+fn check_broken_project_config_is_skipped_but_user_rules_still_gate() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.cwd().join(".allowlister.json"), "{ not json").unwrap();
+    // The user config's deny still fires...
+    sandbox
+        .command()
+        .args(["check", "rm -rf /", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+    // ...while a command only the (now skipped) project config allowed defers.
+    sandbox
+        .command()
+        .args(["check", "npm list", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn check_with_only_a_broken_config_defers_everything() {
+    let empty = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    fs::write(project.path().join(".allowlister.json"), "{ not json").unwrap();
+    // No usable rules anywhere: even a scary command defers (exit 0), it is
+    // never denied on our own config error.
+    hermetic_cmd(&empty)
+        .args(["check", "rm -rf /", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn claude_hook_broken_config_defers_not_denies() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.cwd().join(".allowlister.json"), "{ not json").unwrap();
+    // Hide the user config too, so no rules load at all.
+    let empty = TempDir::new().unwrap();
+    let output = sandbox
+        .command()
+        .env("XDG_CONFIG_HOME", empty.path())
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "defer");
+}
+
+#[test]
+fn goose_hook_broken_config_emits_nothing() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.cwd().join(".allowlister.json"), "{ not json").unwrap();
+    let empty = TempDir::new().unwrap();
+    // Goose blocks only on a `block` JSON: with no usable config the verdict
+    // defers and stdout stays empty — a config error can never become a block.
+    sandbox
+        .command()
+        .env("XDG_CONFIG_HOME", empty.path())
+        .args(["hook", "goose"])
+        .write_stdin(sandbox.goose_payload("rm -rf /"))
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn explain_names_the_skipped_config_and_warns() {
+    let sandbox = Sandbox::new();
+    fs::write(sandbox.cwd().join(".allowlister.json"), "{ not json").unwrap();
+    sandbox
+        .command()
+        .args(["explain", "ls", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("skipped: invalid JSON"))
+        .stdout(predicate::str::contains("warnings:"));
+}
+
+// ---- hook stdin edge cases --------------------------------------------------
+
+#[test]
+fn hook_empty_stdin_exits_one_and_writes_nothing_to_stdout() {
+    // EOF with no payload is the same fail-open path as malformed JSON for the
+    // Claude adapter: a stderr note and a non-blocking exit, never a decision.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "claude-code"])
+        .write_stdin("")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+#[test]
+fn goose_hook_empty_stdin_exits_zero_and_writes_nothing_to_stdout() {
+    // Goose treats exit 2 as a block, so an empty payload must exit 0 with
+    // empty stdout — a true no-op.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["hook", "goose"])
+        .write_stdin("")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("invalid hook JSON"));
+}
+
+// ---- check usage errors -----------------------------------------------------
+//
+// clap exits 2 on a usage error, the same code `check` uses for a deny. The
+// channels disambiguate: a deny prints the verdict on stdout, a usage error
+// prints only to stderr. Pin both halves so scripted callers can rely on it.
+
+#[test]
+fn check_without_command_or_tool_is_a_usage_error_with_empty_stdout() {
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .arg("check")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn check_with_both_command_and_tool_is_a_usage_error_with_empty_stdout() {
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "ls", "--tool", "read"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+// ---- tool-rule schema through the binary: --raw, jsonpath, capabilities -----
+
+#[test]
+fn check_tool_raw_jsonpath_rule_denies_matching_server_param() {
+    let empty = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    fs::write(
+        project.path().join(".allowlister.json"),
+        r#"{"rules":[{"name":"no evilcorp","tool":"mcp__github__*","action":"deny","jsonpath":{"owner":["evilcorp"]}}]}"#,
+    )
+    .unwrap();
+    // The raw JSON carries the server-defined param the jsonpath rule reads.
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "mcp__github__create_issue",
+            "--raw",
+            r#"{"owner":"evilcorp"}"#,
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+    // A non-matching owner falls outside the rule and defers.
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "mcp__github__create_issue",
+            "--raw",
+            r#"{"owner":"acme"}"#,
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn check_tool_raw_invalid_json_is_a_usage_error() {
+    let empty = TempDir::new().unwrap();
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "mcp", "--raw", "{not json"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("not valid JSON"));
+}
+
+#[test]
+fn check_tool_mcp_portable_rule_allows_read_only_tool() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // The allow half of the portable MCP pair: list*/get* on the linear server.
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "mcp__linear__list_issues", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn check_tool_web_fetch_url_rules_allow_and_defer() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "web_fetch",
+            "--param",
+            "url=https://github.com/acme/repo",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "web_fetch",
+            "--param",
+            "url=https://evil.example.com/x",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+/// A project dir whose config exercises the remaining capabilities: `write`,
+/// `edit`, `glob`, `grep`, and `web_search`.
+fn capability_project() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    let edit_glob = format!("{}/**", dir.path().to_string_lossy());
+    let cfg = serde_json::json!({
+        "rules": [
+            { "name": "no env files", "tool": "write", "action": "deny",
+              "params": { "path": ["**/*.env"] } },
+            { "name": "edits in repo", "tool": "edit", "action": "allow",
+              "params": { "path": [edit_glob] } },
+            { "name": "globbing is free", "tool": "glob", "action": "allow" },
+            { "name": "grepping is free", "tool": "grep", "action": "allow" },
+            { "name": "confirm searches", "tool": "web_search", "action": "ask" }
+        ]
+    })
+    .to_string();
+    fs::write(dir.path().join(".allowlister.json"), cfg).unwrap();
+    dir
+}
+
+#[test]
+fn check_tool_write_edit_glob_grep_web_search_capabilities() {
+    let empty = TempDir::new().unwrap();
+    let project = capability_project();
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "write",
+            "--param",
+            "path=/app/prod/.env",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+    let inside = format!("path={}/src/a.rs", project.path().to_string_lossy());
+    hermetic_cmd(&empty)
+        .args(["check", "--tool", "edit", "--param"])
+        .arg(&inside)
+        .arg("--cwd")
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+    // A constraint-free capability rule matches every call of that capability.
+    for tool in ["glob", "grep"] {
+        hermetic_cmd(&empty)
+            .args(["check", "--tool", tool, "--param", "pattern=TODO", "--cwd"])
+            .arg(project.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::starts_with("ALLOW"));
+    }
+    hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "web_search",
+            "--param",
+            "query=anything",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ASK"));
+}
+
+#[test]
+fn check_tool_json_emits_machine_readable_object() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let output = hermetic_cmd(&empty)
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/home/u/.ssh/id_rsa",
+            "--json",
+            "--cwd",
+        ])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["verdict"], "deny");
+    assert!(value["reason"].as_str().unwrap().contains("no secrets"));
+}
+
+// ---- config discovery and precedence ----------------------------------------
+
+#[test]
+fn check_discovers_project_config_from_nested_subdirectory() {
+    let sandbox = Sandbox::new();
+    // Discovery must walk up from a nested cwd to the `.git` root and pick up
+    // the project config there ("npm list" matches a project rule).
+    let nested = sandbox.cwd().join("src").join("deep");
+    fs::create_dir_all(&nested).unwrap();
+    sandbox
+        .command()
+        .args(["check", "npm list", "--cwd"])
+        .arg(&nested)
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn nested_project_config_adds_rules_below_the_root() {
+    let sandbox = Sandbox::new();
+    let nested = sandbox.cwd().join("services").join("api");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(
+        nested.join(".allowlister.json"),
+        r#"{"rules":[{"name":"api tool","match":"my_custom_tool *","action":"allow"}]}"#,
+    )
+    .unwrap();
+    // The nested config applies from inside its directory...
+    sandbox
+        .command()
+        .args(["check", "my_custom_tool --serve", "--cwd"])
+        .arg(&nested)
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+    // ...but not from the project root above it.
+    sandbox
+        .command()
+        .args(["check", "my_custom_tool --serve", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn project_deny_wins_over_user_allow() {
+    // The verdict is set-theoretic: any deny denies, regardless of merge order.
+    let xdg = TempDir::new().unwrap();
+    let allowlister_dir = xdg.path().join("allowlister");
+    fs::create_dir_all(&allowlister_dir).unwrap();
+    fs::write(
+        allowlister_dir.join("config.json"),
+        r#"{"rules":[{"name":"user allows","match":"danger_tool *","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    fs::write(
+        project.path().join(".allowlister.json"),
+        r#"{"rules":[{"name":"project denies","match":"danger_tool *","action":"deny"}]}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", project.path())
+        .args(["check", "danger_tool --run", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"))
+        .stdout(predicate::str::contains("project denies"));
+}
+
+#[test]
+fn hook_pipeline_with_one_denied_fragment_denies_the_whole_command() {
+    let sandbox = Sandbox::new();
+    // The source fragment is allowed on its own; the denied filter fragment
+    // must drag the composed verdict to deny through the binary boundary.
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("gh pr list | rm -rf /"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+// ---- non-shell tools on the remaining adapters --------------------------------
+
+#[test]
+fn codex_hook_apply_patch_gated_by_capability_edit_rule() {
+    let empty = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    fs::write(
+        project.path().join(".allowlister.json"),
+        r#"{"rules":[{"name":"no edits","tool":"edit","action":"deny"}]}"#,
+    )
+    .unwrap();
+    // `apply_patch` carries no discrete path, so only a capability-only `edit`
+    // rule can gate it.
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "tool_input": { "command": "*** Begin Patch" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "codex"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn codex_hook_apply_patch_allow_emits_empty_stdout() {
+    let empty = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    fs::write(
+        project.path().join(".allowlister.json"),
+        r#"{"rules":[{"name":"edits ok","tool":"edit","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "apply_patch",
+        "tool_input": { "command": "*** Begin Patch" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    // Codex rejects a bare allow, so an allowed edit is a no-op fall-through.
+    hermetic_cmd(&empty)
+        .args(["hook", "codex"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn claude_hook_write_tool_denies_env_file_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = capability_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": { "file_path": "/app/prod/.env", "content": "SECRET=1" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn claude_hook_edit_tool_allows_inside_repo_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = capability_project();
+    let file = format!("{}/src/lib.rs", project.path().to_string_lossy());
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Edit",
+        "tool_input": { "file_path": file },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "allow");
+}
+
+#[test]
+fn claude_hook_web_fetch_allows_github_url_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "WebFetch",
+        "tool_input": { "url": "https://github.com/acme/repo" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "allow");
+}
+
+#[test]
+fn claude_hook_mcp_tool_allows_read_only_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "mcp__linear__list_issues",
+        "tool_input": {},
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "allow");
+}
+
+#[test]
+fn crush_hook_view_tool_denies_secret_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // Crush's read tool is `view` with `file_path`.
+    let payload = serde_json::json!({
+        "event": "PreToolUse",
+        "tool_name": "view",
+        "tool_input": { "file_path": "/home/u/.ssh/id_rsa" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "crush"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(crush_decision_of(&output), "deny");
+}
+
+#[test]
+fn crush_hook_single_underscore_mcp_denies_destructive_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // Crush names MCP tools `mcp_<server>_<tool>` (single underscores).
+    let payload = serde_json::json!({
+        "event": "PreToolUse",
+        "tool_name": "mcp_linear_delete_issue",
+        "tool_input": { "id": "1" },
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "crush"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(crush_decision_of(&output), "deny");
+}
+
+#[test]
+fn goose_hook_bare_shell_tool_is_gated() {
+    let sandbox = Sandbox::new();
+    // Goose's builtin developer extension exposes the shell as a bare `shell`
+    // (no `developer__` prefix); the gate must fire on it too.
+    let payload = format!(
+        r#"{{"event":"PreToolUse","tool_name":"shell","tool_input":{{"command":"rm -rf /"}},"working_dir":{}}}"#,
+        serde_json::to_string(&sandbox.cwd().to_string_lossy()).unwrap()
+    );
+    let output = sandbox
+        .command()
+        .args(["hook", "goose"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(goose_decision_of(&output), "block");
+}
+
+#[test]
+fn goose_hook_text_editor_view_denies_secret_read() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    // Older Goose's multi-purpose `text_editor`: `command: view` is a read.
+    let payload = serde_json::json!({
+        "event": "PreToolUse",
+        "tool_name": "developer__text_editor",
+        "tool_input": { "command": "view", "path": "/home/u/.ssh/id_rsa" },
+        "working_dir": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "goose"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(goose_decision_of(&output), "block");
+}
+
+#[test]
+fn goose_hook_bare_write_tool_denies_env_file() {
+    let empty = TempDir::new().unwrap();
+    let project = capability_project();
+    // Goose delivers developer file tools under bare names with a `path` key.
+    let payload = serde_json::json!({
+        "event": "PreToolUse",
+        "tool_name": "write",
+        "tool_input": { "path": "/app/prod/.env", "content": "SECRET=1" },
+        "working_dir": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "goose"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(goose_decision_of(&output), "block");
+}
+
+#[test]
+fn cursor_before_mcp_execution_allows_read_only_via_stdin() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeMCPExecution",
+        "tool_name": "mcp__linear__list_issues",
+        "tool_input": {},
+        "workspace_roots": [project.path().to_string_lossy()],
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "allow");
+}
+
+// ---- init: global registration per harness, file profiles, idempotency ------
+
+#[test]
+fn init_global_registers_each_harness_under_home_or_xdg() {
+    // Each harness wires a different user-level file; the allowlister config
+    // itself always lands under XDG. (claude-code's global path is covered by
+    // its own test above.)
+    let cases: &[(&str, &[&str], bool)] = &[
+        ("cursor", &["home", ".cursor", "hooks.json"], false),
+        ("codex", &["home", ".codex", "hooks.json"], false),
+        ("crush", &["xdg", "crush", "crush.json"], false),
+        ("qwen", &["home", ".qwen", "settings.json"], false),
+        (
+            "goose",
+            &[
+                "home",
+                ".agents",
+                "plugins",
+                "allowlister",
+                "hooks",
+                "hooks.json",
+            ],
+            false,
+        ),
+        (
+            "opencode",
+            &["xdg", "opencode", "plugin", "allowlister.js"],
+            true,
+        ),
+        (
+            "copilot",
+            &["home", ".copilot", "hooks", "allowlister.json"],
+            false,
+        ),
+    ];
+    for (harness, hook_file, is_plugin) in cases {
+        let dir = TempDir::new().unwrap();
+        let xdg = dir.path().join("xdg");
+        let home = dir.path().join("home");
+        Command::cargo_bin("allowlister")
+            .unwrap()
+            .args(["init", "--global", "--harness", harness])
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", &home)
+            .assert()
+            .success();
+        assert!(
+            xdg.join("allowlister/config.json").is_file(),
+            "{harness}: the config must land under XDG"
+        );
+        let hook_path: PathBuf = hook_file
+            .iter()
+            .fold(dir.path().to_path_buf(), |p, seg| p.join(seg));
+        assert!(
+            hook_path.is_file(),
+            "{harness}: the global hook file must be written at {}",
+            hook_path.display()
+        );
+        let text = fs::read_to_string(&hook_path).unwrap();
+        assert!(
+            text.contains(&format!("allowlister hook {harness}")),
+            "{harness}: the hook file must invoke the right adapter"
+        );
+        if !is_plugin {
+            // Every non-plugin hook file is JSON a harness will parse.
+            serde_json::from_str::<Value>(&text).unwrap();
+        }
+    }
+}
+
+#[test]
+fn init_profile_from_a_file_writes_the_source_and_gates() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join("custom-profile.json");
+    fs::write(
+        &source,
+        r#"{"rules":[{"name":"my tool","match":"my_company_tool *","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let project = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--no-hooks", "--profile"])
+        .arg(&source)
+        .current_dir(project.path())
+        .assert()
+        .success();
+    // The source file lands verbatim as the project config.
+    assert_eq!(
+        fs::read_to_string(project.path().join(".allowlister.json")).unwrap(),
+        fs::read_to_string(&source).unwrap()
+    );
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "my_company_tool --run", "--cwd"])
+        .arg(project.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn init_repo_write_profile_installs_and_gates() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--profile", "repo-write", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("repo-write"));
+    // repo-write includes the read-only base, so a pure read allows.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "git status", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn init_interactive_history_yes_persists_the_toggle() {
+    let dir = TempDir::new().unwrap();
+    // Answers: 2 = project-local, 2 = read-only, n = skip hooks, y = history on.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--interactive"])
+        .current_dir(dir.path())
+        .write_stdin("2\n2\nn\ny\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Record a local history"))
+        .stdout(predicate::str::contains("history recording is ON"));
+    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
+    assert_eq!(doc["history"]["enabled"], true);
+}
+
+#[test]
+fn init_force_rerun_does_not_duplicate_the_hook_registration() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let settings_path = dir.path().join(".claude/settings.json");
+    let before: Value = serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    // Re-running (forcing past the existing config) must report a hook no-op
+    // and leave the settings byte-for-byte equivalent — no duplicate entries.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--force"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already registered"));
+    let after: Value = serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+    assert_eq!(before, after, "re-running init must not change settings");
+}
+
+#[test]
+fn install_preserves_existing_custom_rules_and_history_toggle() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.json");
+    fs::write(
+        &out,
+        r#"{"history":{"enabled":true},"rules":[{"name":"mine","match":"my_tool *","action":"allow"}]}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rule(s) added"));
+    let raw = fs::read_to_string(&out).unwrap();
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
+    assert_eq!(doc["history"]["enabled"], true, "the toggle survives");
+    let rules = doc["rules"].as_array().unwrap();
+    assert!(
+        rules.iter().any(|r| r["name"] == "mine"),
+        "the custom rule survives the merge"
+    );
+    assert!(rules.len() > 30, "the profile rules were merged in");
+}
+
+// ---- history: env-off override, clear confirmation, bounds and filters ------
+
+#[test]
+fn history_env_zero_overrides_a_config_that_enables_recording() {
+    let home = TempDir::new().unwrap();
+    let xdg = TempDir::new().unwrap();
+    let cmd = || {
+        let mut c = Command::cargo_bin("allowlister").unwrap();
+        c.env("XDG_CONFIG_HOME", xdg.path())
+            .env("HOME", home.path());
+        c
+    };
+    cmd()
+        .args([
+            "init",
+            "--global",
+            "--profile",
+            "starter",
+            "--no-hooks",
+            "--history",
+            "-y",
+        ])
+        .assert()
+        .success();
+    // The config opts in, but the env kill switch must win.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls -la" },
+        "cwd": home.path().to_string_lossy(),
+    })
+    .to_string();
+    cmd()
+        .env("ALLOWLISTER_HISTORY", "0")
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+    cmd()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No usage recorded yet"));
+}
+
+#[test]
+fn history_clear_without_yes_confirms_via_stdin() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .env("ALLOWLISTER_HISTORY", "1")
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("gh pr list | head -20"))
+        .assert()
+        .success();
+
+    // Answering 'n' (or anything but yes) aborts and keeps the data.
+    sandbox
+        .command()
+        .args(["history", "clear"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Aborted"));
+    sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 event(s) recorded"));
+
+    // Answering 'y' clears.
+    sandbox
+        .command()
+        .args(["history", "clear"])
+        .write_stdin("y\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cleared"));
+    sandbox
+        .command()
+        .args(["history"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No usage recorded yet"));
+}
+
+#[test]
+fn history_top_bounds_rows_and_recent_verdict_filters() {
+    let sandbox = Sandbox::new();
+    for command in [
+        "gh pr list | head -20",
+        "some_unknown_tool --flag",
+        "rm -rf /",
+    ] {
+        sandbox
+            .command()
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(sandbox.payload(command))
+            .assert()
+            .success();
+    }
+
+    // --top bounds the report rows.
+    let out = sandbox
+        .command()
+        .args(["history", "--top", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["rows"].as_array().unwrap().len(), 1);
+
+    // recent --verdict keeps only matching events; --top bounds them.
+    let recent = sandbox
+        .command()
+        .args(["history", "recent", "--verdict", "deny", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let events: Value = serde_json::from_slice(&recent).unwrap();
+    let events = events.as_array().unwrap();
+    assert!(!events.is_empty());
+    assert!(events.iter().all(|e| e["verdict"] == "deny"));
+
+    let bounded = sandbox
+        .command()
+        .args(["history", "recent", "--top", "1", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let bounded: Value = serde_json::from_slice(&bounded).unwrap();
+    assert_eq!(bounded.as_array().unwrap().len(), 1);
+}
+
 #[test]
 fn init_no_history_persists_the_disabled_toggle() {
     let home = TempDir::new().unwrap();
