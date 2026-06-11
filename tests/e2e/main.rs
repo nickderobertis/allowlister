@@ -3509,6 +3509,55 @@ fn config_remove_deletes_a_rule_and_stops_gating() {
 }
 
 #[test]
+fn config_remove_preserves_surrounding_comments_and_formatting() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("cfg.jsonc");
+    // A hand-commented config: removing the middle rule must leave the header
+    // comment and both siblings' trailing comments byte-for-byte in place.
+    fs::write(
+        &target,
+        "{\n  // team allowlist\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" }, // safe\n    { \"name\": \"drop\", \"match\": \"drop*\", \"action\": \"allow\" },\n    { \"name\": \"pwd\", \"match\": \"pwd\", \"action\": \"allow\" } // also safe\n  ]\n}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["config", "remove", "drop", "--output"])
+        .arg(&target)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed rule 'drop'"));
+
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(
+        text.contains("// team allowlist"),
+        "header survives: {text}"
+    );
+    assert!(
+        text.contains("\"allow\" }, // safe"),
+        "sibling comment survives: {text}"
+    );
+    assert!(
+        text.contains("// also safe"),
+        "sibling comment survives: {text}"
+    );
+    assert!(
+        !text.contains("\"name\": \"drop\""),
+        "the rule is gone: {text}"
+    );
+    // The surviving rules still parse and gate correctly.
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&text)).unwrap();
+    let names: Vec<&str> = doc["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["ls", "pwd"]);
+}
+
+#[test]
 fn config_add_then_remove_global_under_xdg() {
     let xdg = TempDir::new().unwrap();
     let home = TempDir::new().unwrap();
