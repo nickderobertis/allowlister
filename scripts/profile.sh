@@ -13,7 +13,7 @@
 #                                            benchmarks (e.g. evaluate/pipeline).
 #   scripts/profile.sh check 'rm -rf /'      Profile a real CLI invocation
 #   scripts/profile.sh explain 'a | b'       (startup + config + parse + match),
-#                                            looped so the sub-millisecond
+#   scripts/profile.sh config show           looped so the sub-millisecond
 #                                            process yields enough samples.
 #
 # A single CLI run is far too short to sample, which is why the engine mode

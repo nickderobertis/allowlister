@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
 use crate::commands;
 use crate::errors::Result;
@@ -159,6 +159,145 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
     },
+
+    /// Manage your allowlist configuration directly: add or remove a single
+    /// rule, or show the effective merged config and the source of each rule.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+/// Subcommands for `config`.
+#[derive(Debug, Subcommand)]
+enum ConfigAction {
+    /// Add a single rule to a config file (creating it if absent). Rules are
+    /// de-duplicated by name, like `install`, so re-adding the same name is a
+    /// no-op rather than a duplicate.
+    Add(ConfigAddArgs),
+
+    /// Remove the rule with the given `name` from a config file, leaving the
+    /// surrounding rules, comments, and formatting intact.
+    Remove {
+        /// The `name` of the rule to remove.
+        name: String,
+        /// Edit the user-level config (the default).
+        #[arg(long, conflicts_with_all = ["local", "output"])]
+        global: bool,
+        /// Edit a project `.allowlister.jsonc` in the current directory.
+        #[arg(long, conflicts_with = "output")]
+        local: bool,
+        /// Edit an explicit file path instead of a discovered config.
+        #[arg(long, value_name = "PATH")]
+        output: Option<PathBuf>,
+    },
+
+    /// Show the effective configuration — every active rule and the file it came
+    /// from. Merges the user and project configs by default; `--global` or
+    /// `--local` narrows to a single scope.
+    Show {
+        /// Directory used for project-config discovery (defaults to the current
+        /// directory).
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Show only the user-level config.
+        #[arg(long, conflicts_with = "local")]
+        global: bool,
+        /// Show only the project-level config(s).
+        #[arg(long)]
+        local: bool,
+        /// Emit a machine-readable JSON object instead of human text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Flags for `config add`. Exactly one of `--match`, `--argv`, or `--tool`
+/// selects what the rule matches; the rest refine it.
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("matcher").required(true).args(["match_pattern", "argv", "tool"])))]
+struct ConfigAddArgs {
+    /// The rule's name (shown in decision reasons and used to de-duplicate).
+    #[arg(long)]
+    name: Option<String>,
+    /// What a match does: allow, deny, or ask (surface for approval).
+    #[arg(long, value_enum, default_value = "allow")]
+    action: ActionArg,
+    /// Match the whole joined command against this pattern (a shell rule).
+    #[arg(long = "match", value_name = "PATTERN")]
+    match_pattern: Option<String>,
+    /// Match argv element-by-element; repeat per element (a shell rule). A
+    /// trailing `**` element allows any number of further arguments.
+    #[arg(long, value_name = "ARG")]
+    argv: Vec<String>,
+    /// Match a non-shell tool call: a capability
+    /// (read/write/edit/glob/grep/web_fetch/web_search/mcp) or a raw tool-name
+    /// glob such as `mcp__github__*`.
+    #[arg(long)]
+    tool: Option<String>,
+    /// How patterns are interpreted: glob (the default), regex, or literal.
+    #[arg(long, value_enum)]
+    kind: Option<KindArg>,
+    /// Restrict a shell rule to these roles (repeatable), e.g.
+    /// standalone/pipe_filter/pipe_source/substitution.
+    #[arg(long = "role", value_name = "ROLE")]
+    roles: Vec<String>,
+    /// Constrain a canonical tool parameter as `key=glob` (repeatable), e.g.
+    /// `--param path=/repo/**`. Requires `--tool`.
+    #[arg(long = "param", value_name = "KEY=GLOB")]
+    params: Vec<String>,
+    /// Constrain a raw tool-input field as `jsonpath=glob` (repeatable), e.g.
+    /// `--jsonpath owner=acme`. Requires `--tool`.
+    #[arg(long = "jsonpath", value_name = "PATH=GLOB")]
+    jsonpath: Vec<String>,
+    /// A human description stored alongside the rule.
+    #[arg(long)]
+    description: Option<String>,
+    /// Add to the user-level config (the default).
+    #[arg(long, conflicts_with_all = ["local", "output"])]
+    global: bool,
+    /// Add to a project `.allowlister.jsonc` in the current directory.
+    #[arg(long, conflicts_with = "output")]
+    local: bool,
+    /// Add to an explicit file path instead of a discovered config.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+}
+
+/// A rule action, for `config add`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ActionArg {
+    Allow,
+    Deny,
+    Ask,
+}
+
+impl ActionArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            ActionArg::Allow => "allow",
+            ActionArg::Deny => "deny",
+            ActionArg::Ask => "ask",
+        }
+    }
+}
+
+/// A match kind, for `config add`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum KindArg {
+    Glob,
+    Regex,
+    Literal,
+}
+
+impl KindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            KindArg::Glob => "glob",
+            KindArg::Regex => "regex",
+            KindArg::Literal => "literal",
+        }
+    }
 }
 
 /// Maintenance subcommands for `history`.
@@ -370,6 +509,39 @@ impl Cli {
                 local,
                 output,
             } => commands::install::run(&source, global, local, output.as_deref()),
+            Command::Config { action } => match action {
+                ConfigAction::Add(args) => commands::config::add(commands::config::AddArgs {
+                    name: args.name,
+                    action: args.action.as_str().to_string(),
+                    match_pattern: args.match_pattern,
+                    argv: args.argv,
+                    tool: args.tool,
+                    kind: args.kind.map(|k| k.as_str().to_string()),
+                    roles: args.roles,
+                    params: args.params,
+                    jsonpath: args.jsonpath,
+                    description: args.description,
+                    local: args.local,
+                    output: args.output,
+                }),
+                ConfigAction::Remove {
+                    name,
+                    global: _,
+                    local,
+                    output,
+                } => commands::config::remove(&name, local, output.as_deref()),
+                ConfigAction::Show {
+                    cwd,
+                    global,
+                    local,
+                    json,
+                } => commands::config::show(commands::config::ShowArgs {
+                    cwd,
+                    global,
+                    local,
+                    json,
+                }),
+            },
         }
     }
 }

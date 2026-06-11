@@ -80,8 +80,9 @@ trap cleanup EXIT
 proj="$sandbox/project"
 initdir="$sandbox/initdir"
 installdir="$sandbox/installdir"
+cfgdir="$sandbox/cfgdir"
 payload="$sandbox/payload.json"
-mkdir -p "$proj/.git" "$initdir" "$installdir" "$sandbox/xdg/allowlister"
+mkdir -p "$proj/.git" "$initdir" "$installdir" "$cfgdir" "$sandbox/xdg/allowlister"
 cp "$repo_root/examples/user-config.json" "$sandbox/xdg/allowlister/config.json"
 cp "$repo_root/examples/project-config.json" "$proj/.allowlister.json"
 
@@ -126,12 +127,14 @@ note "» benchmarking $bin"
 # One invocation so a single export holds every command. `--prepare` clears the
 # write targets before each run — `init` refuses to overwrite, and `install`
 # should measure the create-from-empty path each time, not an idempotent re-run —
-# and resets the history store to the seeded snapshot; both are harmless no-ops
-# for the read-only commands. The deny case exits 2 by design, so it is wrapped
-# with `|| true` to keep hyperfine from treating it as a failure.
+# resets the seeded `config` files (so `config add` measures a real merge and
+# `config remove` always has its target rule), and resets the history store to
+# the seeded snapshot; all are harmless no-ops for the read-only commands. The
+# deny case exits 2 by design, so it is wrapped with `|| true` to keep hyperfine
+# from treating it as a failure.
 hyperfine \
     --warmup "$warmup" "${runs_opt[@]}" \
-    --prepare "rm -f '$initdir/.allowlister.json' '$initdir/.allowlister.jsonc' '$installdir/config.json' && rm -rf '$hist' && cp -a '$hist_seed' '$hist'" \
+    --prepare "rm -f '$initdir/.allowlister.json' '$initdir/.allowlister.jsonc' '$installdir/config.json' && cp '$repo_root/examples/user-config.json' '$cfgdir/config.json' && rm -rf '$hist' && cp -a '$hist_seed' '$hist'" \
     --export-json "$out/results.json" \
     --export-markdown "$out/results.md" \
     -n "version" "'$bin' --version" \
@@ -145,6 +148,10 @@ hyperfine \
     -n "hook:record" "ALLOWLISTER_HISTORY=1 '$bin' hook claude-code < '$payload'" \
     -n "history" "'$bin' history > /dev/null" \
     -n "history:json" "'$bin' history --json > /dev/null" \
+    -n "config:show" "'$bin' config show --cwd '$proj' > /dev/null" \
+    -n "config:show:json" "'$bin' config show --json --cwd '$proj' > /dev/null" \
+    -n "config:add" "'$bin' config add --name bench --match 'benchtool *' --output '$cfgdir/config.json' > /dev/null" \
+    -n "config:remove" "'$bin' config remove 'rm -rf — never' --output '$cfgdir/config.json' > /dev/null" \
     -n "init:local" "cd '$initdir' && '$bin' init --local > /dev/null" \
     -n "install:profile" "'$bin' install read-only --output '$installdir/config.json' > /dev/null"
 

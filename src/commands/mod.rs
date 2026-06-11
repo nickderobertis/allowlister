@@ -2,6 +2,7 @@
 //! I/O boundaries for one CLI verb and returns a process exit code.
 
 pub mod check;
+pub mod config;
 pub mod explain;
 pub mod history;
 pub mod hook;
