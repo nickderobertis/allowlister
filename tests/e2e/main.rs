@@ -1487,12 +1487,61 @@ fn install_into_an_existing_json_config_updates_it_in_place_keeping_comments() {
         "the existing .json config is the update target, not a new .jsonc"
     );
     let text = fs::read_to_string(&existing).unwrap();
-    assert!(text.contains("// hand-written note"), "{text}");
-    assert!(text.contains("// keep"), "{text}");
+    // Everything up to the appended rules is byte-for-byte untouched — the
+    // comments keep their exact positions, and the separating comma attaches
+    // to the rule, before its trailing comment.
+    assert!(
+        text.starts_with(
+            "{\n  // hand-written note\n  \"rules\": [\n    { \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }, // keep\n"
+        ),
+        "comments must keep their positions: {text}"
+    );
     let doc: Value =
         serde_json::from_str(&allowlister::config::strip_jsonc_comments(&text)).unwrap();
     assert_eq!(doc["rules"][0]["name"], "mine");
     assert!(doc["rules"].as_array().unwrap().len() > 1);
+
+    // A second, fully redundant install must leave the file byte-identical.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "starter", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 rule(s) added"));
+    assert_eq!(fs::read_to_string(&existing).unwrap(), text);
+}
+
+#[test]
+fn init_history_keeps_a_commented_profiles_comments_in_place() {
+    let dir = TempDir::new().unwrap();
+    // A commented profile file: `init` writes it verbatim, then persisting the
+    // history toggle must splice the `history` member in without disturbing a
+    // single byte of what came before it.
+    let profile = dir.path().join("team.jsonc");
+    let body = "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ]\n}\n";
+    fs::write(&profile, body).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "init",
+            "--local",
+            "--no-hooks",
+            "--history",
+            "-y",
+            "--profile",
+        ])
+        .arg(&profile)
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("history recording is ON"));
+    let written = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
+    assert_eq!(
+        written,
+        "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ],\n  \"history\": {\n    \"enabled\": true\n  }\n}\n",
+        "the profile text must survive byte-for-byte around the spliced history member"
+    );
 }
 
 #[test]
