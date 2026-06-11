@@ -99,13 +99,13 @@ ${AL_TOOL_RULES}
 JSON
 
 # Set the project up exactly the way a user would: `init` writes the project
-# `.allowlister.json` (here from our deterministic rules file) AND writes the
+# `.allowlister.jsonc` (here from our deterministic rules file) AND writes the
 # OpenCode plugin shim into .opencode/plugin/. Exercising init here means the live
 # check also covers the plugin-write path end to end.
 note "» wiring the project with \`allowlister init --harness opencode\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness opencode --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
-[ -f "$proj/.allowlister.json" ] || fail "init did not write the project config"
+[ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 grep -q 'allowlister hook opencode' "$proj/.opencode/plugin/allowlister.js" \
     || fail "init did not write the OpenCode plugin shim"
 

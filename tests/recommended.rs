@@ -19,11 +19,11 @@ use allowlister::domain::{evaluate, Verdict};
 fn load(profile: &str) -> LoadedConfig {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("examples/recommended")
-        .join(format!("{profile}.json"));
+        .join(format!("{profile}.jsonc"));
     let loaded = config::load_from_paths(&[path]);
     assert!(
         loaded.warnings.is_empty(),
-        "{profile}.json must compile cleanly: {:?}",
+        "{profile}.jsonc must compile cleanly: {:?}",
         loaded.warnings
     );
     loaded

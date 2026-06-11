@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::config;
 use crate::errors::{Error, Result};
@@ -18,8 +18,8 @@ use crate::errors::{Error, Result};
 /// The built-in profiles, embedded from `examples/recommended/` so they ship
 /// inside the binary and stay byte-for-byte in sync with the files the
 /// recommended-profile tests pin.
-const READ_ONLY: &str = include_str!("../../examples/recommended/read-only.json");
-const REPO_WRITE: &str = include_str!("../../examples/recommended/repo-write.json");
+const READ_ONLY: &str = include_str!("../../examples/recommended/read-only.jsonc");
+const REPO_WRITE: &str = include_str!("../../examples/recommended/repo-write.jsonc");
 
 /// The minimal starter ruleset `init` writes by default: read-only inspection
 /// commands, common pipe filters scoped to their role, and a couple of nuclear
@@ -151,19 +151,6 @@ fn rules_of(doc: Value, label: &str) -> Result<Vec<Value>> {
     }
 }
 
-/// Read the target config, or an empty object if it does not exist yet. A
-/// malformed existing target is an error: never clobber a file we cannot parse.
-pub(crate) fn read_target(target: &Path) -> Result<Value> {
-    if !target.exists() {
-        return Ok(Value::Object(Map::new()));
-    }
-    let text = fs::read_to_string(target).map_err(|err| Error::Read {
-        path: target.to_path_buf(),
-        source: err,
-    })?;
-    parse_config(&text, &target.display().to_string())
-}
-
 /// Counts from a merge, for the user-facing summary.
 pub(crate) struct Merge {
     pub added: usize,
@@ -171,33 +158,40 @@ pub(crate) struct Merge {
     pub total: usize,
 }
 
-/// Append every incoming rule whose `name` is not already present in `target`.
-/// Rules with no `name` cannot be deduplicated, so they are always appended.
-pub(crate) fn merge_rules(
-    target: &mut Value,
-    target_path: &Path,
+/// Merge `incoming` into the target config *text*, returning the updated text
+/// and the counts. Rules whose `name` is already present are skipped; the rest
+/// are spliced into the original text, so the target's comments and formatting
+/// survive byte-for-byte. Rules with no `name` cannot be deduplicated, so they
+/// are always appended. A malformed target is an error: never clobber a file we
+/// cannot parse.
+pub(crate) fn merge_rules_text(
+    target_text: &str,
+    label: &str,
     incoming: Vec<Value>,
-) -> Result<Merge> {
-    let label = target_path.display().to_string();
-    let obj = target.as_object_mut().ok_or_else(|| Error::InvalidConfig {
-        origin: label.clone(),
+) -> Result<(String, Merge)> {
+    let doc = parse_config(target_text, label)?;
+    let obj = doc.as_object().ok_or_else(|| Error::InvalidConfig {
+        origin: label.to_string(),
         message: "expected a JSON object".to_string(),
     })?;
-    let rules = obj
-        .entry("rules")
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let rules = rules.as_array_mut().ok_or_else(|| Error::InvalidConfig {
-        origin: label,
-        message: "'rules' must be an array".to_string(),
-    })?;
+    let existing: &[Value] = match obj.get("rules") {
+        None => &[],
+        Some(Value::Array(rules)) => rules,
+        Some(_) => {
+            return Err(Error::InvalidConfig {
+                origin: label.to_string(),
+                message: "'rules' must be an array".to_string(),
+            })
+        }
+    };
 
-    let mut seen: HashSet<String> = rules
+    let mut seen: HashSet<String> = existing
         .iter()
         .filter_map(|rule| rule.get("name").and_then(Value::as_str))
         .map(str::to_string)
         .collect();
 
-    let mut added = 0;
+    let mut to_add = Vec::new();
     let mut skipped = 0;
     for rule in incoming {
         // Compute the name as an owned value first so the rule is free to move.
@@ -206,32 +200,27 @@ pub(crate) fn merge_rules(
             Some(name) if seen.contains(&name) => skipped += 1,
             Some(name) => {
                 seen.insert(name);
-                rules.push(rule);
-                added += 1;
+                to_add.push(rule);
             }
-            None => {
-                rules.push(rule);
-                added += 1;
-            }
+            None => to_add.push(rule),
         }
     }
 
-    Ok(Merge {
-        added,
+    let merge = Merge {
+        added: to_add.len(),
         skipped,
-        total: rules.len(),
-    })
-}
-
-/// Serialize a config document (pretty, trailing newline) and write it, creating
-/// parent directories as needed.
-pub(crate) fn write_config(target: &Path, doc: &Value) -> Result<()> {
-    let mut json = serde_json::to_string_pretty(doc).map_err(|err| Error::InvalidConfig {
-        origin: target.display().to_string(),
-        message: format!("could not serialize merged config: {err}"),
+        total: existing.len() + to_add.len(),
+    };
+    if to_add.is_empty() {
+        return Ok((target_text.to_string(), merge));
+    }
+    let text = crate::jsonc::append_rules(target_text, &to_add).map_err(|message| {
+        Error::InvalidConfig {
+            origin: label.to_string(),
+            message,
+        }
     })?;
-    json.push('\n');
-    write_file(target, &json)
+    Ok((text, merge))
 }
 
 /// Write `contents` to `target`, creating parent directories as needed. Shared

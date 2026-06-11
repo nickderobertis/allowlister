@@ -7,6 +7,7 @@
 //! terminal and `--yes` was not; otherwise the flags and their defaults decide
 //! everything, so the same command scripts cleanly in CI.
 
+use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -365,17 +366,20 @@ fn resolve_history<R: BufRead, W: Write>(
 }
 
 /// Persist the history choice into the config `execute` just wrote, then report
-/// it. Reads the file back as JSON and inserts a `history` object, leaving the
-/// rest untouched.
+/// it. Splices a `history` member into the file's text, so everything else —
+/// including a profile's explanatory comments — survives untouched.
 fn apply_history<W: Write>(path: &Path, enabled: bool, out: &mut W) -> Result<()> {
-    let mut doc = profile::read_target(path)?;
-    if let Some(obj) = doc.as_object_mut() {
-        obj.insert(
-            "history".to_string(),
-            serde_json::json!({ "enabled": enabled }),
-        );
-    }
-    profile::write_config(path, &doc)?;
+    let text = fs::read_to_string(path).map_err(|err| Error::Read {
+        path: path.to_path_buf(),
+        source: err,
+    })?;
+    let updated =
+        crate::jsonc::set_top_level(&text, "history", &serde_json::json!({ "enabled": enabled }))
+            .map_err(|message| Error::InvalidConfig {
+            origin: path.display().to_string(),
+            message,
+        })?;
+    profile::write_file(path, &updated)?;
     let _ = writeln!(out);
     if enabled {
         let _ = writeln!(
@@ -1035,6 +1039,23 @@ mod tests {
         assert!(String::from_utf8(out).unwrap().contains("OFF"));
     }
 
+    #[test]
+    fn apply_history_preserves_the_configs_comments() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.jsonc");
+        let original = "{\n  // why these rules exist\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // safe\n  ]\n}\n";
+        fs::write(&path, original).unwrap();
+        apply_history(&path, true, &mut Vec::new()).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("{\n  // why these rules exist\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // safe\n  ],"),
+            "comments and formatting must survive: {text}"
+        );
+        let loaded = crate::config::load_from_paths(&[path]);
+        assert!(loaded.history.enabled);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
     /// An `Env` whose home and XDG both point inside `dir`, so global writes stay
     /// in the sandbox.
     fn sandbox_env(dir: &Path) -> Env {
@@ -1055,7 +1076,7 @@ mod tests {
             hooks: false,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // No hooks: no settings.json is written, only the manual snippet printed.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let text = String::from_utf8(out).unwrap();
@@ -1096,7 +1117,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         let settings = dir.path().join(".claude/settings.json");
         assert!(settings.is_file(), "the hook must be registered locally");
         let doc: serde_json::Value =
@@ -1118,7 +1139,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir.path().join("home/.claude/settings.json").is_file());
     }
 
@@ -1183,7 +1204,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Cursor writes hooks.json, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let hooks = dir.path().join(".cursor/hooks.json");
@@ -1232,7 +1253,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; only the hook wiring is harness-specific.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir.path().join("home/.cursor/hooks.json").is_file());
     }
 
@@ -1247,7 +1268,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Codex writes .codex/hooks.json, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let hooks = dir.path().join(".codex/hooks.json");
@@ -1296,7 +1317,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; only the hook wiring is harness-specific.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir.path().join("home/.codex/hooks.json").is_file());
     }
 
@@ -1311,7 +1332,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Crush writes crush.json at the project root, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let config = dir.path().join("crush.json");
@@ -1363,7 +1384,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; Crush's global config is XDG-aware too.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir.path().join("xdg/crush/crush.json").is_file());
     }
 
@@ -1378,7 +1399,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Qwen writes .qwen/settings.json, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let settings = dir.path().join(".qwen/settings.json");
@@ -1430,7 +1451,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; only the hook wiring is harness-specific.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir.path().join("home/.qwen/settings.json").is_file());
     }
 
@@ -1445,7 +1466,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Goose writes a plugin directory, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let plugin = dir.path().join(".agents/plugins/allowlister");
@@ -1499,7 +1520,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; only the hook wiring is harness-specific.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir
             .path()
             .join("home/.agents/plugins/allowlister/hooks/hooks.json")
@@ -1517,7 +1538,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // OpenCode writes a plugin file, not Claude Code's settings.json.
         assert!(!dir.path().join(".claude/settings.json").exists());
         let plugin = dir.path().join(".opencode/plugin/allowlister.js");
@@ -1562,7 +1583,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; OpenCode's plugin dir is XDG-aware too.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir
             .path()
             .join("xdg/opencode/plugin/allowlister.js")
@@ -1580,7 +1601,7 @@ mod tests {
             hooks: true,
         };
         execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
-        assert!(dir.path().join(".allowlister.json").is_file());
+        assert!(dir.path().join(".allowlister.jsonc").is_file());
         // Copilot wires its own file under .github/hooks, not the other harnesses'.
         assert!(!dir.path().join(".claude/settings.json").exists());
         assert!(!dir.path().join(".cursor/hooks.json").exists());
@@ -1630,7 +1651,7 @@ mod tests {
         };
         execute(&plan, false, dir.path(), &env, &mut Vec::new()).unwrap();
         // The config still lands under XDG; only the hook wiring is harness-specific.
-        assert!(dir.path().join("xdg/allowlister/config.json").is_file());
+        assert!(dir.path().join("xdg/allowlister/config.jsonc").is_file());
         assert!(dir
             .path()
             .join("home/.copilot/hooks/allowlister.json")

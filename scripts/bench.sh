@@ -131,7 +131,7 @@ note "» benchmarking $bin"
 # with `|| true` to keep hyperfine from treating it as a failure.
 hyperfine \
     --warmup "$warmup" "${runs_opt[@]}" \
-    --prepare "rm -f '$initdir/.allowlister.json' '$installdir/config.json' && rm -rf '$hist' && cp -a '$hist_seed' '$hist'" \
+    --prepare "rm -f '$initdir/.allowlister.json' '$initdir/.allowlister.jsonc' '$installdir/config.json' && rm -rf '$hist' && cp -a '$hist_seed' '$hist'" \
     --export-json "$out/results.json" \
     --export-markdown "$out/results.md" \
     -n "version" "'$bin' --version" \

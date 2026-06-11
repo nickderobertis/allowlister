@@ -107,13 +107,13 @@ ${AL_TOOL_RULES}
 JSON
 
 # Set the project up exactly the way a user would: `init` writes the project
-# `.allowlister.json` (here from our deterministic rules file) AND registers the
+# `.allowlister.jsonc` (here from our deterministic rules file) AND registers the
 # preToolUse hook in `.github/hooks/allowlister.json`. Exercising init here means
 # the live check also covers the hook-registration path end to end.
 note "» wiring the project with \`allowlister init --harness copilot\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness copilot --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
-[ -f "$proj/.allowlister.json" ] || fail "init did not write the project config"
+[ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 grep -q 'allowlister hook copilot' "$proj/.github/hooks/allowlister.json" \
     || fail "init did not register the hook in .github/hooks/allowlister.json"
 

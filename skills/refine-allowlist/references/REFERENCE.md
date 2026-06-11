@@ -13,10 +13,11 @@ ordered list — pick clear names and let the set-theoretic verdict do the rest.
 
 ## Config locations
 
-- Global (user): `$XDG_CONFIG_HOME/allowlister/config.json`, else `~/.config/allowlister/config.json`
-  (legacy `~/.allowlister.json` is also read).
-- Local (project): `.allowlister.json` (or `.allowlister/config.json`), discovered by walking
-  up from the cwd to the repo root.
+- Global (user): `$XDG_CONFIG_HOME/allowlister/config.jsonc`, else `~/.config/allowlister/config.jsonc`
+  (legacy `~/.allowlister.jsonc` in the home directory is also read). The `.json` spelling of
+  each is supported too; `.jsonc` wins when both exist.
+- Local (project): `.allowlister.jsonc` (or `.allowlister/config.jsonc`, or their `.json`
+  twins), discovered by walking up from the cwd to the repo root.
 
 A config is `{ "rules": [ … ], "history": { "enabled": <bool> } }`. JSONC comments are allowed.
 

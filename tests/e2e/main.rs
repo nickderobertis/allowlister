@@ -899,7 +899,7 @@ fn init_local_writes_config_and_registers_hook() {
         .stdout(predicate::str::contains("allowlister hook claude-code"))
         .stdout(predicate::str::contains("do NOT add"));
     // Both the config and the registered hook land under the project dir.
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     let settings = dir.path().join(".claude/settings.json");
     assert!(settings.is_file(), "the Bash hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
@@ -921,7 +921,7 @@ fn init_no_hooks_skips_settings_and_prints_snippet() {
         .stdout(predicate::str::contains(
             "Add this to ~/.claude/settings.json",
         ));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".claude/settings.json").exists(),
         "--no-hooks must not touch settings.json"
@@ -940,7 +940,7 @@ fn init_cursor_local_registers_hooks_json() {
         .stdout(predicate::str::contains("allowlister hook cursor"))
         // Cursor has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Cursor wires hooks.json, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let hooks = dir.path().join(".cursor/hooks.json");
@@ -970,7 +970,7 @@ fn init_cursor_no_hooks_prints_cursor_snippet() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Add this to ~/.cursor/hooks.json"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".cursor/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
@@ -989,7 +989,7 @@ fn init_codex_local_registers_hooks_json() {
         .stdout(predicate::str::contains("allowlister hook codex"))
         // Codex has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Codex wires .codex/hooks.json, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let hooks = dir.path().join(".codex/hooks.json");
@@ -1015,7 +1015,7 @@ fn init_codex_no_hooks_prints_codex_snippet() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Add this to ~/.codex/hooks.json"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".codex/hooks.json").exists(),
         "--no-hooks must not write hooks.json"
@@ -1034,7 +1034,7 @@ fn init_crush_local_registers_crush_json() {
         .stdout(predicate::str::contains("allowlister hook crush"))
         // Crush has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Crush wires crush.json, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let config = dir.path().join("crush.json");
@@ -1060,7 +1060,7 @@ fn init_crush_no_hooks_prints_crush_snippet() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Add this to crush.json"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join("crush.json").exists(),
         "--no-hooks must not write crush.json"
@@ -1079,7 +1079,7 @@ fn init_qwen_local_registers_settings_json() {
         .stdout(predicate::str::contains("allowlister hook qwen"))
         // Qwen has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Qwen wires .qwen/settings.json, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let settings = dir.path().join(".qwen/settings.json");
@@ -1107,7 +1107,7 @@ fn init_qwen_no_hooks_prints_qwen_snippet() {
         .stdout(predicate::str::contains(
             "Add this to ~/.qwen/settings.json",
         ));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".qwen/settings.json").exists(),
         "--no-hooks must not write settings.json"
@@ -1126,7 +1126,7 @@ fn init_goose_local_registers_plugin() {
         .stdout(predicate::str::contains("allowlister hook goose"))
         // Goose has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Goose wires a plugin directory, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let plugin = dir.path().join(".agents/plugins/allowlister");
@@ -1157,7 +1157,7 @@ fn init_goose_no_hooks_prints_goose_snippet() {
         .assert()
         .success()
         .stdout(predicate::str::contains(".agents/plugins/allowlister"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".agents").exists(),
         "--no-hooks must not write the plugin directory"
@@ -1176,7 +1176,7 @@ fn init_opencode_local_writes_plugin() {
         .stdout(predicate::str::contains("allowlister hook opencode"))
         // OpenCode has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // OpenCode writes a plugin file, never Claude Code's settings.json.
     assert!(!dir.path().join(".claude/settings.json").exists());
     let plugin = dir.path().join(".opencode/plugin/allowlister.js");
@@ -1196,7 +1196,7 @@ fn init_opencode_no_hooks_prints_opencode_plugin() {
         .assert()
         .success()
         .stdout(predicate::str::contains(".opencode/plugin/allowlister.js"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".opencode").exists(),
         "--no-hooks must not write the plugin"
@@ -1215,7 +1215,7 @@ fn init_copilot_local_registers_github_hooks_file() {
         .stdout(predicate::str::contains("allowlister hook copilot"))
         // Copilot has no allow list, so the Claude-specific warning must not show.
         .stdout(predicate::str::contains("do NOT add").not());
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     // Copilot wires its own file under .github/hooks, never the other harnesses'.
     assert!(!dir.path().join(".claude/settings.json").exists());
     assert!(!dir.path().join(".cursor/hooks.json").exists());
@@ -1239,7 +1239,7 @@ fn init_copilot_no_hooks_prints_copilot_snippet() {
         .assert()
         .success()
         .stdout(predicate::str::contains(".github/hooks/allowlister.json"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
     assert!(
         !dir.path().join(".github/hooks/allowlister.json").exists(),
         "--no-hooks must not write the hooks file"
@@ -1258,7 +1258,7 @@ fn init_profile_installs_a_curated_ruleset() {
         .stdout(predicate::str::contains("read-only"));
     // The installed profile may carry explanatory `//` comments, so strip them
     // the way the loader does before a strict JSON parse.
-    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
+    let raw = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
     let doc: Value =
         serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
     assert!(
@@ -1290,7 +1290,7 @@ fn init_interactive_flow_reads_answers_from_stdin() {
         .stdout(predicate::str::contains("Which starting ruleset?"));
     // The installed profile may carry explanatory `//` comments, so strip them
     // the way the loader does before a strict JSON parse.
-    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
+    let raw = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
     let doc: Value =
         serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
     assert!(
@@ -1377,7 +1377,7 @@ fn init_global_writes_under_xdg_and_registers_hook_under_home() {
         .assert()
         .success();
     // The config follows XDG; the Claude hook is always under HOME/.claude.
-    assert!(xdg.path().join("allowlister/config.json").is_file());
+    assert!(xdg.path().join("allowlister/config.jsonc").is_file());
     assert!(home.path().join(".claude/settings.json").is_file());
 }
 
@@ -1393,7 +1393,7 @@ fn init_global_falls_back_to_home_config() {
         .success();
     assert!(home
         .path()
-        .join(".config/allowlister/config.json")
+        .join(".config/allowlister/config.jsonc")
         .is_file());
     assert!(home.path().join(".claude/settings.json").is_file());
 }
@@ -1436,7 +1436,7 @@ fn install_global_writes_a_user_config_that_gates() {
         .assert()
         .success()
         .stdout(predicate::str::contains("rule(s) added"));
-    assert!(xdg.path().join("allowlister/config.json").is_file());
+    assert!(xdg.path().join("allowlister/config.jsonc").is_file());
 
     // The freshly installed profile is the source of truth: a pure read allows.
     let cwd = TempDir::new().unwrap();
@@ -1461,7 +1461,104 @@ fn install_local_writes_a_project_config() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Created"));
-    assert!(dir.path().join(".allowlister.json").is_file());
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
+}
+
+#[test]
+fn install_into_an_existing_json_config_updates_it_in_place_keeping_comments() {
+    let dir = TempDir::new().unwrap();
+    // A legacy-named, hand-commented project config: `--local` must keep
+    // updating this file (no .jsonc twin appears) and keep its comments.
+    let existing = dir.path().join(".allowlister.json");
+    fs::write(
+        &existing,
+        "{\n  // hand-written note\n  \"rules\": [\n    { \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" } // keep\n  ]\n}\n",
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "starter", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated"));
+    assert!(
+        !dir.path().join(".allowlister.jsonc").exists(),
+        "the existing .json config is the update target, not a new .jsonc"
+    );
+    let text = fs::read_to_string(&existing).unwrap();
+    // Everything up to the appended rules is byte-for-byte untouched — the
+    // comments keep their exact positions, and the separating comma attaches
+    // to the rule, before its trailing comment.
+    assert!(
+        text.starts_with(
+            "{\n  // hand-written note\n  \"rules\": [\n    { \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }, // keep\n"
+        ),
+        "comments must keep their positions: {text}"
+    );
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&text)).unwrap();
+    assert_eq!(doc["rules"][0]["name"], "mine");
+    assert!(doc["rules"].as_array().unwrap().len() > 1);
+
+    // A second, fully redundant install must leave the file byte-identical.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "starter", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 rule(s) added"));
+    assert_eq!(fs::read_to_string(&existing).unwrap(), text);
+}
+
+#[test]
+fn init_history_keeps_a_commented_profiles_comments_in_place() {
+    let dir = TempDir::new().unwrap();
+    // A commented profile file: `init` writes it verbatim, then persisting the
+    // history toggle must splice the `history` member in without disturbing a
+    // single byte of what came before it.
+    let profile = dir.path().join("team.jsonc");
+    let body = "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ]\n}\n";
+    fs::write(&profile, body).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "init",
+            "--local",
+            "--no-hooks",
+            "--history",
+            "-y",
+            "--profile",
+        ])
+        .arg(&profile)
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("history recording is ON"));
+    let written = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
+    assert_eq!(
+        written,
+        "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ],\n  \"history\": {\n    \"enabled\": true\n  }\n}\n",
+        "the profile text must survive byte-for-byte around the spliced history member"
+    );
+}
+
+#[test]
+fn a_jsonc_project_config_is_discovered_and_gates() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join(".allowlister.jsonc"),
+        "{\n  // comments are first-class here\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" }\n  ]\n}\n",
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "ls -la", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
 }
 
 #[test]
@@ -2040,7 +2137,7 @@ fn init_history_flag_persists_the_toggle_and_drives_recording() {
         .assert()
         .success()
         .stdout(predicate::str::contains("history recording is ON"));
-    let config = fs::read_to_string(xdg.path().join("allowlister/config.json")).unwrap();
+    let config = fs::read_to_string(xdg.path().join("allowlister/config.jsonc")).unwrap();
     assert!(config.contains("\"history\""), "{config}");
 
     // The config flag alone (no env) now drives recording on the next hook run.
@@ -2940,7 +3037,7 @@ fn init_global_registers_each_harness_under_home_or_xdg() {
             .assert()
             .success();
         assert!(
-            xdg.join("allowlister/config.json").is_file(),
+            xdg.join("allowlister/config.jsonc").is_file(),
             "{harness}: the config must land under XDG"
         );
         let hook_path: PathBuf = hook_file
@@ -2982,7 +3079,7 @@ fn init_profile_from_a_file_writes_the_source_and_gates() {
         .success();
     // The source file lands verbatim as the project config.
     assert_eq!(
-        fs::read_to_string(project.path().join(".allowlister.json")).unwrap(),
+        fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap(),
         fs::read_to_string(&source).unwrap()
     );
     Command::cargo_bin("allowlister")
@@ -3027,7 +3124,7 @@ fn init_interactive_history_yes_persists_the_toggle() {
         .success()
         .stdout(predicate::str::contains("Record a local history"))
         .stdout(predicate::str::contains("history recording is ON"));
-    let raw = fs::read_to_string(dir.path().join(".allowlister.json")).unwrap();
+    let raw = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
     let doc: Value =
         serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap();
     assert_eq!(doc["history"]["enabled"], true);
@@ -3251,6 +3348,6 @@ fn init_no_history_persists_the_disabled_toggle() {
         .clone();
     assert!(String::from_utf8(out).unwrap().contains("OFF"));
     // The choice is persisted explicitly as disabled.
-    let config = fs::read_to_string(project.path().join(".allowlister.json")).unwrap();
+    let config = fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap();
     assert!(config.contains("\"enabled\": false"), "{config}");
 }
