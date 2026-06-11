@@ -149,16 +149,35 @@ pub fn decide(analysis: &Analysis, rules: &[Rule]) -> DecisionResult {
         return result(Verdict::Allow, reason, decisions, analysis);
     }
 
-    // Otherwise some fragment is undecided → defer the whole command.
-    let deferred = decisions
-        .iter()
-        .find(|d| d.verdict == Verdict::Defer)
-        .expect("a non-allow, non-deny, non-ask decision must be a defer");
-    let reason = format!(
-        "no rule matched `{}` ({})",
-        deferred.fragment.cmd_string(),
-        deferred.fragment.role.as_str()
-    );
+    // Otherwise some fragment is undecided → defer the whole command. As with
+    // ask, name *every* undecided fragment, not just the first: the harness
+    // shows this reason on the permission prompt it falls through to, so citing
+    // one fragment of a multi-command line leaves the rest unexplained — the
+    // gap the prompt was supposed to close. Identical lines collapse so a script
+    // that repeats a command stays scannable.
+    let mut deferred: Vec<String> = Vec::new();
+    for decision in decisions.iter().filter(|d| d.verdict == Verdict::Defer) {
+        let line = format!(
+            "`{}` ({})",
+            decision.fragment.cmd_string(),
+            decision.fragment.role.as_str()
+        );
+        if !deferred.contains(&line) {
+            deferred.push(line);
+        }
+    }
+    let reason = if deferred.len() == 1 {
+        format!(
+            "no rule matched {}",
+            deferred.into_iter().next().expect("one deferred fragment")
+        )
+    } else {
+        format!(
+            "no rule matched {} commands: {}",
+            deferred.len(),
+            deferred.join("; ")
+        )
+    };
     result(Verdict::Defer, reason, decisions, analysis)
 }
 
@@ -609,6 +628,37 @@ mod tests {
             evaluate("git status && make", &rules).verdict,
             Verdict::Defer
         );
+    }
+
+    #[test]
+    fn single_defer_reason_names_the_undecided_fragment() {
+        let rules = vec![allow("git", "git status")];
+        let result = evaluate("git status && make", &rules);
+        assert_eq!(result.verdict, Verdict::Defer);
+        assert_eq!(result.reason, "no rule matched `make` (standalone)");
+    }
+
+    #[test]
+    fn defer_reason_lists_every_undecided_fragment_not_just_the_first() {
+        // A multi-command line where two distinct commands have no rule: the
+        // harness prompt must name both, since deferring hands it the whole line.
+        let rules = vec![allow("git", "git status")];
+        let result = evaluate("git status && make && cargo build", &rules);
+        assert_eq!(result.verdict, Verdict::Defer);
+        assert!(result.reason.starts_with("no rule matched 2 commands:"));
+        assert!(result.reason.contains("`make` (standalone)"));
+        assert!(result.reason.contains("`cargo build` (standalone)"));
+        // The allowed fragment is not part of the explanation.
+        assert!(!result.reason.contains("git status"));
+    }
+
+    #[test]
+    fn defer_reason_collapses_identical_repeated_commands() {
+        // The same undecided command twice adds no information; it is listed once.
+        let rules: Vec<Rule> = Vec::new();
+        let result = evaluate("make && make", &rules);
+        assert_eq!(result.verdict, Verdict::Defer);
+        assert_eq!(result.reason, "no rule matched `make` (standalone)");
     }
 
     #[test]
