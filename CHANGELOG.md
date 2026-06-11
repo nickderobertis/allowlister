@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.15](https://github.com/nickderobertis/allowlister/compare/v0.4.14...v0.4.15) - 2026-06-11
+
+### Performance
+
+- cut per-spawn cost ~70% by deferring regex-engine work ([#76](https://github.com/nickderobertis/allowlister/pull/76))
+
 ## [0.4.14](https://github.com/nickderobertis/allowlister/compare/v0.4.13...v0.4.14) - 2026-06-11
 
 ### Added
