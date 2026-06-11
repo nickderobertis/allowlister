@@ -199,7 +199,8 @@ fn help_succeeds_and_lists_subcommands() {
         .stdout(predicate::str::contains("check"))
         .stdout(predicate::str::contains("explain"))
         .stdout(predicate::str::contains("init"))
-        .stdout(predicate::str::contains("install"));
+        .stdout(predicate::str::contains("install"))
+        .stdout(predicate::str::contains("config"));
 }
 
 #[test]
@@ -3350,4 +3351,334 @@ fn init_no_history_persists_the_disabled_toggle() {
     // The choice is persisted explicitly as disabled.
     let config = fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap();
     assert!(config.contains("\"enabled\": false"), "{config}");
+}
+
+// ---- config management (add / remove / show) -------------------------------
+//
+// These drive the compiled binary the way a user tuning their allowlist would:
+// add a single rule, confirm it gates, remove it, confirm it stops gating, and
+// show the effective merged config with each rule's source. Each runs in a
+// hermetic temp dir so the host config never leaks in.
+
+#[test]
+fn config_add_local_creates_a_rule_that_gates() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "config", "add", "--local", "--name", "allow-ls", "--match", "ls*", "--action", "allow",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"))
+        .stdout(predicate::str::contains("1 rule(s) added"));
+    assert!(dir.path().join(".allowlister.jsonc").is_file());
+
+    // The freshly added rule actually gates.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "ls -la", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn config_add_dedupes_by_name_and_preserves_comments() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("cfg.jsonc");
+    fs::write(
+        &target,
+        "{\n  // hand notes\n  \"rules\": [\n    { \"name\": \"keep\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ]\n}\n",
+    )
+    .unwrap();
+
+    // Add a new rule via an explicit output path.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "config", "add", "--name", "pwd", "--match", "pwd", "--output",
+        ])
+        .arg(&target)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 rule(s) added"));
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(text.contains("// hand notes"), "comments survive: {text}");
+    assert!(text.contains("// why"));
+
+    // Re-adding the same name is a no-op.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "config", "add", "--name", "pwd", "--match", "pwd", "--output",
+        ])
+        .arg(&target)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 rule(s) added"));
+    let doc: Value = serde_json::from_str(
+        &allowlister::config::strip_jsonc_comments(&fs::read_to_string(&target).unwrap())
+            .to_string(),
+    )
+    .unwrap();
+    assert_eq!(doc["rules"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn config_add_rejects_an_invalid_rule() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("cfg.json");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "config", "add", "--name", "bad", "--match", "x", "--role", "nope", "--output",
+        ])
+        .arg(&target)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown role"));
+    assert!(!target.exists(), "a bad rule writes nothing");
+}
+
+#[test]
+fn config_add_tool_rule_with_a_param() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("cfg.json");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "config",
+            "add",
+            "--name",
+            "reads",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/**",
+            "--output",
+        ])
+        .arg(&target)
+        .assert()
+        .success();
+    let doc: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(doc["rules"][0]["tool"], "read");
+    assert_eq!(doc["rules"][0]["params"]["path"][0], "/repo/**");
+}
+
+#[test]
+fn config_remove_deletes_a_rule_and_stops_gating() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    let target = dir.path().join(".allowlister.jsonc");
+    fs::write(
+        &target,
+        "{\n  \"rules\": [\n    { \"name\": \"allow-ls\", \"match\": \"ls*\", \"action\": \"allow\" },\n    { \"name\": \"allow-pwd\", \"match\": \"pwd\", \"action\": \"allow\" }\n  ]\n}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["config", "remove", "allow-ls", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed rule 'allow-ls'"));
+
+    let doc: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    let names: Vec<&str> = doc["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["allow-pwd"]);
+
+    // With its rule gone, `ls` no longer matches an allow (and nothing else
+    // does), so it defers.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "ls -la", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("DEFER"));
+}
+
+#[test]
+fn config_add_then_remove_global_under_xdg() {
+    let xdg = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    // Add to the user-global config (resolves under XDG_CONFIG_HOME).
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .args([
+            "config", "add", "--global", "--name", "allow-ls", "--match", "ls*",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+    let config = xdg.path().join("allowlister/config.jsonc");
+    assert!(config.is_file());
+
+    // Remove it again from the same global config.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("HOME", home.path())
+        .args(["config", "remove", "allow-ls", "--global"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Removed rule 'allow-ls'"));
+    let doc: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+    assert!(doc["rules"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn config_remove_absent_name_is_a_noop() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join("cfg.json");
+    let body = r#"{"rules":[{"name":"a","match":"a*","action":"allow"}]}"#;
+    fs::write(&target, body).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["config", "remove", "nope", "--output"])
+        .arg(&target)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing changed"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), body);
+}
+
+#[test]
+fn config_show_combined_lists_rules_with_sources() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .command()
+        .args(["config", "show", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        // Both scopes contribute, and each rule is annotated with its source.
+        .stdout(predicate::str::contains("combined (user + project)"))
+        .stdout(predicate::str::contains("config.json"))
+        .stdout(predicate::str::contains(".allowlister.json"))
+        // A user rule and a project rule both appear.
+        .stdout(predicate::str::contains("rm -rf"))
+        .stdout(predicate::str::contains("gh api scoped to myorg"));
+}
+
+#[test]
+fn config_show_json_is_machine_readable_with_per_rule_source() {
+    let sandbox = Sandbox::new();
+    let out = sandbox
+        .command()
+        .args(["config", "show", "--json", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["scope"], "combined (user + project)");
+    let rules = value["rules"].as_array().unwrap();
+    assert!(!rules.is_empty());
+    // Every rule carries the file it came from.
+    assert!(rules.iter().all(|r| r["source"].is_string()));
+    // A project rule is attributed to the project config file.
+    let proj_rule = rules
+        .iter()
+        .find(|r| r["name"] == "gh api scoped to myorg")
+        .unwrap();
+    assert!(proj_rule["source"]
+        .as_str()
+        .unwrap()
+        .contains(".allowlister.json"));
+}
+
+#[test]
+fn config_show_global_scope_only_shows_user_rules() {
+    let sandbox = Sandbox::new();
+    let out = sandbox
+        .command()
+        .args(["config", "show", "--global", "--json", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["scope"], "user-global");
+    let rules = value["rules"].as_array().unwrap();
+    // The user config's `rm -rf` deny is present; the project-only rule is not.
+    assert!(rules.iter().any(|r| r["name"] == "rm -rf — never"));
+    assert!(!rules.iter().any(|r| r["name"] == "gh api scoped to myorg"));
+}
+
+#[test]
+fn config_show_surfaces_warnings_for_a_malformed_config() {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    // Valid JSON, but a rule that cannot compile (no match/argv/tool) — the
+    // loader records a warning and the raw read still lists what is configured.
+    fs::write(
+        dir.path().join(".allowlister.json"),
+        r#"{"rules":[{"name":"broken","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let empty = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", empty.path())
+        .env("HOME", empty.path())
+        .args(["config", "show", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warnings:"))
+        .stdout(predicate::str::contains("broken"));
+}
+
+#[test]
+fn config_show_local_scope_only_shows_project_rules() {
+    let sandbox = Sandbox::new();
+    let out = sandbox
+        .command()
+        .args(["config", "show", "--local", "--json", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(value["scope"], "project-local");
+    let rules = value["rules"].as_array().unwrap();
+    // Only project rules; the user-config-only `rm -rf` deny must be absent.
+    assert!(rules.iter().any(|r| r["name"] == "gh api scoped to myorg"));
+    assert!(!rules.iter().any(|r| r["name"] == "rm -rf — never"));
+}
+
+#[test]
+fn config_show_empty_when_no_config_found() {
+    let empty = TempDir::new().unwrap();
+    let cwd = TempDir::new().unwrap();
+    fs::create_dir_all(cwd.path().join(".git")).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", empty.path())
+        .env("HOME", empty.path())
+        .args(["config", "show", "--cwd"])
+        .arg(cwd.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(none found)"))
+        .stdout(predicate::str::contains("rules (0)"));
 }

@@ -42,6 +42,125 @@ pub(crate) fn append_rules(text: &str, new_rules: &[Value]) -> Result<String, St
     Ok(edited)
 }
 
+/// Remove the first top-level rule whose `name` equals `name`, preserving the
+/// comments and formatting of every rule that remains. Returns the edited text
+/// and whether a rule was removed; a document with no matching rule comes back
+/// unchanged with `false`. Like the other edits here, the result is verified to
+/// re-parse to exactly the document the value-level removal would produce.
+///
+/// A comment that sits between the removed rule and its neighbor (a trailing
+/// note on the same line, or a standalone block immediately before the next
+/// rule) may go with it — comment ownership across a deleted element is
+/// inherently ambiguous — but no surviving rule is ever disturbed.
+pub(crate) fn remove_rule(text: &str, name: &str) -> Result<(String, bool), String> {
+    let stripped = strip_jsonc_comments(text);
+    let top = top_level(&stripped)?;
+    let Some(member) = top.members.iter().find(|m| m.key == "rules") else {
+        return Ok((text.to_string(), false));
+    };
+    let (elements, close) = array_spans(&stripped, member.value_start)?;
+
+    // Locate the first element whose parsed `name` matches.
+    let mut found = None;
+    for (idx, &(start, end)) in elements.iter().enumerate() {
+        let value: Value = serde_json::from_str(&stripped[start..end])
+            .map_err(|err| format!("invalid rule JSON: {err}"))?;
+        if value.get("name").and_then(Value::as_str) == Some(name) {
+            found = Some(idx);
+            break;
+        }
+    }
+    let Some(idx) = found else {
+        return Ok((text.to_string(), false));
+    };
+
+    let (start, end) = elements[idx];
+    let own_line = line_indent(&stripped, start).is_some();
+    // Byte ranges to delete. Most cases are a single span; removing a last
+    // element that sits on its own line splits into two (its line, and the
+    // separating comma alone) so the predecessor's trailing comment survives.
+    let mut cuts: Vec<(usize, usize)> = Vec::new();
+    if let Some(&(next_start, _)) = elements.get(idx + 1) {
+        // Not the last element: drop it and the comma that follows, up to the
+        // next element — line-aligned so the next element keeps its indentation.
+        let cut_start = line_aligned_start(text, &stripped, start);
+        let cut_end = if line_indent(&stripped, next_start).is_some() {
+            line_start(text, next_start)
+        } else {
+            next_start
+        };
+        cuts.push((cut_start, cut_end));
+    } else if idx > 0 {
+        // Last element with a predecessor: the separating comma must go, but a
+        // trailing comment on the predecessor's line should not. When this
+        // element owns its line(s), delete just the comma and this element's
+        // lines, leaving the comment between them in place.
+        let (_, prev_end) = elements[idx - 1];
+        if own_line {
+            let comma = comma_after(&stripped, prev_end);
+            let cut_end = if line_indent(&stripped, close).is_some() {
+                line_start(text, close)
+            } else {
+                end
+            };
+            cuts.push((comma, comma + 1));
+            cuts.push((line_start(text, start), cut_end));
+        } else {
+            cuts.push((prev_end, end));
+        }
+    } else {
+        // The only element: drop it, line-aligned when it sits on its own lines.
+        let cut_start = line_aligned_start(text, &stripped, start);
+        let cut_end = if line_indent(&stripped, close).is_some() {
+            line_start(text, close)
+        } else {
+            end
+        };
+        cuts.push((cut_start, cut_end));
+    }
+
+    let mut edited = text.to_string();
+    // Apply the cuts back-to-front so earlier offsets stay valid.
+    cuts.sort_by_key(|cut| std::cmp::Reverse(cut.0));
+    for (cut_start, cut_end) in cuts {
+        edited.replace_range(cut_start..cut_end, "");
+    }
+
+    let mut expected = parse(&stripped)?;
+    expected
+        .as_object_mut()
+        .ok_or("expected a top-level JSON object")?
+        .get_mut("rules")
+        .and_then(Value::as_array_mut)
+        .ok_or("'rules' is not an array")?
+        .remove(idx);
+    verify(&edited, &expected)?;
+    Ok((edited, true))
+}
+
+/// The start of the deletion: the start of `offset`'s line when the element
+/// begins its own line (so its indentation goes too), else `offset` itself.
+fn line_aligned_start(text: &str, stripped: &str, offset: usize) -> usize {
+    if line_indent(stripped, offset).is_some() {
+        line_start(text, offset)
+    } else {
+        offset
+    }
+}
+
+/// The offset of the `,` separating an element from the next, found by skipping
+/// whitespace (comments are blanked in `stripped`) after the prior value's end.
+/// Falls back to `from` if no comma is present (the scanner already validated
+/// the array, so this is only reached when a comma exists).
+fn comma_after(stripped: &str, from: usize) -> usize {
+    let i = skip_ws(stripped.as_bytes(), from);
+    if stripped.as_bytes().get(i) == Some(&b',') {
+        i
+    } else {
+        from
+    }
+}
+
 /// Set top-level `key` to `value`, replacing an existing member in place or
 /// appending a new one, preserving all comments and existing formatting. `key`
 /// must not require JSON string escaping.
@@ -493,6 +612,83 @@ mod tests {
         let doc: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(doc["meta"]["rules"], "not these");
         assert_eq!(doc["rules"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn removes_a_middle_rule_preserving_siblings_and_comments() {
+        let src = "{\n  // header\n  \"rules\": [\n    { \"name\": \"a\", \"match\": \"a*\", \"action\": \"allow\" }, // keep a\n    { \"name\": \"b\", \"match\": \"b*\", \"action\": \"allow\" },\n    { \"name\": \"c\", \"match\": \"c*\", \"action\": \"allow\" } // keep c\n  ]\n}\n";
+        let (out, removed) = remove_rule(src, "b").unwrap();
+        assert!(removed);
+        assert!(out.contains("// header"));
+        assert!(out.contains("// keep a"));
+        assert!(out.contains("// keep c"));
+        assert!(!out.contains("\"name\": \"b\""));
+        let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
+        let names: Vec<&str> = doc["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn removes_the_first_rule() {
+        let src = "{\n  \"rules\": [\n    { \"name\": \"a\", \"match\": \"a*\", \"action\": \"allow\" },\n    { \"name\": \"b\", \"match\": \"b*\", \"action\": \"allow\" }\n  ]\n}\n";
+        let (out, removed) = remove_rule(src, "a").unwrap();
+        assert!(removed);
+        let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
+        assert_eq!(doc["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["rules"][0]["name"], "b");
+    }
+
+    #[test]
+    fn removes_the_last_rule_keeping_the_predecessors_trailing_comment() {
+        let src = "{\n  \"rules\": [\n    { \"name\": \"a\", \"match\": \"a*\", \"action\": \"allow\" }, // note a\n    { \"name\": \"b\", \"match\": \"b*\", \"action\": \"allow\" }\n  ]\n}\n";
+        let (out, removed) = remove_rule(src, "b").unwrap();
+        assert!(removed);
+        assert!(out.contains("// note a"));
+        let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
+        assert_eq!(doc["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["rules"][0]["name"], "a");
+        // The dangling comma after `a` is gone.
+        assert!(!strip_jsonc_comments(&out).contains(",\n"), "{out}");
+    }
+
+    #[test]
+    fn removes_the_only_rule_leaving_an_empty_array() {
+        let src = "{\n  \"rules\": [\n    { \"name\": \"a\", \"match\": \"a*\", \"action\": \"allow\" }\n  ]\n}\n";
+        let (out, removed) = remove_rule(src, "a").unwrap();
+        assert!(removed);
+        let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
+        assert!(doc["rules"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn removes_from_a_single_line_array() {
+        let src = r#"{ "rules": [{ "name": "a", "match": "a*", "action": "allow" }, { "name": "b", "match": "b*", "action": "allow" }] }"#;
+        let (out, removed) = remove_rule(src, "a").unwrap();
+        assert!(removed);
+        let doc: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(doc["rules"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["rules"][0]["name"], "b");
+    }
+
+    #[test]
+    fn removing_an_absent_rule_is_a_noop() {
+        let src = "{\n  \"rules\": [\n    { \"name\": \"a\", \"match\": \"a*\", \"action\": \"allow\" }\n  ]\n}\n";
+        let (out, removed) = remove_rule(src, "nope").unwrap();
+        assert!(!removed);
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn removing_when_there_is_no_rules_key_is_a_noop() {
+        let src = "{\n  \"history\": { \"enabled\": true }\n}\n";
+        let (out, removed) = remove_rule(src, "a").unwrap();
+        assert!(!removed);
+        assert_eq!(out, src);
     }
 
     #[test]

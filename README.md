@@ -275,6 +275,19 @@ allowlister history [--view fragments|programs|commands] [--verdict V]
 allowlister history recent|compact|clear|path
                                   List recent events, fold them into the summary,
                                   delete all history, or print the store location.
+allowlister config add [--global | --local | --output P]
+                       (--match PATTERN | --argv ARG... | --tool NAME)
+                       [--name N] [--action allow|deny|ask] [--kind glob|regex|literal]
+                       [--role R]... [--param key=glob]... [--jsonpath path=glob]... [--description D]
+                                  Add a single rule to a config (creating it if
+                                  absent). De-duplicated by name, like `install`.
+allowlister config remove <name> [--global | --local | --output P]
+                                  Remove the named rule, keeping the surrounding
+                                  rules, comments, and formatting intact.
+allowlister config show [--global | --local] [--cwd P] [--json]
+                                  Show the effective configuration — every active
+                                  rule and the file it came from. Merges user +
+                                  project by default.
 ```
 
 Examples:
@@ -293,6 +306,13 @@ exit=2
 
 $ allowlister explain 'gh pr list | head -20 | wc -l'
 ... fragment table, per-fragment decisions, verdict: ALLOW
+
+$ allowlister config add --local --name allow-ls --match 'ls*'
+Created ./.allowlister.jsonc.
+  1 rule(s) added, 0 already present (1 total).
+
+$ allowlister config show
+... every active rule annotated with the source file it came from
 ```
 
 ## Usage history
