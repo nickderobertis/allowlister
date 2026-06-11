@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.11](https://github.com/nickderobertis/allowlister/compare/v0.4.10...v0.4.11) - 2026-06-11
+
+### Added
+
+- explain every undecided fragment in a defer reason ([#68](https://github.com/nickderobertis/allowlister/pull/68))
+
 ## [0.4.10](https://github.com/nickderobertis/allowlister/compare/v0.4.9...v0.4.10) - 2026-06-10
 
 ### Performance
