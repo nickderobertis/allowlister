@@ -9,7 +9,9 @@
 //!   `summary.json` and the raw log is cleared. The summary's size is bounded by
 //!   the number of distinct commands/subcommands (capped, with an overflow
 //!   bucket), not by how many commands ever ran — so disk use stays bounded while
-//!   full-history counts survive forever.
+//!   full-history counts survive forever. Time survives folding the same way:
+//!   each key keeps first/last timestamps and fixed-size decayed [`Recency`]
+//!   weights, never a per-event timeline.
 //! - **Performant history.** The summary *is* the precomputed full history, so
 //!   reporting reads it directly rather than scanning every event ever recorded.
 //!   `events.jsonl` is a bounded recent-detail window on top of it.
@@ -61,6 +63,23 @@ const MAX_FRAGMENTS: usize = 64;
 const MAX_STR: usize = 1_000;
 /// A lock older than this (by mtime) is treated as abandoned and reclaimed.
 const LOCK_TTL_SECS: u64 = 120;
+/// Half-life of the recency weights: each verdict's [`Recency`] value is the sum
+/// of `0.5^(age / 30 days)` over that verdict's events, so month-old activity
+/// counts half and a burst of use long ago decays toward zero. This keeps "is it
+/// still relevant?" answerable from a few numbers per key instead of a timeline.
+pub(crate) const RECENT_HALF_LIFE_SECS: u64 = 30 * 86_400;
+/// Weights below this are clamped to zero so fully-decayed keys drop their
+/// `recent` field from the stored JSON instead of carrying dust forever.
+const RECENT_EPSILON: f64 = 1e-9;
+
+/// The multiplicative decay a weight undergoes over `age_secs`.
+fn decay_factor(age_secs: u64) -> f64 {
+    (-(age_secs as f64) * std::f64::consts::LN_2 / RECENT_HALF_LIFE_SECS as f64).exp()
+}
+
+fn f64_is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
 
 /// What was evaluated, for [`record`]: a shell command line or a tool call.
 pub enum Subject<'a> {
@@ -115,7 +134,81 @@ pub struct FragmentRecord {
     pub rule: Option<String>,
 }
 
-/// Per-verdict tallies plus the latest timestamp seen, for any aggregation key.
+/// Recency-weighted per-verdict activity: each field is the decayed sum of that
+/// verdict's events ([`RECENT_HALF_LIFE_SECS`]), anchored at the owning
+/// [`Counts`]'s `last_ts`. Fixed-size by construction — recency costs a few
+/// numbers per key, never a growing timeline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Recency {
+    /// Decayed weight of allow events.
+    #[serde(default, skip_serializing_if = "f64_is_zero")]
+    pub allow: f64,
+    /// Decayed weight of deny events.
+    #[serde(default, skip_serializing_if = "f64_is_zero")]
+    pub deny: f64,
+    /// Decayed weight of ask events.
+    #[serde(default, skip_serializing_if = "f64_is_zero")]
+    pub ask: f64,
+    /// Decayed weight of defer events.
+    #[serde(default, skip_serializing_if = "f64_is_zero")]
+    pub defer: f64,
+}
+
+impl Recency {
+    /// True when every weight has fully decayed (or nothing was ever recorded),
+    /// so the field can be omitted from stored and reported JSON.
+    pub fn is_empty(&self) -> bool {
+        self.allow == 0.0 && self.deny == 0.0 && self.ask == 0.0 && self.defer == 0.0
+    }
+
+    fn scale(&mut self, factor: f64) {
+        for value in [
+            &mut self.allow,
+            &mut self.deny,
+            &mut self.ask,
+            &mut self.defer,
+        ] {
+            *value *= factor;
+            if *value < RECENT_EPSILON {
+                *value = 0.0;
+            }
+        }
+    }
+
+    fn add(&mut self, other: &Recency) {
+        self.allow += other.allow;
+        self.deny += other.deny;
+        self.ask += other.ask;
+        self.defer += other.defer;
+    }
+
+    fn bump(&mut self, verdict: &str, weight: f64) {
+        match verdict {
+            "allow" => self.allow += weight,
+            "deny" => self.deny += weight,
+            "ask" => self.ask += weight,
+            _ => self.defer += weight,
+        }
+    }
+
+    /// Total decayed weight across all four verdicts.
+    pub fn total(&self) -> f64 {
+        self.allow + self.deny + self.ask + self.defer
+    }
+
+    /// The decayed weight for one verdict.
+    pub fn get(&self, verdict: Verdict) -> f64 {
+        match verdict {
+            Verdict::Allow => self.allow,
+            Verdict::Deny => self.deny,
+            Verdict::Ask => self.ask,
+            Verdict::Defer => self.defer,
+        }
+    }
+}
+
+/// Per-verdict tallies plus the time shape of the key's use: first/latest
+/// timestamps and the decayed [`Recency`] weights.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Counts {
     /// Times allowed.
@@ -130,13 +223,30 @@ pub struct Counts {
     /// Times deferred to the harness's own flow.
     #[serde(default)]
     pub defer: u64,
+    /// Earliest Unix-seconds timestamp folded into this key (0 when unknown).
+    #[serde(default)]
+    pub first_ts: u64,
     /// Latest Unix-seconds timestamp folded into this key.
     #[serde(default)]
     pub last_ts: u64,
+    /// Recency-weighted per-verdict activity, anchored at `last_ts`.
+    #[serde(default, skip_serializing_if = "Recency::is_empty")]
+    pub recent: Recency,
 }
 
 impl Counts {
     fn bump(&mut self, verdict: &str, ts: u64) {
+        // Re-anchor the weights at the later of the stored anchor and this
+        // event: decay the stored weights forward, or — when concurrent hooks
+        // fold events out of order — decay this event's unit weight backward.
+        // Either way the sum stays exact regardless of arrival order.
+        let weight = if ts >= self.last_ts {
+            self.recent.scale(decay_factor(ts - self.last_ts));
+            1.0
+        } else {
+            decay_factor(self.last_ts - ts)
+        };
+        self.recent.bump(verdict, weight);
         match verdict {
             "allow" => self.allow += 1,
             "deny" => self.deny += 1,
@@ -144,6 +254,9 @@ impl Counts {
             // Any unrecognized string is treated as a defer: the engine only ever
             // emits the four canonical verdicts, so this is purely defensive.
             _ => self.defer += 1,
+        }
+        if ts != 0 && (self.first_ts == 0 || ts < self.first_ts) {
+            self.first_ts = ts;
         }
         if ts > self.last_ts {
             self.last_ts = ts;
@@ -155,9 +268,30 @@ impl Counts {
         self.deny += other.deny;
         self.ask += other.ask;
         self.defer += other.defer;
+        // Re-anchor both weight sets at the later timestamp before adding.
+        if other.last_ts >= self.last_ts {
+            self.recent
+                .scale(decay_factor(other.last_ts - self.last_ts));
+            self.recent.add(&other.recent);
+        } else {
+            let mut incoming = other.recent;
+            incoming.scale(decay_factor(self.last_ts - other.last_ts));
+            self.recent.add(&incoming);
+        }
+        if other.first_ts != 0 && (self.first_ts == 0 || other.first_ts < self.first_ts) {
+            self.first_ts = other.first_ts;
+        }
         if other.last_ts > self.last_ts {
             self.last_ts = other.last_ts;
         }
+    }
+
+    /// The recency weights decayed from their `last_ts` anchor to `now`, so
+    /// reports compare every key at the same moment.
+    pub fn recent_at(&self, now: u64) -> Recency {
+        let mut recent = self.recent;
+        recent.scale(decay_factor(now.saturating_sub(self.last_ts)));
+        recent
     }
 
     /// Total evaluations across all four verdicts.
@@ -379,7 +513,9 @@ fn resolve_enabled(config_enabled: bool) -> bool {
     }
 }
 
-fn now_secs() -> u64 {
+/// Unix seconds now, or 0 when the clock is unreadable (recency then degrades
+/// gracefully: such events count but carry no usable anchor).
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -826,6 +962,94 @@ mod tests {
         assert_eq!(summary.fragments["ls -la"].projects["/a"].allow, 2);
         assert_eq!(summary.fragments["ls foo"].projects["/b"].allow, 1);
         assert_eq!(summary.fragments["grep x"].projects["/b"].defer, 1);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected ≈{expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn recency_halves_per_half_life_and_first_last_track() {
+        let mut counts = Counts::default();
+        counts.bump("defer", 1_000);
+        assert_close(counts.recent.defer, 1.0);
+        // One half-life later the old weight is worth 0.5, plus the new event.
+        counts.bump("defer", 1_000 + RECENT_HALF_LIFE_SECS);
+        assert_close(counts.recent.defer, 1.5);
+        assert_eq!(counts.first_ts, 1_000);
+        assert_eq!(counts.last_ts, 1_000 + RECENT_HALF_LIFE_SECS);
+        assert_eq!(counts.defer, 2);
+    }
+
+    #[test]
+    fn recency_is_independent_of_event_order() {
+        let (early, late) = (5_000, 5_000 + RECENT_HALF_LIFE_SECS);
+        let mut forward = Counts::default();
+        forward.bump("allow", early);
+        forward.bump("allow", late);
+        let mut backward = Counts::default();
+        backward.bump("allow", late);
+        backward.bump("allow", early);
+        assert_close(forward.recent.allow, backward.recent.allow);
+        assert_eq!(forward.first_ts, backward.first_ts);
+        assert_eq!(forward.last_ts, backward.last_ts);
+    }
+
+    #[test]
+    fn merge_re_anchors_recency_at_the_later_timestamp() {
+        let mut older = Counts::default();
+        older.bump("ask", 1_000);
+        let mut newer = Counts::default();
+        newer.bump("ask", 1_000 + RECENT_HALF_LIFE_SECS);
+        let mut merged_into_newer = newer.clone();
+        merged_into_newer.merge(&older);
+        let mut merged_into_older = older.clone();
+        merged_into_older.merge(&newer);
+        // Merging in either direction yields the same anchored weight: the old
+        // side decayed one half-life plus the new side at full weight.
+        assert_close(merged_into_newer.recent.ask, 1.5);
+        assert_close(merged_into_older.recent.ask, 1.5);
+        assert_eq!(merged_into_older.first_ts, 1_000);
+        assert_eq!(merged_into_older.last_ts, 1_000 + RECENT_HALF_LIFE_SECS);
+    }
+
+    #[test]
+    fn recent_at_decays_to_the_report_time_and_clamps_dust() {
+        let mut counts = Counts::default();
+        counts.bump("defer", 1_000);
+        assert_close(counts.recent_at(1_000).defer, 1.0);
+        assert_close(counts.recent_at(1_000 + RECENT_HALF_LIFE_SECS).defer, 0.5);
+        // A burst far in the past fully decays: heavy old use is not relevant.
+        let long_dead = counts.recent_at(1_000 + 200 * RECENT_HALF_LIFE_SECS);
+        assert!(long_dead.is_empty());
+        assert_close(long_dead.total(), 0.0);
+        // Clock skew (now before the anchor) must not inflate the weight.
+        assert_close(counts.recent_at(0).defer, 1.0);
+    }
+
+    #[test]
+    fn counts_json_skips_recency_when_empty_and_round_trips_when_set() {
+        let empty = serde_json::to_value(Counts::default()).unwrap();
+        assert!(empty.get("recent").is_none());
+        let mut counts = Counts::default();
+        counts.bump("allow", 42);
+        let value = serde_json::to_value(&counts).unwrap();
+        assert_eq!(value["recent"]["allow"], 1.0);
+        assert!(
+            value["recent"].get("deny").is_none(),
+            "zero weights skipped"
+        );
+        assert_eq!(value["first_ts"], 42);
+        let back: Counts = serde_json::from_value(value).unwrap();
+        assert_close(back.recent.allow, 1.0);
+        // A pre-recency summary (no recent/first_ts fields) still deserializes.
+        let legacy: Counts = serde_json::from_str(r#"{"allow":3,"last_ts":9}"#).unwrap();
+        assert_eq!(legacy.allow, 3);
+        assert!(legacy.recent.is_empty());
+        assert_eq!(legacy.first_ts, 0);
     }
 
     #[test]

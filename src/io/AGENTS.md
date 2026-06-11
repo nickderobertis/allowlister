@@ -26,3 +26,6 @@
   concurrent hook processes can never double-count. Keep the store bounded: raw
   events are folded and cleared, and the summary's per-key maps are capped with
   an overflow bucket, so disk use tracks distinct commands, not call volume.
+- Per-key time information stays fixed-size: first/latest timestamps plus decayed
+  recency weights, never a per-event timeline or time-bucket series. The decay
+  math must be order-independent, since folds can see events out of order.

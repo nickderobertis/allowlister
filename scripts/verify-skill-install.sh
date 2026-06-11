@@ -100,10 +100,10 @@ export HOME="$TMP/home"
 export XDG_CONFIG_HOME="$TMP/home/.config"
 mkdir -p "$XDG_CONFIG_HOME" "$TMP/empty"
 
-# history summary --json → object with events_total
+# history summary --json → object with events_total and the recency anchor as_of
 "$BIN" history --json > "$TMP/hist.json" 2>/dev/null || fail "history --json exited non-zero"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and "events_total" in d' "$TMP/hist.json" \
-  || fail "history --json is not the expected summary object"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and "events_total" in d and "as_of" in d' "$TMP/hist.json" \
+  || fail "history --json is not the expected summary object (events_total + as_of)"
 ok "history --json returns the summary the skill reads"
 
 # history fragments/defer --json → object with a rows array (the skill's candidates)

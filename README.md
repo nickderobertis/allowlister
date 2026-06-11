@@ -308,8 +308,9 @@ or takes `--history` / `--no-history`; either way the choice is stored in your
 config as `"history": { "enabled": true }`. The `ALLOWLISTER_HISTORY=1` (or `0`)
 environment variable overrides the config per run.
 
-Each evaluation is recorded with its harness, project (the cwd it ran in), the
-overall verdict, and every parsed subcommand with the rule that decided it.
+Each evaluation is recorded with its harness, project (the cwd it ran in), a
+timestamp, the overall verdict, and every parsed subcommand with the rule that
+decided it.
 
 ```text
 $ allowlister history
@@ -319,12 +320,12 @@ allowlister usage history — 13 event(s) recorded
 
 Most-evaluated subcommands:
 
-  TOTAL  ALLOW  ASK  DENY  DEFER  SUBCOMMAND         RULE
-      6      6    0     0      0  git status         git read-only
-      3      3    0     0      0  git log --oneline  git read-only
-      3      0    0     0      3  npm run build
-      1      0    0     0      1  cargo test
-      1      0    0     1      0  rm -rf /tmp/junk   no rm -rf
+  TOTAL  ALLOW  ASK  DENY  DEFER  RECENT  LAST  SUBCOMMAND         RULE
+      6      6    0     0      0     5.3   <1h  git status         git read-only
+      3      3    0     0      0     2.8    2d  git log --oneline  git read-only
+      3      0    0     0      3     0.0   4mo  npm run build
+      1      0    0     0      1     1.0    3h  cargo test
+      1      0    0     1      0     0.9    5d  rm -rf /tmp/junk   no rm -rf
 
 Tip: `allowlister history --verdict defer` lists what fell through to the
 harness's own prompt — the best candidates for a new allow rule.
@@ -336,9 +337,15 @@ That is the unit a rule matches, which makes the report directly actionable:
 
 - `--verdict defer` ranks the commands no rule covered — add allow rules for the
   frequent, safe ones.
+- `RECENT` and `LAST` separate live commands from heavy-but-stale ones. `RECENT`
+  is a recency-weighted activity score (each use counts `0.5^(age / 30 days)`),
+  so steady current use scores near its monthly volume while a burst of use that
+  ended months ago decays toward zero — high `TOTAL` with `RECENT 0.0` means the
+  command is no longer worth an allow rule. `LAST` is the age of the latest use.
 - `--view programs` collapses subcommands to their leading program (`git`,
   `npm`); `--view commands` shows whole command lines instead.
-- `--json` emits a stable object for scripting.
+- `--json` emits a stable object for scripting, with per-row `first_ts`,
+  `last_ts`, and per-verdict `recent` weights decayed to the report's `as_of`.
 
 ### Bounded storage
 
@@ -346,9 +353,12 @@ History lives under your config directory (e.g.
 `~/.config/allowlister/history/`), user-global and tagged per project, never in
 version control. It never grows without bound: raw events accumulate in a small
 recent log that is periodically folded into a cumulative `summary.json`, whose
-size is bounded by the number of *distinct* commands — not by how many ran. The
-summary is the precomputed full history, so the report stays fast no matter how
-long you have been recording. `allowlister history clear` wipes it.
+size is bounded by the number of *distinct* commands — not by how many ran. Time
+information survives that folding without growing either: each command keeps
+just its first/latest timestamps and a fixed-size decayed recency weight, never
+a per-event timeline. The summary is the precomputed full history, so the report
+stays fast no matter how long you have been recording. `allowlister history
+clear` wipes it.
 
 ## Refine your allowlist (skill)
 
