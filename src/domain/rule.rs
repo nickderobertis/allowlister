@@ -11,7 +11,7 @@ use fancy_regex::Regex;
 use serde_json::Value;
 
 use super::analyzer::{Fragment, RedirClass, Redirection, Role};
-use super::glob::{compile_glob, compile_glob_matcher, compile_regex, Matcher};
+use super::glob::{compile_glob_matcher, compile_regex, Matcher};
 use super::toolcall::{Capability, ParamKey, ToolCall};
 
 /// Whether a rule grants, blocks, or surfaces a matching fragment for approval.
@@ -77,38 +77,49 @@ pub struct RedirPolicy {
     /// Forbid every redirection regardless of target.
     deny: bool,
     /// Permitted targets for write redirections; `None` denies all writes.
-    write_glob: Option<Vec<Regex>>,
+    write_glob: Option<Vec<Matcher>>,
     /// Permitted targets for read redirections; `None` allows any read.
-    read_glob: Option<Vec<Regex>>,
+    read_glob: Option<Vec<Matcher>>,
 }
 
 impl RedirPolicy {
     /// Build a redirection policy from compiled globs.
     pub fn new(deny: bool, write_glob: Option<Vec<Regex>>, read_glob: Option<Vec<Regex>>) -> Self {
+        let wrap = |regexes: Vec<Regex>| regexes.into_iter().map(Matcher::Regex).collect();
         RedirPolicy {
             deny,
-            write_glob,
-            read_glob,
+            write_glob: write_glob.map(wrap),
+            read_glob: read_glob.map(wrap),
         }
     }
 
-    /// Build a redirection policy from raw glob strings, compiling each.
+    /// Build a redirection policy from raw glob strings, compiling each. Like
+    /// command matchers, the globs defer regex construction behind the lazy
+    /// matcher's literal-prefix gate (most invocations carry no redirection, so
+    /// the targets are never even tested); validation still happens here, since
+    /// the one construct whose translation can fail — a character class —
+    /// compiles eagerly.
     pub fn from_globs(
         deny: bool,
         write: Option<&[String]>,
         read: Option<&[String]>,
     ) -> Result<RedirPolicy, String> {
-        let compile = |patterns: &[String]| -> Result<Vec<Regex>, String> {
+        let compile = |patterns: &[String]| -> Result<Vec<Matcher>, String> {
             patterns
                 .iter()
                 .map(|p| {
-                    compile_glob(p).map_err(|e| format!("invalid redirection glob '{p}': {e}"))
+                    compile_glob_matcher(p)
+                        .map_err(|e| format!("invalid redirection glob '{p}': {e}"))
                 })
                 .collect()
         };
         let write_glob = write.map(compile).transpose()?;
         let read_glob = read.map(compile).transpose()?;
-        Ok(RedirPolicy::new(deny, write_glob, read_glob))
+        Ok(RedirPolicy {
+            deny,
+            write_glob,
+            read_glob,
+        })
     }
 
     fn allows_write(&self, target: &str) -> bool {
@@ -124,7 +135,7 @@ impl RedirPolicy {
         }
         match &self.write_glob {
             None => false, // writes are denied unless explicitly permitted.
-            Some(globs) => globs.iter().any(|g| g.is_match(target).unwrap_or(false)),
+            Some(globs) => globs.iter().any(|g| g.is_match(target)),
         }
     }
 
@@ -134,7 +145,7 @@ impl RedirPolicy {
         }
         match &self.read_glob {
             None => true, // reads of named files are allowed by default.
-            Some(globs) => globs.iter().any(|g| g.is_match(target).unwrap_or(false)),
+            Some(globs) => globs.iter().any(|g| g.is_match(target)),
         }
     }
 
@@ -254,8 +265,19 @@ impl Rule {
         if argv.is_empty() {
             return false;
         }
+        self.matches_argv_joined(argv, &argv.join(" "))
+    }
+
+    /// [`matches_argv`](Rule::matches_argv) with the joined form precomputed by
+    /// the caller. The decision loop scans every rule against the same fragment,
+    /// so joining argv once there — instead of once per joined-pattern rule —
+    /// removes the dominant per-rule allocation.
+    pub(crate) fn matches_argv_joined(&self, argv: &[String], joined: &str) -> bool {
+        if argv.is_empty() {
+            return false;
+        }
         match &self.matcher {
-            ArgvMatcher::Joined(matcher) => matcher.is_match(&argv.join(" ")),
+            ArgvMatcher::Joined(matcher) => matcher.is_match(joined),
             ArgvMatcher::PerElement { head, tail } => {
                 if *tail {
                     if argv.len() < head.len() {
@@ -274,6 +296,11 @@ impl Rule {
         self.matches_role(fragment.role) && self.matches_argv(&fragment.argv)
     }
 
+    /// [`matches`](Rule::matches) with the joined argv precomputed by the caller.
+    pub(crate) fn matches_joined(&self, fragment: &Fragment, joined: &str) -> bool {
+        self.matches_role(fragment.role) && self.matches_argv_joined(&fragment.argv, joined)
+    }
+
     /// Like [`matches`](Rule::matches), but also treats each file-target **read**
     /// redirection as if its target were a trailing argument.
     ///
@@ -284,20 +311,49 @@ impl Rule {
     /// guardrail actions (deny and ask) use this; allow matching stays argv-only
     /// so a redirection can never *grant* permission it otherwise would not.
     pub fn matches_including_read_redirections(&self, fragment: &Fragment) -> bool {
-        if self.matches(fragment) {
+        self.matches_guardrail(
+            fragment,
+            &fragment.argv.join(" "),
+            &Self::read_redirection_extensions(fragment),
+        )
+    }
+
+    /// [`matches_including_read_redirections`](Rule::matches_including_read_redirections)
+    /// with the joined argv and the read-redirection extensions precomputed by
+    /// the caller, so a rule scan builds them once per fragment, not per rule.
+    pub(crate) fn matches_guardrail(
+        &self,
+        fragment: &Fragment,
+        joined: &str,
+        read_extensions: &[(Vec<String>, String)],
+    ) -> bool {
+        if self.matches_joined(fragment, joined) {
             return true;
         }
         if !self.matches_role(fragment.role) {
             return false;
         }
-        fragment.redirections.iter().any(|redir| {
-            redir.class == RedirClass::Read
-                && redir.target.as_deref().is_some_and(|target| {
-                    let mut argv = fragment.argv.clone();
-                    argv.push(target.to_string());
-                    self.matches_argv(&argv)
-                })
-        })
+        read_extensions
+            .iter()
+            .any(|(argv, joined)| self.matches_argv_joined(argv, joined))
+    }
+
+    /// The fragment's argv extended by each file-target read-redirection target
+    /// (with its joined form), as matched by the guardrail actions. Empty for
+    /// the common redirection-free fragment.
+    pub(crate) fn read_redirection_extensions(fragment: &Fragment) -> Vec<(Vec<String>, String)> {
+        fragment
+            .redirections
+            .iter()
+            .filter(|redir| redir.class == RedirClass::Read)
+            .filter_map(|redir| redir.target.as_deref())
+            .map(|target| {
+                let mut argv = fragment.argv.clone();
+                argv.push(target.to_string());
+                let joined = argv.join(" ");
+                (argv, joined)
+            })
+            .collect()
     }
 }
 
@@ -539,6 +595,7 @@ fn value_to_strings(value: &Value) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::domain::analyzer::analyze;
+    use crate::domain::glob::compile_glob;
 
     fn fragment(source: &str) -> Fragment {
         analyze(source).fragments.into_iter().next().unwrap()
@@ -705,6 +762,16 @@ mod tests {
             .pop()
             .unwrap();
         assert!(!policy.permits(&denied));
+    }
+
+    #[test]
+    fn invalid_redirection_glob_still_fails_at_build_time() {
+        // Redirection globs defer regex construction, but the one construct
+        // whose translation can fail — a character class — must still surface
+        // its error when the policy is built, not silently never-match later.
+        let bad = ["[z-a]".to_string()];
+        assert!(RedirPolicy::from_globs(false, Some(&bad), None).is_err());
+        assert!(RedirPolicy::from_globs(false, None, Some(&bad)).is_err());
     }
 
     #[test]

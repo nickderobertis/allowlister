@@ -15,14 +15,25 @@
 #   scripts/profile.sh explain 'a | b'       (startup + config + parse + match),
 #   scripts/profile.sh config show           looped so the sub-millisecond
 #                                            process yields enough samples.
+#   scripts/profile.sh callgrind check 'a'   Deterministic per-function
+#                                            attribution of one CLI invocation
+#                                            (valgrind callgrind; Linux-only).
 #
 # A single CLI run is far too short to sample, which is why the engine mode
 # (Criterion's `--profile-time`, a long-running in-process loop) is the right
 # tool for optimizing the engine, and the CLI mode loops the binary.
 #
+# samply needs perf-event access the kernel often withholds in containers and
+# CI. The callgrind mode is the fallback that works anywhere valgrind does: it
+# runs ONE invocation (no looping — counts are exact, not sampled), writes the
+# raw callgrind output under target/profile/, and prints the top functions by
+# instruction count. It attributes the same totals `just bench-instructions`
+# reports, so a regression found there can be dug into here.
+#
 # Environment overrides:
 #   PROFILE_SECONDS   engine mode: seconds to sample (default: 10)
 #   PROFILE_REPEAT    cli mode: invocations to loop under the profiler (default: 3000)
+#   PROFILE_TOP       callgrind mode: function rows to print (default: 30)
 #   SAMPLY_ARGS       extra args passed to `samply record` (e.g. --save-only)
 
 set -euo pipefail
@@ -38,10 +49,36 @@ fail() {
     exit 1
 }
 
+mode="${1:-engine}"
+
+# Deterministic per-function attribution of a single CLI invocation. No samply
+# (and no perf-event access) needed, so it works in containers and CI.
+if [[ "$mode" == "callgrind" ]]; then
+    shift
+    [[ $# -ge 1 ]] || fail "usage: profile.sh callgrind <allowlister args…> (e.g. callgrind check 'ls -la')"
+    command -v valgrind >/dev/null 2>&1 ||
+        fail "valgrind not found on PATH (Linux-only; install it with your package manager)."
+    command -v callgrind_annotate >/dev/null 2>&1 ||
+        fail "callgrind_annotate not found on PATH (ships with valgrind)."
+    bin="$repo_root/target/profiling/allowlister"
+    echo "» building binary (profiling profile)"
+    (cd "$repo_root" && cargo build --profile profiling --locked --quiet)
+    [ -x "$bin" ] || fail "profiling binary not found at $bin"
+    outdir="$repo_root/target/profile"
+    mkdir -p "$outdir"
+    out="$outdir/callgrind.out"
+    echo "» running '$bin $*' under callgrind"
+    # Non-zero exits are tolerated: a deny exits 2 by design and the profile of
+    # that path is exactly what was asked for.
+    valgrind --tool=callgrind --callgrind-out-file="$out" -- "$bin" "$@" >/dev/null || true
+    echo
+    echo "» top ${PROFILE_TOP:-30} functions by instruction count (full data: $out)"
+    callgrind_annotate --threshold=99 "$out" | head -n "$((${PROFILE_TOP:-30} + 12))"
+    exit 0
+fi
+
 command -v samply >/dev/null 2>&1 ||
     fail "samply not found on PATH. Install dev tools with 'just bootstrap' (or 'cargo install --locked samply')."
-
-mode="${1:-engine}"
 
 if [[ "$mode" == "engine" ]]; then
     shift || true

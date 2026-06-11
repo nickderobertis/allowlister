@@ -207,13 +207,18 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
     // later must still win, so ask cannot short-circuit the way deny does.
     let mut ask: Option<&Rule> = None;
 
+    // Joined argv and the guardrail's read-redirection extensions, built once
+    // here rather than once per rule inside the scan below.
+    let joined = fragment.argv.join(" ");
+    let read_extensions = Rule::read_redirection_extensions(fragment);
+
     for rule in rules {
         match rule.action {
             // Deny rules also see read-redirection targets, so `cat < secret` is
             // denied exactly like `cat secret`. Allow rules match argv only — a
             // redirection must never be what grants permission.
             Action::Deny => {
-                if rule.matches_including_read_redirections(fragment) {
+                if rule.matches_guardrail(fragment, &joined, &read_extensions) {
                     return FragmentDecision {
                         fragment: fragment.clone(),
                         verdict: Verdict::Deny,
@@ -226,12 +231,12 @@ fn decide_fragment(fragment: &Fragment, rules: &[Rule]) -> FragmentDecision {
             // but it never short-circuits: keep scanning for a deny that outranks
             // it. Record only the first match — rule order picks who is cited.
             Action::Ask => {
-                if ask.is_none() && rule.matches_including_read_redirections(fragment) {
+                if ask.is_none() && rule.matches_guardrail(fragment, &joined, &read_extensions) {
                     ask = Some(rule);
                 }
             }
             Action::Allow => {
-                if rule.matches(fragment) {
+                if rule.matches_joined(fragment, &joined) {
                     if rule.is_redirection_only() {
                         redirection_grants.push(rule);
                     } else {
