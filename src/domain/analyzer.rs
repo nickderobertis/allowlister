@@ -128,8 +128,7 @@ pub fn analyze(source: &str) -> Analysis {
 }
 
 fn parse_program(source: &str, options: &ParserOptions) -> Result<ast::Program, String> {
-    let reader = std::io::Cursor::new(source.as_bytes().to_vec());
-    let mut parser = Parser::new(reader, options);
+    let mut parser = Parser::new(source.as_bytes(), options);
     parser.parse_program().map_err(|e| e.to_string())
 }
 

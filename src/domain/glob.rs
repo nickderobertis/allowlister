@@ -167,12 +167,25 @@ fn pattern_has_glob_meta(pattern: &str) -> bool {
 
 /// Compile an extglob pattern into a full-match regex.
 pub(crate) fn compile_glob(pattern: &str) -> Result<Regex, fancy_regex::Error> {
-    Regex::new(&anchored(&translate(pattern)))
+    build_regex(&anchored(&translate(pattern)))
 }
 
 /// Compile a user-supplied regex with full-match (anchored) semantics.
 pub(crate) fn compile_regex(pattern: &str) -> Result<Regex, fancy_regex::Error> {
-    Regex::new(&anchored(pattern))
+    build_regex(&anchored(pattern))
+}
+
+/// Build every engine regex through one chokepoint that disables the backend's
+/// eagerly-built full DFA (`delegate_dfa_size_limit(0)`). The backend builds
+/// that DFA at *construction* time whenever the pattern is small — but it only
+/// pays off across many matches, and this binary spawns per call and matches
+/// each regex against a handful of short command strings. Skipping it cuts the
+/// dominant per-spawn compile cost; matching falls back to the lazily-built
+/// engines, which are at no disadvantage on inputs this short.
+fn build_regex(body: &str) -> Result<Regex, fancy_regex::Error> {
+    fancy_regex::RegexBuilder::new(body)
+        .delegate_dfa_size_limit(0)
+        .build()
 }
 
 fn anchored(body: &str) -> String {
