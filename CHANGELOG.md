@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.13](https://github.com/nickderobertis/allowlister/compare/v0.4.12...v0.4.13) - 2026-06-11
+
+### Added
+
+- track recency in usage history and weigh it when refining ([#70](https://github.com/nickderobertis/allowlister/pull/70))
+
 ## [0.4.12](https://github.com/nickderobertis/allowlister/compare/v0.4.11...v0.4.12) - 2026-06-11
 
 ### Added
