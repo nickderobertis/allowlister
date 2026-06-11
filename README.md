@@ -26,7 +26,7 @@ enforced identically everywhere.
 allowlister's rule engine is **harness-agnostic**: the same `(argv, role,
 redirections)` decision pipeline runs behind every agent. Only the thin
 stdin/stdout adapter that speaks each agent's hook protocol differs. So you keep a
-single allowlist — one `.allowlister.json` (or user-global config) — and it
+single allowlist — one `.allowlister.jsonc` (or user-global config) — and it
 governs every agent below.
 
 | Agent | `--harness` | How allowlister gates it | Hook/config it writes |
@@ -388,8 +388,10 @@ branch. Then ask your agent to "refine my allowlist from history".
 
 ## Rule schema
 
-Rules live in JSON config files (see [`examples/`](examples/)). `//` line and
-`/* */` block comments are allowed, so a config can document itself:
+Rules live in JSONC config files (see [`examples/`](examples/)): strict JSON
+plus `//` line and `/* */` block comments, so a config can document itself.
+Name config files `.jsonc` (the default for new files) so editors accept the
+comments; the `.json` spelling remains fully supported:
 
 ```jsonc
 {
@@ -503,16 +505,23 @@ rules never changes behavior until a rule actually matches.
 
 ## Config locations and merge
 
-User config (first existing wins):
+User config (first existing wins; at each location `.jsonc` beats a `.json`
+twin):
 
-1. `$XDG_CONFIG_HOME/allowlister/config.json`
-2. `~/.config/allowlister/config.json`
-3. `~/.allowlister.json`
+1. `$XDG_CONFIG_HOME/allowlister/config.jsonc` (or `.json`)
+2. `~/.config/allowlister/config.jsonc` (or `.json`)
+3. `~/.allowlister.jsonc` (or `.json`)
 
 Project config: from `cwd`, walk up to a `.git` boundary collecting
-`.allowlister.json` and `.allowlister/config.json`. The merged rule list is user
-rules first, then project configs outermost-first. Because the verdict is
-set-theoretic, merge order only affects which rule's name appears in a reason.
+`.allowlister.jsonc` and `.allowlister/config.jsonc` (or their `.json` twins).
+The merged rule list is user rules first, then project configs outermost-first.
+Because the verdict is set-theoretic, merge order only affects which rule's name
+appears in a reason.
+
+New files created by `init` and `install` use the `.jsonc` spelling; an existing
+`.json` config keeps its name and is updated in place. Updates are
+comment-preserving: `install` splices new rules into the file's text, so
+hand-written comments and formatting survive.
 
 A malformed config file (or a single malformed rule) is skipped with a recorded
 warning; loading never crashes the hook.
@@ -529,8 +538,8 @@ a profile onto an existing config or upgrade `read-only` to `repo-write` later
 without duplicates.
 
 ```sh
-allowlister install read-only --global   # merge into ~/.config/allowlister/config.json
-allowlister install repo-write --local    # or into the current repo's .allowlister.json
+allowlister install read-only --global   # merge into ~/.config/allowlister/config.jsonc
+allowlister install repo-write --local    # or into the current repo's .allowlister.jsonc
 ```
 
 `install` also accepts a path, for installing an allowlist of your own — for
@@ -548,7 +557,7 @@ dangerous-but-sometimes-legitimate, and **defer** everything unclassified. The
 deny set is kept deliberately tiny because a deny can't be overridden in a
 user/project overlay; anything a real workflow might need is an `ask`, not a deny.
 
-**`read-only.json`** — auto-allows pure **read** operations. It covers the shell
+**`read-only.jsonc`** — auto-allows pure **read** operations. It covers the shell
 and coreutils, `git`/`gh` inspection, and read-only commands across the common
 language ecosystems: `pip`/`uv`/`python`, `npm`/`pnpm`/`yarn`/`bun`/`node`,
 `cargo`/`rustup`, `go`, `poetry`, `make`, and `just`. Anything that writes or runs
@@ -558,7 +567,7 @@ in-place edits, `sort -o`, branch/tag deletion, raw `gh api` writes — **ask** 
 confirmation. Output redirection on an allowed command is blocked (writes are not
 reads), except scratch under `/tmp`.
 
-**`repo-write.json`** — a superset of `read-only` that additionally allows the
+**`repo-write.jsonc`** — a superset of `read-only` that additionally allows the
 writes an agent needs to **manage a repository**: `git add`/`commit`/`branch`/
 `switch`/`merge`/`rebase`/`pull`/`push`, `gh pr`/`issue` collaboration, and
 `install`/`build`/`test`/`format`/`run` across those same ecosystems. Destructive

@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.12](https://github.com/nickderobertis/allowlister/compare/v0.4.11...v0.4.12) - 2026-06-11
+
+### Added
+
+- preserve comments on config updates and default to .jsonc
+
+### Other
+
+- Merge pull request #71 from nickderobertis/claude/config-format-json-yaml-jeo8dz
+
 ## [0.4.11](https://github.com/nickderobertis/allowlister/compare/v0.4.10...v0.4.11) - 2026-06-11
 
 ### Added

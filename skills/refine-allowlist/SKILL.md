@@ -56,8 +56,9 @@ whether a candidate is still live. For project context use `--view commands`, an
 Find and read both configs so you neither duplicate an existing rule `name` nor propose
 something already covered:
 
-- Global (user): `~/.config/allowlister/config.json` (or `$XDG_CONFIG_HOME/allowlister/config.json`).
-- Local (project): `.allowlister.json` walking up to the repo root.
+- Global (user): `~/.config/allowlister/config.jsonc` (or `$XDG_CONFIG_HOME/allowlister/config.jsonc`;
+  the `.json` spelling is also supported).
+- Local (project): `.allowlister.jsonc` (or `.allowlister.json`) walking up to the repo root.
 
 Note the existing rule names — `install` merges idempotently **by name**, so reusing a name
 updates in place and a new name adds.
@@ -78,7 +79,7 @@ broad ones, and toward **fewer, legible** rules.
 **Target (global vs local):**
 - Global for tools that are safe everywhere and recur across projects (`ls`, `git status`,
   `cat`, `rg`). Use the `project` tag spread in `history recent` to judge generality.
-- Local (`.allowlister.json`) for project-specific commands (a repo's `just` recipes, its
+- Local (`.allowlister.jsonc`) for project-specific commands (a repo's `just` recipes, its
   task runner, its scripts). When unsure, prefer **local** — narrower blast radius.
 
 **Naming & shape:** give every rule a short, unique, descriptive `name` (it is cited in
@@ -96,7 +97,7 @@ evidence and a one-line rationale per rule:
 GLOBAL — allow
   cargo test      (defer ×12, recent 9.1, last 2d)   safe test runner, in active use
   git status      (defer ×9,  recent 7.4, last 1d)   read-only VCS
-LOCAL (.allowlister.json) — allow
+LOCAL (.allowlister.jsonc) — allow
   just check      (ask ×6, recent 4.2, last 3d)      project gate, always confirmed
 LOCAL — deny
   rm -rf *        (defer ×2, last 1d)                destructive; block outright
