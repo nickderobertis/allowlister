@@ -12,9 +12,6 @@ pub enum Error {
     #[error("could not locate a home/config directory to write to")]
     NoConfigHome,
 
-    #[error("config already exists at {0}; refusing to overwrite (remove it or edit in place)")]
-    ConfigExists(PathBuf),
-
     #[error("'{0}' is not a file or a built-in profile (try 'read-only' or 'repo-write')")]
     UnknownSource(String),
 
