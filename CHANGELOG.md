@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.16](https://github.com/nickderobertis/allowlister/compare/v0.4.15...v0.4.16) - 2026-06-12
+
+### Added
+
+- make init idempotent so a second harness wires cleanly ([#78](https://github.com/nickderobertis/allowlister/pull/78))
+
 ## [0.4.15](https://github.com/nickderobertis/allowlister/compare/v0.4.14...v0.4.15) - 2026-06-11
 
 ### Performance
