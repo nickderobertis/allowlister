@@ -119,7 +119,8 @@ grep -q 'allowlister hook copilot' "$proj/.github/hooks/allowlister.json" \
 
 # Plant the built-in read fixtures and register the shared stdio MCP server under
 # Copilot's config home (`mcp-config.json`). Copilot's preToolUse hook fires for
-# every tool, so the `server(tool)` MCP names need no matcher change. If Copilot
+# every tool, reporting an MCP tool as the dash-joined `server-tool` name, so no
+# matcher change is needed — the normalizer parses that form. If Copilot
 # reads its MCP config from a different location, the MCP case skips loudly rather
 # than reporting a false pass (see al_mcp_conclude).
 al_plant_read_fixtures "$proj"

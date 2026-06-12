@@ -477,7 +477,7 @@ whichever key each uses underneath (`file_path` / `path` / `filePath`).
   "params": { "url": ["https://github.com/**", "https://*.github.com/**"] } }
 
 // ONE portable MCP rule — matches every agent's wire format (mcp__s__t, mcp_s_t,
-// s_t, s(t), ext__t) because the server/tool names are normalized first
+// s_t, s-t, ext__t) because the server/tool names are normalized first
 { "name": "deny destructive MCP tools", "tool": "mcp", "action": "deny",
   "params": { "mcp_tool": ["delete*", "*destroy*"] } }
 
