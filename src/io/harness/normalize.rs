@@ -10,7 +10,7 @@
 //!
 //! Param key names, tool names, and MCP wire formats were confirmed from each
 //! harness's source/docs; the divergence is real (e.g. `file_path` vs `path` vs
-//! `filePath`, and `mcp__s__t` vs `mcp_s_t` vs `s:t` vs `s(t)` vs `ext__t`), and
+//! `filePath`, and `mcp__s__t` vs `mcp_s_t` vs `s_t` vs `s-t` vs `ext__t`), and
 //! is exactly what this layer normalizes away so one allowlist is portable.
 
 use serde_json::Value;
@@ -89,11 +89,20 @@ fn parse_mcp_underscore(tool_name: &str) -> Option<(String, String)> {
     nonempty(server, tool)
 }
 
-/// `<server>(<tool>)` — Copilot's sanitized server-qualified name.
-fn parse_mcp_paren(tool_name: &str) -> Option<(String, String)> {
-    let inner = tool_name.strip_suffix(')')?;
-    let open = inner.find('(')?;
-    nonempty(&inner[..open], &inner[open + 1..])
+/// `<server>-<tool>` — GitHub Copilot CLI's model-facing MCP tool name. Copilot
+/// joins the (sanitized) server and tool names with a dash and exposes that as the
+/// tool's `function.name`, which is exactly what its `preToolUse` hook reports as
+/// `toolName` (e.g. server `altest` + tool `deletewidget` -> `altest-deletewidget`).
+/// The `server(tool)` spelling is Copilot's `--allow-tool`/`--deny-tool` permission
+/// *pattern*, not the hook's tool name — the hook never sees a parenthesis, since
+/// Copilot sanitizes each side to `[A-Za-z0-9_-]` (every other character, `(`/`)`
+/// included, becomes a dash). The dash is therefore ambiguous when a name itself
+/// contains one; split on the first dash as a best effort (a rule can fall back to
+/// raw-name matching). Built-ins are matched by the table first (see [`normalize`])
+/// and none contain a dash, so they are never mistaken for MCP.
+fn parse_mcp_copilot(tool_name: &str) -> Option<(String, String)> {
+    let (server, tool) = tool_name.split_once('-')?;
+    nonempty(server, tool)
 }
 
 /// `<ext>__<tool>` — Goose's namespace, shared by built-in extensions and MCP
@@ -373,14 +382,15 @@ const COPILOT: &[ToolSpec] = &[
 
 /// Normalize a GitHub Copilot CLI `preToolUse` tool call. Copilot encodes
 /// `toolArgs` as a JSON *string*, so parse it first; `view` is read with `path`,
-/// `create` writes with `path`/`file_text`; MCP is the `server(tool)` form.
+/// `create` writes with `path`/`file_text`; MCP is the dash-joined `server-tool`
+/// form Copilot reports as the tool's name.
 pub(crate) fn copilot(tool_name: &str, tool_args: &Value) -> ToolCall {
     match tool_args {
         Value::String(text) => {
             let parsed = serde_json::from_str::<Value>(text).unwrap_or(Value::Null);
-            normalize(tool_name, &parsed, COPILOT, parse_mcp_paren)
+            normalize(tool_name, &parsed, COPILOT, parse_mcp_copilot)
         }
-        other => normalize(tool_name, other, COPILOT, parse_mcp_paren),
+        other => normalize(tool_name, other, COPILOT, parse_mcp_copilot),
     }
 }
 
@@ -582,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn copilot_parses_stringified_args_and_paren_mcp() {
+    fn copilot_parses_stringified_args_and_dash_mcp() {
         // toolArgs arrives as a JSON string.
         let read = copilot("view", &json!(r#"{"path":"/repo/a"}"#));
         assert_eq!(read.capability, Capability::Read);
@@ -590,10 +600,18 @@ mod tests {
         let create = copilot("create", &json!(r#"{"path":"/r/o","file_text":"x"}"#));
         assert_eq!(create.capability, Capability::Write);
         assert_eq!(create.params.get(ParamKey::Content), Some("x"));
-        // An object also works (defensive), and MCP is server(tool).
-        let mcp = copilot("linear(list_issues)", &json!({}));
+        // An object also works (defensive), and MCP is the dash-joined `server-tool`
+        // name (Copilot's `function.name`), split on the first dash.
+        let mcp = copilot("linear-list_issues", &json!({}));
         assert_eq!(mcp.capability, Capability::Mcp);
+        assert_eq!(mcp.params.get(ParamKey::McpServer), Some("linear"));
         assert_eq!(mcp.params.get(ParamKey::McpTool), Some("list_issues"));
+        // The exact shape the live MCP e2e exercises: server `altest`, tool
+        // `deletewidget`. This is the case the destructive-MCP deny must catch.
+        let del = copilot("altest-deletewidget", &json!({ "id": "1" }));
+        assert_eq!(del.capability, Capability::Mcp);
+        assert_eq!(del.params.get(ParamKey::McpServer), Some("altest"));
+        assert_eq!(del.params.get(ParamKey::McpTool), Some("deletewidget"));
     }
 
     #[test]
@@ -637,7 +655,9 @@ mod tests {
         assert!(parse_mcp_dunder("mcp__only").is_none());
         assert!(parse_mcp_dunder("Read").is_none());
         assert!(parse_mcp_underscore("mcp_only").is_none());
-        assert!(parse_mcp_paren("plain").is_none());
+        assert!(parse_mcp_copilot("plain").is_none());
+        assert!(parse_mcp_copilot("-tool").is_none());
+        assert!(parse_mcp_copilot("server-").is_none());
         assert!(parse_mcp_namespaced("developer__shell").is_none());
         assert!(parse_mcp_namespaced("noseparator").is_none());
         assert!(parse_mcp_opencode("plain").is_none());
