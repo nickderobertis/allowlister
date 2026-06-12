@@ -1353,17 +1353,77 @@ fn init_merges_the_hook_into_existing_settings() {
 }
 
 #[test]
-fn init_refuses_to_overwrite_existing_config() {
+fn init_keeps_existing_config_and_still_wires_the_hook() {
+    // Re-running `init` over an existing config (no --force) is idempotent: the
+    // config is kept verbatim and the hook is (re-)registered, never an error.
     let dir = TempDir::new().unwrap();
     fs::write(dir.path().join(".allowlister.json"), "{}").unwrap();
     Command::cargo_bin("allowlister")
         .unwrap()
-        .arg("init")
-        .arg("--local")
+        .args(["init", "--local"])
         .current_dir(dir.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("refusing to overwrite"));
+        .success()
+        .stdout(predicate::str::contains("already exists"))
+        .stdout(predicate::str::contains("--force"));
+    // The existing config survives byte-for-byte; the requested profile is not applied.
+    assert_eq!(
+        fs::read_to_string(dir.path().join(".allowlister.json")).unwrap(),
+        "{}",
+        "the existing config must not be clobbered"
+    );
+    // The hook is still wired even though the config was kept.
+    assert!(dir.path().join(".claude/settings.json").is_file());
+}
+
+#[test]
+fn init_second_harness_after_a_first_keeps_config_and_wires_both_hooks() {
+    // The motivating journey: init one harness, then init a *different* harness
+    // against the same config. The second run must keep the config from the first
+    // and wire the new harness's hook alongside it — no --force, no clobber.
+    let dir = TempDir::new().unwrap();
+
+    // First harness: Claude Code. Writes the config and wires its hook.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "claude-code"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote"));
+    let config = dir.path().join(".allowlister.jsonc");
+    assert!(config.is_file());
+    let after_first = fs::read_to_string(&config).unwrap();
+    assert!(dir.path().join(".claude/settings.json").is_file());
+
+    // Second harness: Cursor. The config already exists, so it is kept as-is and
+    // only Cursor's hook is added.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--harness", "cursor"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already exists"))
+        .stdout(predicate::str::contains("allowlister hook cursor"));
+
+    // The config from the first init is untouched, and both harness hooks exist.
+    assert_eq!(
+        fs::read_to_string(&config).unwrap(),
+        after_first,
+        "the second harness init must not rewrite the config"
+    );
+    assert!(
+        dir.path().join(".claude/settings.json").is_file(),
+        "the first harness hook must remain"
+    );
+    let cursor = dir.path().join(".cursor/hooks.json");
+    assert!(cursor.is_file(), "the second harness hook must be wired");
+    let doc: Value = serde_json::from_str(&fs::read_to_string(cursor).unwrap()).unwrap();
+    assert_eq!(
+        doc["hooks"]["beforeShellExecution"][0]["command"],
+        "allowlister hook cursor"
+    );
 }
 
 #[test]

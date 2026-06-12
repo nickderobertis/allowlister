@@ -411,25 +411,35 @@ fn ask<R: BufRead, W: Write>(input: &mut R, out: &mut W, prompt: &str) -> Result
 /// register the hook (or print the snippet for manual wiring). `cwd`/`env` are
 /// injected so the whole flow is testable without touching the real environment.
 fn execute<W: Write>(plan: &Plan, force: bool, cwd: &Path, env: &Env, out: &mut W) -> Result<i32> {
-    // Vouch for the ruleset before writing anything: an untrusted file's rules
-    // must compile, and any source must contain at least one rule.
-    let source = profile::resolve_source(&plan.source)?;
-    profile::validate(&source)?;
-    profile::incoming_rules(&source)?;
-
     let config_path = config_target(plan.global, cwd, env)?;
     if config_path.exists() && !force {
-        return Err(Error::ConfigExists(config_path));
+        // Idempotent: keep the existing config untouched and only wire the hook.
+        // This is the "add a second harness" path — re-running `init` to wire
+        // another harness must never clobber rules you have already tuned. The
+        // requested profile is intentionally not applied here; `--force`
+        // overwrites, and `allowlister install` merges a ruleset in.
+        let _ = writeln!(
+            out,
+            "Config already exists: {} (kept as-is — use --force to overwrite, or \
+             `allowlister install` to merge a ruleset in).",
+            config_path.display()
+        );
+    } else {
+        // Vouch for the ruleset before writing anything: an untrusted file's rules
+        // must compile, and any source must contain at least one rule.
+        let source = profile::resolve_source(&plan.source)?;
+        profile::validate(&source)?;
+        profile::incoming_rules(&source)?;
+        // Write the source text verbatim so a built-in profile lands byte-for-byte
+        // identical to the file the recommended-profile tests pin.
+        profile::write_file(&config_path, &source.text)?;
+        let _ = writeln!(
+            out,
+            "Wrote {} config: {}",
+            source.label,
+            config_path.display()
+        );
     }
-    // Write the source text verbatim so a built-in profile lands byte-for-byte
-    // identical to the file the recommended-profile tests pin.
-    profile::write_file(&config_path, &source.text)?;
-    let _ = writeln!(
-        out,
-        "Wrote {} config: {}",
-        source.label,
-        config_path.display()
-    );
 
     if plan.hooks {
         register_hook_for(plan.harness, plan.global, cwd, env, out)?;
@@ -1144,24 +1154,56 @@ mod tests {
     }
 
     #[test]
-    fn execute_refuses_existing_without_force() {
+    fn execute_keeps_existing_config_without_force() {
+        // Re-running `init` over an existing config (no --force) must keep it
+        // byte-for-byte rather than clobber tuned rules — the second-harness path.
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join(".allowlister.json"), "{}").unwrap();
+        let plan = Plan {
+            global: false,
+            source: "read-only".to_string(),
+            harness: Harness::ClaudeCode,
+            hooks: false,
+        };
+        let mut out = Vec::new();
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        // The existing config is left untouched; the requested profile is NOT applied.
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".allowlister.json")).unwrap(),
+            "{}",
+            "the existing config must survive verbatim"
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains("already exists"),
+            "the keep-as-is notice must be printed: {text}"
+        );
+    }
+
+    #[test]
+    fn execute_keeps_existing_config_but_still_wires_a_new_harness_hook() {
+        // The core second-harness journey: an existing config from a prior init,
+        // now wiring a different harness — the config is kept, the hook is added.
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join(".allowlister.json"), "{}").unwrap();
         let plan = Plan {
             global: false,
             source: "starter".to_string(),
-            harness: Harness::ClaudeCode,
-            hooks: false,
+            harness: Harness::Cursor,
+            hooks: true,
         };
-        let err = execute(
-            &plan,
-            false,
-            dir.path(),
-            &sandbox_env(dir.path()),
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::ConfigExists(_)));
+        let mut out = Vec::new();
+        execute(&plan, false, dir.path(), &sandbox_env(dir.path()), &mut out).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".allowlister.json")).unwrap(),
+            "{}",
+            "the existing config must survive verbatim"
+        );
+        // The second harness's hook is wired even though the config was kept.
+        assert!(
+            dir.path().join(".cursor/hooks.json").is_file(),
+            "the new harness hook must be registered"
+        );
     }
 
     #[test]

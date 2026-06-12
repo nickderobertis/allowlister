@@ -228,11 +228,13 @@ allowlister init -y                              # take all defaults, no prompts
 ```
 
 `--no-hooks` falls back to printing the exact settings snippet for the chosen
-harness to paste by hand. Run `init` once per harness to wire more than one; the
-config is written on the first run, so the second run needs `--force` to re-write
-it alongside the new hook (e.g. `allowlister init --local --harness cursor
---force` after a Claude Code setup). To layer another profile onto an existing
-config later, use [`install`](#recommended-profiles).
+harness to paste by hand. Run `init` once per harness to wire more than one — it
+is idempotent: the config is written on the first run, and a later run over an
+existing config keeps it untouched and just wires the new harness's hook (e.g.
+`allowlister init --local --harness cursor` after a Claude Code setup adds the
+Cursor hook without rewriting your rules). Pass `--force` to overwrite the config
+from the chosen profile, or use [`install`](#recommended-profiles) to layer
+another profile onto an existing config.
 
 > **Claude Code only:** do **not** add `"Bash"` or `"Bash(*)"` to
 > `permissions.allow`. A broad allow makes the agent skip its prompt on its own,
