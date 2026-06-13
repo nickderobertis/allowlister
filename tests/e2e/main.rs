@@ -1184,7 +1184,8 @@ fn init_opencode_local_writes_plugin() {
     assert!(plugin.is_file(), "the opencode plugin must be auto-written");
     let text = fs::read_to_string(plugin).unwrap();
     assert!(text.contains("tool.execute.before"));
-    assert!(text.contains("allowlister hook opencode"));
+    // The installed shim spawns the gate command as a JSON argv array.
+    assert!(text.contains(r#"["allowlister","hook","opencode"]"#));
 }
 
 #[test]
@@ -3127,11 +3128,18 @@ fn init_global_registers_each_harness_under_home_or_xdg() {
             hook_path.display()
         );
         let text = fs::read_to_string(&hook_path).unwrap();
-        assert!(
-            text.contains(&format!("allowlister hook {harness}")),
-            "{harness}: the hook file must invoke the right adapter"
-        );
-        if !is_plugin {
+        if *is_plugin {
+            // The OpenCode plugin shim spawns the gate command as a JSON argv
+            // array rather than embedding the spaced command string.
+            assert!(
+                text.contains(&format!(r#"["allowlister","hook","{harness}"]"#)),
+                "{harness}: the plugin shim must spawn the right adapter"
+            );
+        } else {
+            assert!(
+                text.contains(&format!("allowlister hook {harness}")),
+                "{harness}: the hook file must invoke the right adapter"
+            );
             // Every non-plugin hook file is JSON a harness will parse.
             serde_json::from_str::<Value>(&text).unwrap();
         }

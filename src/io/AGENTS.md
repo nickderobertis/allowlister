@@ -7,6 +7,11 @@
   never fails the caller.
 - Harness adapters translate one product's request/response envelope into the
   shared decision pipeline; only the I/O shape differs between them.
+- Hook *installation* is delegated to the shared cross-harness installer
+  (`oneharness-core`): `hooks` only maps each harness to its gate policy (the
+  matcher dialect and timeout) and aggregates the result. Do not re-add
+  per-harness file/merge/path logic here. Claude Code's `permissions.deny`
+  backstop stays local — it is a permissions merge, not part of the hook.
 - Map each verdict to the harness's native shape: deny blocks; ask surfaces the
   command for approval where the harness has a confirm/ask state; allow and defer
   follow the rules below.

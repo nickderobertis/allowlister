@@ -49,3 +49,7 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# oneharness-core (the cross-harness hook installer) is not on crates.io yet, so
+# it is consumed from its git repo, pinned by tag. Allowed explicitly so the
+# source stays an audited exception rather than opening git sources in general.
+allow-git = ["https://github.com/nickderobertis/oneharness"]
