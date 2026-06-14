@@ -120,7 +120,7 @@ note "» wiring the project with \`allowlister init --harness opencode\`"
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 # The shim spawns the gate command as a JSON argv array, not a spaced string.
-grep -q '"allowlister","hook","opencode"' "$proj/.opencode/plugin/allowlister.js" \
+grep -q '"hook","opencode"' "$proj/.opencode/plugin/allowlister.js" \
     || fail "init did not write the OpenCode plugin shim"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server in
