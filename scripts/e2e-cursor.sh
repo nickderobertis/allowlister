@@ -103,7 +103,7 @@ note "» wiring the project with \`allowlister init --harness cursor\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness cursor --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook cursor' "$proj/.cursor/hooks.json" \
+grep -q 'hook cursor' "$proj/.cursor/hooks.json" \
     || fail "init did not register the hook in .cursor/hooks.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server in

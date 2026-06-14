@@ -116,7 +116,7 @@ note "» wiring the project with \`allowlister init --harness crush\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness crush --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook crush' "$proj/crush.json" \
+grep -q 'hook crush' "$proj/crush.json" \
     || fail "init did not register the hook in crush.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server beside

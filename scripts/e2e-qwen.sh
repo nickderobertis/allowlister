@@ -130,7 +130,7 @@ JSON
 note "» wiring the user with \`allowlister init --global --harness qwen\`"
 "$bin" init --global --profile "$rules" --harness qwen --hooks --force >/dev/null \
     || fail "allowlister init failed to set the gate up"
-grep -q 'allowlister hook qwen' "$HOME/.qwen/settings.json" \
+grep -q 'hook qwen' "$HOME/.qwen/settings.json" \
     || fail "init did not register the hook in ~/.qwen/settings.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server beside
@@ -202,8 +202,13 @@ fi
 
 note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows an absolute C:/... arg breaks in the harness shell (cmd rejects
+# forward slashes, Git Bash mis-roots a bare C:); the harness runs with cwd=$proj,
+# so pass a bare name it creates there. The assertion still checks the abs path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow

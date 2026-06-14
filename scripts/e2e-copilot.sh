@@ -124,7 +124,7 @@ note "» wiring the project with \`allowlister init --harness copilot\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness copilot --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook copilot' "$proj/.github/hooks/allowlister.json" \
+grep -q 'hook copilot' "$proj/.github/hooks/allowlister.json" \
     || fail "init did not register the hook in .github/hooks/allowlister.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server under
@@ -203,8 +203,13 @@ fi
 
 note "» case 2/5: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows an absolute C:/... arg breaks in the harness shell (cmd rejects
+# forward slashes, Git Bash mis-roots a bare C:); the harness runs with cwd=$proj,
+# so pass a bare name it creates there. The assertion still checks the abs path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow

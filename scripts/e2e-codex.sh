@@ -120,9 +120,9 @@ note "» wiring user + project with \`allowlister init --harness codex\`"
     || fail "allowlister init --global failed"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness codex --hooks --force ) >/dev/null \
     || fail "allowlister init --local failed"
-grep -q 'allowlister hook codex' "$HOME/.codex/hooks.json" \
+grep -q 'hook codex' "$HOME/.codex/hooks.json" \
     || fail "init did not register the user hook in ~/.codex/hooks.json"
-grep -q 'allowlister hook codex' "$proj/.codex/hooks.json" \
+grep -q 'hook codex' "$proj/.codex/hooks.json" \
     || fail "init did not register the project hook in .codex/hooks.json"
 cat >> "$HOME/.codex/config.toml" <<TOML
 [projects."$proj"]

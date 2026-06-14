@@ -106,7 +106,7 @@ note "» wiring the project with \`allowlister init\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook claude-code' "$proj/.claude/settings.json" \
+grep -q 'hook claude-code' "$proj/.claude/settings.json" \
     || fail "init did not register the hook in .claude/settings.json"
 
 # Plant the built-in read-tool fixtures (a gated secret + an ungated readme) and

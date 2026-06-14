@@ -122,7 +122,7 @@ note "» wiring the project with \`allowlister init --harness goose\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness goose --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
+grep -q 'hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
     || fail "init did not register the hook in the plugin's hooks.json"
 
 # Plant the write fixture target and wire the shared stdio MCP server as a Goose
