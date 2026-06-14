@@ -4,6 +4,32 @@ Rust CLI that gates AI-agent shell commands: parse bash into role-tagged
 fragments, match each against rules, compose one verdict. Single binary,
 edition 2021, toolchain pinned in `rust-toolchain.toml`.
 
+## Stack and composition
+
+- **Product shape:** a command-line tool — a single installable binary users run
+  as `allowlister` (and as an agent harness hook). Composed from the create-repo
+  skill's `shapes/cli.md`: e2e drives the compiled binary as a subprocess and
+  asserts exit code, stdout, stderr, and file effects; arguments and stdin are
+  validated at the edge; success is quiet, errors are explicit.
+- **Language:** Rust (stable, pinned in `rust-toolchain.toml`). Composed from
+  `languages/rust.md`: `rustfmt` + `clippy -D warnings` as strict gates,
+  `cargo nextest` for the test runner, `cargo llvm-cov` enforcing the 95%
+  coverage floor (lines, functions, regions) in the gate, and `cargo deny` +
+  `cargo machete` as a dedicated supply-chain job. The release tier follows the
+  reference's tag-driven `release-plz` + per-target native-runner archive model.
+- **Cross-cutting:** `ci.md` (always) — CI runs `just bootstrap` then `just check`
+  on a Linux/macOS/Windows matrix, with coverage and the dependency/security
+  checks as their own jobs, and the live per-CLI harness checks plus benchmarks
+  kept out of the gate as their own informational workflows.
+- **Excluded — and why:** `monorepo.md` does not apply (one deliverable, one
+  language — a single binary crate, not multiple apps/packages). `shapes/library.md`
+  does not apply: this ships an executable, not a published library API (the
+  intentionally public Rust surface in `lib.rs` exists only to test the engine,
+  not as a distribution target). No intersection reference is pulled in because a
+  `rust-cli.md` does not exist yet; its concerns (snapshot-testing a compiled
+  binary, cross-platform release artifacts) are handled here directly via the
+  `tests/e2e` suite and the release workflow.
+
 ## Layout
 
 - `src/main.rs` — thin: parse args, dispatch, map the typed result to an exit

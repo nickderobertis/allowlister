@@ -17,6 +17,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The gate. A clean checkout runs `just bootstrap` then `just check` — the same
+  # full quality gate developers run locally (format, type-check, lint, the full
+  # test suite incl. binary e2e, enforced coverage, deps/security, docs, release
+  # build). Matrix over the platforms the binary ships to. The context names
+  # (`test (ubuntu-latest)`, ...) are the protected required checks — keep stable.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -29,17 +34,31 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+      # Prebuilt binaries for the cargo subcommands the gate needs; `bootstrap`
+      # below is idempotent and no-ops over anything already present.
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-nextest
-      - run: just fmt-check
-      - run: just check
-      - run: just clippy
-      - run: just test
-      - run: just test-e2e
-      - run: just doc
-      - run: just build-release
+          tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Gate (just check)
+        run: just check
 
+  # Dedicated coverage job: a standalone required context and a fast path to the
+  # report on Linux. The same 95% floor is also enforced inside `just check`.
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest,cargo-llvm-cov
+      - run: just test-cov
+
+  # Supply chain: run once on Linux (not duplicated across the OS matrix).
   deps:
     name: deps & security
     runs-on: ubuntu-latest
@@ -52,15 +71,3 @@ jobs:
           tool: just,cargo-deny,cargo-machete
       - run: just deps-check
       - run: just security
-
-  coverage:
-    name: coverage
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: rustup show
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: just,cargo-nextest,cargo-llvm-cov
-      - run: just test-cov

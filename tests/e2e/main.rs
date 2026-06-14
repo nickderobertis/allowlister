@@ -3557,8 +3557,15 @@ fn config_remove_deletes_a_rule_and_stops_gating() {
     )
     .unwrap();
 
+    // Isolate user-global config discovery so the host machine's real allowlister
+    // config can never leak in and turn the final DEFER into an ALLOW. An empty,
+    // dedicated config home leaves only the project config under test.
+    let empty_home = TempDir::new().unwrap();
+
     Command::cargo_bin("allowlister")
         .unwrap()
+        .env("XDG_CONFIG_HOME", empty_home.path())
+        .env("HOME", empty_home.path())
         .args(["config", "remove", "allow-ls", "--local"])
         .current_dir(dir.path())
         .assert()
@@ -3578,6 +3585,8 @@ fn config_remove_deletes_a_rule_and_stops_gating() {
     // does), so it defers.
     Command::cargo_bin("allowlister")
         .unwrap()
+        .env("XDG_CONFIG_HOME", empty_home.path())
+        .env("HOME", empty_home.path())
         .args(["check", "ls -la", "--cwd"])
         .arg(dir.path())
         .assert()
