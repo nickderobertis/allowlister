@@ -60,6 +60,10 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# On Windows, resolve the harness command to a path the native oneharness can
+# spawn (goose.exe). No-op off Windows.
+agent_bin="$(al_spawnable_bin "$agent_bin")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe

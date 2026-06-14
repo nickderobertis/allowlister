@@ -46,6 +46,29 @@ al_mcp_server() { printf '%s/scripts/e2e-mcp-server.py' "$1"; }
 # True when python3 can run the MCP server fixture.
 al_have_python() { command -v python3 >/dev/null 2>&1; }
 
+# Resolve a harness command to something the NATIVE oneharness process can spawn
+# on Windows. npm installs CLIs as `<name>.cmd`/`.ps1` shims plus an extensionless
+# bash wrapper, none of which Windows CreateProcess (and thus oneharness) finds by
+# the bare name — it fails with "program not found". On Git Bash, hand back the
+# explicit Windows path to the spawnable shim (.cmd/.exe). No-op on Linux/macOS.
+# Always prints something, falling back to the input. Arg: command name or path.
+al_spawnable_bin() {
+    local cmd="$1" resolved=""
+    case "$(uname -s)" in
+        MINGW* | MSYS* | CYGWIN*) ;;
+        *) printf '%s' "$cmd"; return 0 ;;
+    esac
+    if [ -e "$cmd" ]; then
+        resolved="$cmd"  # already an explicit path (e.g. a located agent.exe)
+    else
+        resolved="$(command -v "$cmd.cmd" 2>/dev/null \
+            || command -v "$cmd.exe" 2>/dev/null \
+            || command -v "$cmd" 2>/dev/null || true)"
+    fi
+    [ -n "$resolved" ] || { printf '%s' "$cmd"; return 0; }
+    cygpath -w "$resolved" 2>/dev/null || printf '%s' "$resolved"
+}
+
 # Register the stdio MCP server fixture as server "altest" in a JSON settings file
 # under <top_key>, CREATING the file or MERGING beside existing keys (so a hook
 # registration already in the file is preserved). The entry is the common

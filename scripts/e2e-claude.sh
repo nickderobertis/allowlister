@@ -54,6 +54,11 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# claude has no `--bin` override below, so resolve here and pass it explicitly: on
+# Windows npm installs a claude.cmd shim that the native oneharness can't spawn by
+# bare name. No-op off Windows.
+claude_bin="$(al_spawnable_bin "${CLAUDE_BIN:-claude}")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
 [ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
@@ -142,7 +147,7 @@ run_claude() {
     local bypass=()
     [ "$mode" = default ] && bypass=(--no-bypass)
     al_run claude-code "$prompt" "$stream" \
-        --cwd "$proj" --timeout 150 --model "$model" \
+        --cwd "$proj" --timeout 150 --model "$model" --bin claude-code="$claude_bin" \
         --output-format stream-json --env "XDG_CONFIG_HOME=$sandbox/xdg" \
         ${bypass[@]+"${bypass[@]}"} \
         -- --max-turns 6 --verbose ${mcp_args[@]+"${mcp_args[@]}"}

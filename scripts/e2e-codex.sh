@@ -73,6 +73,10 @@ elif command -v gtimeout >/dev/null 2>&1; then pty_guard=(gtimeout --signal=KILL
 else pty_guard=(); fi
 
 sandbox="$(mktemp -d)"
+# macOS mktemp lives under /var/folders, a symlink to /private/var; Codex
+# canonicalizes the project cwd, so a /var/... folder-trust entry won't match and
+# the trust dialog blocks the headless turn. Resolve to the physical path first.
+sandbox="$(cd "$sandbox" && pwd -P)"
 # On Windows the harness, oneharness and allowlister binaries are native, so the
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
