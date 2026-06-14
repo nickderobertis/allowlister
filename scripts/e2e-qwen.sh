@@ -166,9 +166,16 @@ fi
 #    wrapper (oneharness runs the child with stdin from /dev/null).
 run_agent() {
     local prompt="$1" stream="$2"
+    # On Windows blank SHELL so qwen runs its hook command via the native path,
+    # where the absolute C:/… gate command resolves; with SHELL set it routes
+    # through Git Bash, where C:/… is misread as relative and the hook fails open.
+    # No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run qwen "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --model "$model" \
         --bin qwen="$agent_bin" \
+        ${win_env[@]+"${win_env[@]}"} \
         -- --auth-type openai
 }
 

@@ -167,9 +167,16 @@ run_claude() {
     [ -f "$mcp_config" ] && mcp_args=(--mcp-config "$mcp_config" --strict-mcp-config)
     local bypass=()
     [ "$mode" = default ] && bypass=(--no-bypass)
+    # On Windows blank SHELL so claude runs its hook command via the native path,
+    # where the absolute C:/… gate command resolves; with SHELL set it routes
+    # through Git Bash, where C:/… is misread as relative and the hook fails open.
+    # No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run claude-code "$prompt" "$stream" \
         --cwd "$proj" --timeout 150 --model "$model" --bin claude-code="$claude_bin" \
         --output-format stream-json --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        ${win_env[@]+"${win_env[@]}"} \
         ${bypass[@]+"${bypass[@]}"} \
         -- --max-turns 6 --verbose ${mcp_args[@]+"${mcp_args[@]}"}
 }

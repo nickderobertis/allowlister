@@ -163,9 +163,16 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    # On Windows blank SHELL so the harness runs its hook via the native
+    # (PowerShell) path, where the absolute C:/… gate command resolves; with SHELL
+    # set it picks the Git Bash hook key, where C:/… is misread as a relative path
+    # and the hook fails open. No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run copilot "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin copilot="$agent_bin" \
         --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        ${win_env[@]+"${win_env[@]}"} \
         ${model_args[@]+"${model_args[@]}"}
 }
 
