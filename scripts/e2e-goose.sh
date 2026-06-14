@@ -62,6 +62,7 @@ fi
 
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into hooks.json —
