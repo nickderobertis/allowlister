@@ -1495,7 +1495,9 @@ mod tests {
         );
         let text = fs::read_to_string(plugin).unwrap();
         // The installed shim spawns the gate command as a JSON argv array.
-        assert!(text.contains(r#"["allowlister","hook","opencode"]"#));
+        // On Windows the program token is the absolute exe path; match the gate
+        // subcommand tail of the argv array, not the program element.
+        assert!(text.contains(r#","hook","opencode"]"#));
         assert!(text.contains("tool.execute.before"));
     }
 

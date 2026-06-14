@@ -1191,7 +1191,9 @@ fn init_opencode_local_writes_plugin() {
     let text = fs::read_to_string(plugin).unwrap();
     assert!(text.contains("tool.execute.before"));
     // The installed shim spawns the gate command as a JSON argv array.
-    assert!(text.contains(r#"["allowlister","hook","opencode"]"#));
+    // On Windows the program token is the absolute exe path; match the gate
+    // subcommand tail of the argv array, not the program element.
+    assert!(text.contains(r#","hook","opencode"]"#));
 }
 
 #[test]
@@ -3276,7 +3278,7 @@ fn init_global_registers_each_harness_under_home_or_xdg() {
             // The OpenCode plugin shim spawns the gate command as a JSON argv
             // array rather than embedding the spaced command string.
             assert!(
-                text.contains(&format!(r#"["allowlister","hook","{harness}"]"#)),
+                text.contains(&format!(r#","hook","{harness}"]"#)),
                 "{harness}: the plugin shim must spawn the right adapter"
             );
         } else {
