@@ -147,8 +147,14 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    # On Windows blank SHELL so crush runs commands via cmd in the run cwd ($proj),
+    # where the bare-name allow sentinel resolves; with SHELL set it routes through
+    # Git Bash and the relative write lands outside $proj. No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run crush "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin crush="$agent_bin" \
+        ${win_env[@]+"${win_env[@]}"} \
         ${model_args[@]+"${model_args[@]}"}
 }
 
@@ -194,7 +200,10 @@ rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
 run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_arg" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
+[ -e "$allow_sentinel" ] || {
+    dump_deny_diagnostic "$sandbox/allow.stream"
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
 # Substring (not whole-line) match: cmd.exe's `echo x > f` appends a trailing
 # space/CRLF, so an exact-line check would spuriously fail on Windows.
 grep -aq "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"

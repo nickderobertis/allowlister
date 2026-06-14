@@ -84,6 +84,29 @@ MCP, and shell). **²** Codex exposes no built-in read to its hook (reads go via
 the shell) and its writes arrive as `apply_patch` patch strings with no discrete
 path; gate Codex file access with shell and MCP rules.
 
+### Platform support
+
+The gate runs anywhere allowlister builds (Linux, macOS, Windows) and the rule
+engine is identical on every OS. What varies is whether a given **harness** loads
+allowlister's hook on Windows. The live end-to-end suite enforces this matrix:
+
+| Agent | Linux | macOS | Windows |
+|-------|:-----:|:-----:|:-------:|
+| Claude Code | ✅ | ✅ | ✅ |
+| Cursor | ✅ | ✅ | ✅ |
+| Crush | ✅ | ✅ | ✅ |
+| Qwen Code | ✅ | ✅ | ✅ |
+| Goose | ✅ | ✅ | ✅ |
+| OpenCode | ✅ | ✅ | ✅ |
+| GitHub Copilot CLI | ✅ | ✅ | ❌³ |
+| OpenAI Codex CLI | ✅ | ✅ | ❌⁴ |
+
+**³** GitHub Copilot CLI does not load its `preToolUse` hook on Windows, so the
+gate can't be enforced there. **⁴** Codex loads hooks only in its interactive TUI
+(not `codex exec`), which requires a pseudo-terminal the harness can't provide on
+Windows. Both are harness limitations, not allowlister's; allowlister still
+*installs* the hook on Windows, it just won't fire until the harness supports it.
+
 ## Why
 
 String-prefix allow lists fail in three concrete ways:
