@@ -77,10 +77,10 @@ jobs:
               curl https://cursor.com/install -fsS | bash
               ;;
             Windows)
-              # The curl|bash installer is Unix-only; use the PowerShell installer
-              # on Windows. Best-effort — the Windows install path is iterated on in
-              # CI, so this step (and the version check below) may need adjusting.
-              powershell -NoProfile -Command "irm https://cursor.com/install.ps1 | iex"
+              # cursor-agent has no Unix curl|bash installer for Windows; use the
+              # documented PowerShell installer. Native Windows support is limited,
+              # so this path is best-effort and iterated on in CI.
+              powershell -NoProfile -Command "irm 'https://cursor.com/install?win32=true' | iex"
               ;;
           esac
           # The installer drops `cursor-agent` under ~/.local/bin; add it to PATH

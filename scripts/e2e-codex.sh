@@ -65,6 +65,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -214,7 +219,7 @@ run_agent() {
             --sandbox danger-full-access \
             -a never \
             --dangerously-bypass-hook-trust \
-            "${model_args[@]}" \
+            ${model_args[@]+"${model_args[@]}"} \
             "$prompt" ) >"$stream.err" 2>&1 || true
 }
 

@@ -71,19 +71,12 @@ jobs:
           oneharness --version
 
       - name: Install Goose CLI
+        # download_cli.sh self-detects the OS (linux/darwin/windows); on Windows it
+        # runs under Git Bash and drops goose.exe under ~/.local/bin, so the one
+        # installer works on every platform.
         run: |
-          case "$RUNNER_OS" in
-            Linux | macOS)
-              curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
-              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-              ;;
-            Windows)
-              # The download_cli.sh installer is Unix-only; use the PowerShell
-              # installer on Windows. Best-effort — the Windows install path is
-              # iterated on in CI, so this step may need adjusting.
-              powershell -NoProfile -Command "irm https://github.com/block/goose/releases/download/stable/download_cli.ps1 | iex"
-              ;;
-          esac
+          curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Live hook e2e against the real CLI
         env:
