@@ -1110,6 +1110,38 @@ mod tests {
     }
 
     #[test]
+    fn legacy_folder_keyed_summary_survives_new_repo_keyed_events() {
+        // Upgrade safety: a summary written before repo-identity tagging keys its
+        // projects by folder path. After the upgrade, new events key by repo
+        // identity instead. The old folder counts must persist untouched (no
+        // migration, no re-keying) while the new identity accumulates alongside.
+        let dir = TempDir::new().unwrap();
+        let mut legacy = Summary::default();
+        legacy.record(&shell_event("ls -la", "/home/user/myrepo", 1));
+        legacy.record(&shell_event("ls -la", "/home/user/myrepo", 2));
+        fs::write(
+            dir.path().join(SUMMARY),
+            serde_json::to_string(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        // A new event tagged by repo identity, the post-upgrade shape.
+        append_event(
+            dir.path(),
+            &shell_event("ls -la", "github.com/octocat/Hello-World", 3),
+        )
+        .unwrap();
+
+        let summary = aggregate(dir.path());
+        let frag = &summary.fragments["ls -la"];
+        // The pre-upgrade folder key is exactly as it was.
+        assert_eq!(frag.projects["/home/user/myrepo"].allow, 2);
+        // The repo identity is a separate, new key — both coexist, nothing merged.
+        assert_eq!(frag.projects["github.com/octocat/Hello-World"].allow, 1);
+        assert_eq!(summary.events_total, 3);
+    }
+
+    #[test]
     fn compact_accumulates_across_rounds() {
         let dir = TempDir::new().unwrap();
         append_event(dir.path(), &shell_event("ls a", "/a", 1)).unwrap();
