@@ -54,8 +54,14 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# claude has no `--bin` override below, so resolve here and pass it explicitly: on
+# Windows npm installs a claude.cmd shim that the native oneharness can't spawn by
+# bare name. No-op off Windows.
+claude_bin="$(al_spawnable_bin "${CLAUDE_BIN:-claude}")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into
@@ -64,6 +70,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -95,8 +106,29 @@ note "» wiring the project with \`allowlister init\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook claude-code' "$proj/.claude/settings.json" \
+grep -q 'hook claude-code' "$proj/.claude/settings.json" \
     || fail "init did not register the hook in .claude/settings.json"
+
+# Pre-accept Claude's per-directory trust on Windows: a headless run can't answer
+# the "Do you trust this folder?" dialog, which also gates project-local hooks.
+# Seed ~/.claude.json for each spelling Claude may canonicalize the cwd to. No-op
+# elsewhere (Unix has no such gate here).
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        if command -v jq >/dev/null 2>&1; then
+            claude_cfg="$(cygpath -u "${USERPROFILE:-$HOME}")/.claude.json"
+            # Best-effort and non-aborting: reset a missing/invalid file to {}, then
+            # merge each spelling. jq reads the file directly so a bad existing file
+            # can't break the pipeline, and a failure never exits the script.
+            jq -e . "$claude_cfg" >/dev/null 2>&1 || printf '{}' > "$claude_cfg"
+            for key in "$proj" "$(cygpath -w "$proj")" "$(cygpath -m "$proj")"; do
+                jq --arg p "$key" '.projects[$p].hasTrustDialogAccepted = true' \
+                    "$claude_cfg" > "$claude_cfg.tmp" 2>/dev/null \
+                    && mv "$claude_cfg.tmp" "$claude_cfg" || true
+            done
+        fi
+        ;;
+esac
 
 # Plant the built-in read-tool fixtures (a gated secret + an ungated readme) and
 # wire the shared stdio MCP server via project `.mcp.json`, so the tool-use cases
@@ -135,11 +167,18 @@ run_claude() {
     [ -f "$mcp_config" ] && mcp_args=(--mcp-config "$mcp_config" --strict-mcp-config)
     local bypass=()
     [ "$mode" = default ] && bypass=(--no-bypass)
+    # On Windows blank SHELL so claude runs its hook command via the native path,
+    # where the absolute C:/… gate command resolves; with SHELL set it routes
+    # through Git Bash, where C:/… is misread as relative and the hook fails open.
+    # No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run claude-code "$prompt" "$stream" \
-        --cwd "$proj" --timeout 150 --model "$model" \
+        --cwd "$proj" --timeout 150 --model "$model" --bin claude-code="$claude_bin" \
         --output-format stream-json --env "XDG_CONFIG_HOME=$sandbox/xdg" \
-        "${bypass[@]}" \
-        -- --max-turns 6 --verbose "${mcp_args[@]}"
+        ${win_env[@]+"${win_env[@]}"} \
+        ${bypass[@]+"${bypass[@]}"} \
+        -- --max-turns 6 --verbose ${mcp_args[@]+"${mcp_args[@]}"}
 }
 
 # True if the transcript shows allowlister denying a command (its reason string

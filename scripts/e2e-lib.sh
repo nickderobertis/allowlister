@@ -46,6 +46,31 @@ al_mcp_server() { printf '%s/scripts/e2e-mcp-server.py' "$1"; }
 # True when python3 can run the MCP server fixture.
 al_have_python() { command -v python3 >/dev/null 2>&1; }
 
+# Resolve a harness command to something the NATIVE oneharness process can spawn
+# on Windows. npm installs CLIs as `<name>.cmd`/`.ps1` shims plus an extensionless
+# bash wrapper, none of which Windows CreateProcess (and thus oneharness) finds by
+# the bare name — it fails with "program not found". On Git Bash, hand back the
+# explicit Windows path to the spawnable shim (.cmd/.exe). No-op on Linux/macOS.
+# Always prints something, falling back to the input. Arg: command name or path.
+al_spawnable_bin() {
+    local cmd="$1" resolved=""
+    case "$(uname -s)" in
+        MINGW* | MSYS* | CYGWIN*) ;;
+        *) printf '%s' "$cmd"; return 0 ;;
+    esac
+    if [ -e "$cmd" ]; then
+        resolved="$cmd"  # already an explicit path (e.g. a located agent.exe)
+    else
+        resolved="$(command -v "$cmd.cmd" 2>/dev/null \
+            || command -v "$cmd.exe" 2>/dev/null \
+            || command -v "$cmd" 2>/dev/null || true)"
+    fi
+    [ -n "$resolved" ] || { printf '%s' "$cmd"; return 0; }
+    # Forward slashes (cygpath -m), not backslashes (-w): a backslashed path
+    # breaks when interpolated into TOML/args the harness later parses.
+    cygpath -m "$resolved" 2>/dev/null || printf '%s' "$resolved"
+}
+
 # Register the stdio MCP server fixture as server "altest" in a JSON settings file
 # under <top_key>, CREATING the file or MERGING beside existing keys (so a hook
 # registration already in the file is preserved). The entry is the common
@@ -95,7 +120,7 @@ al_dump_stream() {
     local stream="$1"
     note "  ── transcript tail (control chars stripped) ──"
     sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\r/\\n/g' "$stream" 2>/dev/null \
-        | grep -avE '^[[:space:]]*$' | tail -60 | sed 's/^/    /'
+        | grep -avE '^[[:space:]]*$' | tail -60 | sed 's/^/    /' || true
     if [ -s "$stream.err" ]; then
         note "  stderr tail:"
         tail -10 "$stream.err" | sed 's/^/    /'
@@ -196,11 +221,19 @@ al_run() {
     # parser. A non-zero harness exit is not fatal here — the outcome is judged by
     # the stream and the command's side effects, exactly as before.
     oneharness run --harness "$id" --prompt "$prompt" \
-        --output-dir "$od" --compact "$@" >/dev/null 2>"$od/oneharness.err" || true
+        --output-dir "$od" --compact "$@" >"$od/report.json" 2>"$od/oneharness.err" || true
     cp -f "$od/$id.stdout" "$stream" 2>/dev/null || : >"$stream"
     cp -f "$od/$id.stderr" "$stream.err" 2>/dev/null || : >"$stream.err"
     # Append oneharness's own diagnostics (a spawn failure or timeout note) so a
     # CI failure points straight at the cause.
     [ -s "$od/oneharness.err" ] && cat "$od/oneharness.err" >>"$stream.err"
+    # oneharness reports a failed harness run as "see results[].status and
+    # results[].error", but that detail lives in the JSON report on stdout (above,
+    # otherwise discarded). Surface those fields so a CI failure shows *why* the
+    # harness run did not succeed (e.g. a non-zero command exit on Windows).
+    if [ -s "$od/report.json" ]; then
+        grep -oE '"(status|error|exit_code|exitCode|code|signal)"[[:space:]]*:[^,}]*' \
+            "$od/report.json" 2>/dev/null | sed 's/^/oneharness-report: /' >>"$stream.err" || true
+    fi
     rm -rf "$od"
 }

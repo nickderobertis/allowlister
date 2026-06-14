@@ -59,8 +59,13 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# On Windows, resolve the harness command to a path the native oneharness can
+# spawn — npm installs a <name>.cmd shim, not a bare-name .exe. No-op off Windows.
+agent_bin="$(al_spawnable_bin "$agent_bin")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into the hooks
@@ -69,6 +74,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -114,12 +124,13 @@ note "» wiring the project with \`allowlister init --harness copilot\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness copilot --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook copilot' "$proj/.github/hooks/allowlister.json" \
+grep -q 'hook copilot' "$proj/.github/hooks/allowlister.json" \
     || fail "init did not register the hook in .github/hooks/allowlister.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server under
 # Copilot's config home (`mcp-config.json`). Copilot's preToolUse hook fires for
-# every tool, so the `server(tool)` MCP names need no matcher change. If Copilot
+# every tool, reporting an MCP tool as the dash-joined `server-tool` name, so no
+# matcher change is needed — the normalizer parses that form. If Copilot
 # reads its MCP config from a different location, the MCP case skips loudly rather
 # than reporting a false pass (see al_mcp_conclude).
 al_plant_read_fixtures "$proj"
@@ -152,10 +163,17 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    # On Windows blank SHELL so the harness runs its hook via the native
+    # (PowerShell) path, where the absolute C:/… gate command resolves; with SHELL
+    # set it picks the Git Bash hook key, where C:/… is misread as a relative path
+    # and the hook fails open. No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run copilot "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin copilot="$agent_bin" \
         --env "XDG_CONFIG_HOME=$sandbox/xdg" \
-        "${model_args[@]}"
+        ${win_env[@]+"${win_env[@]}"} \
+        ${model_args[@]+"${model_args[@]}"}
 }
 
 # True if allowlister's own reason text reached the agent transcript. Copilot may
@@ -192,8 +210,13 @@ fi
 
 note "» case 2/5: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows an absolute C:/... arg breaks in the harness shell (cmd rejects
+# forward slashes, Git Bash mis-roots a bare C:); the harness runs with cwd=$proj,
+# so pass a bare name it creates there. The assertion still checks the abs path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow

@@ -84,6 +84,29 @@ MCP, and shell). **²** Codex exposes no built-in read to its hook (reads go via
 the shell) and its writes arrive as `apply_patch` patch strings with no discrete
 path; gate Codex file access with shell and MCP rules.
 
+### Platform support
+
+The gate runs anywhere allowlister builds (Linux, macOS, Windows) and the rule
+engine is identical on every OS. What varies is whether a given **harness** loads
+allowlister's hook on Windows. The live end-to-end suite enforces this matrix:
+
+| Agent | Linux | macOS | Windows |
+|-------|:-----:|:-----:|:-------:|
+| Claude Code | ✅ | ✅ | ✅ |
+| Cursor | ✅ | ✅ | ✅ |
+| Crush | ✅ | ✅ | ✅ |
+| Qwen Code | ✅ | ✅ | ✅ |
+| Goose | ✅ | ✅ | ✅ |
+| OpenCode | ✅ | ✅ | ✅ |
+| GitHub Copilot CLI | ✅ | ✅ | ❌³ |
+| OpenAI Codex CLI | ✅ | ✅ | ❌⁴ |
+
+**³** GitHub Copilot CLI does not load its `preToolUse` hook on Windows, so the
+gate can't be enforced there. **⁴** Codex loads hooks only in its interactive TUI
+(not `codex exec`), which requires a pseudo-terminal the harness can't provide on
+Windows. Both are harness limitations, not allowlister's; allowlister still
+*installs* the hook on Windows, it just won't fire until the harness supports it.
+
 ## Why
 
 String-prefix allow lists fail in three concrete ways:
@@ -330,9 +353,13 @@ or takes `--history` / `--no-history`; either way the choice is stored in your
 config as `"history": { "enabled": true }`. The `ALLOWLISTER_HISTORY=1` (or `0`)
 environment variable overrides the config per run.
 
-Each evaluation is recorded with its harness, project (the cwd it ran in), a
-timestamp, the overall verdict, and every parsed subcommand with the rule that
-decided it.
+Each evaluation is recorded with its harness, project, a timestamp, the overall
+verdict, and every parsed subcommand with the rule that decided it. The project
+is tracked by **git repository**, not folder: a command run inside a git repo is
+tagged by the repo's remote URL (normalized so the same repo agrees whether
+cloned over HTTPS or SSH), so the counts aggregate across every clone and
+subdirectory of that repo. A command outside any git repo falls back to the
+working directory it ran in.
 
 ```text
 $ allowlister history
@@ -372,8 +399,8 @@ That is the unit a rule matches, which makes the report directly actionable:
 ### Bounded storage
 
 History lives under your config directory (e.g.
-`~/.config/allowlister/history/`), user-global and tagged per project, never in
-version control. It never grows without bound: raw events accumulate in a small
+`~/.config/allowlister/history/`), user-global and tagged per project (by git
+repository where available), never in version control. It never grows without bound: raw events accumulate in a small
 recent log that is periodically folded into a cumulative `summary.json`, whose
 size is bounded by the number of *distinct* commands — not by how many ran. Time
 information survives that folding without growing either: each command keeps
@@ -477,7 +504,7 @@ whichever key each uses underneath (`file_path` / `path` / `filePath`).
   "params": { "url": ["https://github.com/**", "https://*.github.com/**"] } }
 
 // ONE portable MCP rule — matches every agent's wire format (mcp__s__t, mcp_s_t,
-// s_t, s(t), ext__t) because the server/tool names are normalized first
+// s_t, s-t, ext__t) because the server/tool names are normalized first
 { "name": "deny destructive MCP tools", "tool": "mcp", "action": "deny",
   "params": { "mcp_tool": ["delete*", "*destroy*"] } }
 

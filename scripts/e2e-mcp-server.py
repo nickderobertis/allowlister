@@ -7,7 +7,7 @@
 # can launch.
 #
 # It exposes exactly two tools, named WITHOUT underscores so they normalize cleanly
-# across all five harness MCP wire formats (mcp__s__t, mcp_s_t, s:t, s(t), ext__t):
+# across all five harness MCP wire formats (mcp__s__t, mcp_s_t, s_t, s-t, ext__t):
 #
 #   * echotoken    — SAFE. Returns the token passed on the command line. The live
 #                    script denies only `delete*`, so this call is allowed; its

@@ -904,10 +904,10 @@ fn init_local_writes_config_and_registers_hook() {
     let settings = dir.path().join(".claude/settings.json");
     assert!(settings.is_file(), "the Bash hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook claude-code"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook claude-code"));
 }
 
 #[test]
@@ -954,8 +954,11 @@ fn init_cursor_local_registers_hooks_json() {
         "beforeReadFile",
         "beforeMCPExecution",
     ] {
-        assert_eq!(
-            doc["hooks"][event][0]["command"], "allowlister hook cursor",
+        assert!(
+            doc["hooks"][event][0]["command"]
+                .as_str()
+                .unwrap()
+                .ends_with("hook cursor"),
             "the {event} hook must be auto-registered"
         );
     }
@@ -1000,10 +1003,10 @@ fn init_codex_local_registers_hooks_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(Bash|apply_patch)$|^mcp__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook codex"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook codex"));
 }
 
 #[test]
@@ -1045,10 +1048,10 @@ fn init_crush_local_registers_crush_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["command"],
-        "allowlister hook crush"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook crush"));
 }
 
 #[test]
@@ -1090,10 +1093,10 @@ fn init_qwen_local_registers_settings_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook qwen"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook qwen"));
 }
 
 #[test]
@@ -1142,10 +1145,13 @@ fn init_goose_local_registers_plugin() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(shell|read|write|edit|text_editor)$|__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook goose"
-    );
+    // On Windows the goose command is the absolute exe path (its plugin runner
+    // spawns it directly, where a bare name wouldn't resolve); elsewhere it is the
+    // bare name. Assert the gate subcommand, not the program token.
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook goose"));
 }
 
 #[test]
@@ -1184,7 +1190,10 @@ fn init_opencode_local_writes_plugin() {
     assert!(plugin.is_file(), "the opencode plugin must be auto-written");
     let text = fs::read_to_string(plugin).unwrap();
     assert!(text.contains("tool.execute.before"));
-    assert!(text.contains("allowlister hook opencode"));
+    // The installed shim spawns the gate command as a JSON argv array.
+    // On Windows the program token is the absolute exe path; match the gate
+    // subcommand tail of the argv array, not the program element.
+    assert!(text.contains(r#","hook","opencode"]"#));
 }
 
 #[test]
@@ -1224,10 +1233,10 @@ fn init_copilot_local_registers_github_hooks_file() {
     assert!(hooks.is_file(), "the copilot hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
     assert_eq!(doc["version"], 1);
-    assert_eq!(
-        doc["hooks"]["preToolUse"][0]["bash"],
-        "allowlister hook copilot"
-    );
+    assert!(doc["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook copilot"));
 }
 
 #[test]
@@ -1346,10 +1355,10 @@ fn init_merges_the_hook_into_existing_settings() {
         serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
     assert_eq!(doc["model"], "opus", "existing keys are preserved");
     assert_eq!(doc["permissions"]["allow"][0], "Bash(ls *)");
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook claude-code"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook claude-code"));
 }
 
 #[test]
@@ -1420,10 +1429,10 @@ fn init_second_harness_after_a_first_keeps_config_and_wires_both_hooks() {
     let cursor = dir.path().join(".cursor/hooks.json");
     assert!(cursor.is_file(), "the second harness hook must be wired");
     let doc: Value = serde_json::from_str(&fs::read_to_string(cursor).unwrap()).unwrap();
-    assert_eq!(
-        doc["hooks"]["beforeShellExecution"][0]["command"],
-        "allowlister hook cursor"
-    );
+    assert!(doc["hooks"]["beforeShellExecution"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook cursor"));
 }
 
 #[test]
@@ -2108,6 +2117,144 @@ fn history_reports_the_project_dimension() {
         let counts = projects.values().next().unwrap();
         assert!(counts["allow"].as_u64().unwrap() + counts["defer"].as_u64().unwrap() > 0);
     }
+}
+
+/// A shared user-global store (XDG home) whose user config allows `ls`, so the
+/// git-identity history tests record an `allow` for every `ls` they run.
+fn history_xdg() -> TempDir {
+    let xdg = TempDir::new().unwrap();
+    let dir = xdg.path().join("allowlister");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("config.json"),
+        r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
+    )
+    .unwrap();
+    xdg
+}
+
+/// A git checkout whose `.git/config` names `origin` = `remote` (no remote when
+/// `remote` is empty).
+fn git_checkout(remote: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let git = dir.path().join(".git");
+    fs::create_dir_all(&git).unwrap();
+    let body = if remote.is_empty() {
+        "[core]\n\tbare = false\n".to_string()
+    } else {
+        format!("[core]\n\tbare = false\n[remote \"origin\"]\n\turl = {remote}\n")
+    };
+    fs::write(git.join("config"), body).unwrap();
+    dir
+}
+
+/// Record one `claude-code` hook evaluation of `command` run in `cwd`, into the
+/// history store under `xdg`.
+fn record_in(xdg: &Path, cwd: &Path, command: &str) {
+    let payload = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+        serde_json::to_string(command).unwrap(),
+        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+    );
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg)
+        .env("ALLOWLISTER_HISTORY", "1")
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+}
+
+/// The `--by-project --json` `projects` map for the `ls -la` row — the per-project
+/// tags the store recorded.
+fn ls_projects(xdg: &Path) -> serde_json::Map<String, Value> {
+    let out = Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg)
+        .args(["history", "--by-project", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    value["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "ls -la")
+        .expect("an `ls -la` row")["projects"]
+        .as_object()
+        .expect("a projects map under --by-project")
+        .clone()
+}
+
+#[test]
+fn history_aggregates_clones_of_one_repo_by_remote() {
+    // Two separate checkouts of the same repository (one origin remote, two
+    // different folders) must collapse to a single project in the user-global
+    // store — the whole point of git-based tracking.
+    let xdg = history_xdg();
+    let clone_a = git_checkout("https://github.com/octocat/Hello-World.git");
+    let clone_b = git_checkout("https://github.com/octocat/Hello-World.git");
+    record_in(xdg.path(), clone_a.path(), "ls -la");
+    record_in(xdg.path(), clone_b.path(), "ls -la");
+
+    // Both folders report under the one repository identity, with both runs.
+    let projects = ls_projects(xdg.path());
+    assert_eq!(projects.len(), 1, "{projects:?}");
+    assert_eq!(
+        projects["github.com/octocat/Hello-World"]["allow"], 2,
+        "both clones aggregate to the remote identity: {projects:?}"
+    );
+}
+
+#[test]
+fn history_keeps_distinct_repos_and_non_git_dirs_separate() {
+    // The flip side of aggregation: different repositories — and a directory that
+    // is not a repository at all — must stay distinct, so project breadth is not
+    // silently collapsed.
+    let xdg = history_xdg();
+    let repo_x = git_checkout("https://github.com/octocat/Hello-World.git");
+    let repo_y = git_checkout("git@gitlab.com:group/other.git");
+    let plain = TempDir::new().unwrap(); // no `.git`: a non-repo folder
+
+    record_in(xdg.path(), repo_x.path(), "ls -la");
+    record_in(xdg.path(), repo_y.path(), "ls -la");
+    record_in(xdg.path(), plain.path(), "ls -la");
+
+    let projects = ls_projects(xdg.path());
+    // Two repos keyed by remote identity, plus the non-git folder by its path.
+    assert_eq!(projects.len(), 3, "{projects:?}");
+    assert!(projects.contains_key("github.com/octocat/Hello-World"));
+    assert!(projects.contains_key("gitlab.com/group/other"));
+    // A non-git cwd keeps its literal folder tag (the path the harness passed,
+    // unchanged — the fallback never rewrites it).
+    let folder = plain.path().to_string_lossy().into_owned();
+    assert!(
+        projects.contains_key(&folder),
+        "non-git cwd keeps the folder tag: {projects:?}"
+    );
+}
+
+#[test]
+fn history_tags_a_subdirectory_by_its_repo() {
+    // A command run deep inside a checkout must walk up to the repo and tag by its
+    // identity — not by the subdirectory it happened to run in.
+    let xdg = history_xdg();
+    let repo = git_checkout("https://github.com/octocat/Hello-World.git");
+    let nested = repo.path().join("crates/core/src");
+    fs::create_dir_all(&nested).unwrap();
+
+    record_in(xdg.path(), &nested, "ls -la");
+
+    let projects = ls_projects(xdg.path());
+    assert_eq!(projects.len(), 1, "{projects:?}");
+    assert!(
+        projects.contains_key("github.com/octocat/Hello-World"),
+        "a subdirectory still tags as the one repository: {projects:?}"
+    );
 }
 
 #[test]
@@ -3127,11 +3274,21 @@ fn init_global_registers_each_harness_under_home_or_xdg() {
             hook_path.display()
         );
         let text = fs::read_to_string(&hook_path).unwrap();
-        assert!(
-            text.contains(&format!("allowlister hook {harness}")),
-            "{harness}: the hook file must invoke the right adapter"
-        );
-        if !is_plugin {
+        if *is_plugin {
+            // The OpenCode plugin shim spawns the gate command as a JSON argv
+            // array rather than embedding the spaced command string.
+            assert!(
+                text.contains(&format!(r#","hook","{harness}"]"#)),
+                "{harness}: the plugin shim must spawn the right adapter"
+            );
+        } else {
+            // Match the gate subcommand, not the program token: on Windows the
+            // goose command is the absolute exe path, every other harness the bare
+            // name.
+            assert!(
+                text.contains(&format!("hook {harness}")),
+                "{harness}: the hook file must invoke the right adapter"
+            );
             // Every non-plugin hook file is JSON a harness will parse.
             serde_json::from_str::<Value>(&text).unwrap();
         }

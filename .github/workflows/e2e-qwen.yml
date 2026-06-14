@@ -29,13 +29,22 @@ env:
 
 jobs:
   live:
-    name: qwen live e2e
+    name: qwen live e2e (${{ matrix.os }})
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # so Windows runs them through Git Bash rather than the default PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +67,7 @@ jobs:
       # script skips (a missing oneharness is a skip, like a missing harness).
       - name: Install oneharness (drives the live check)
         run: |
-          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.1.1 --locked
+          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
           oneharness --version
 
       - uses: actions/setup-node@v4

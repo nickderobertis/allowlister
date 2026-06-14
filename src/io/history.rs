@@ -97,7 +97,9 @@ pub struct Event {
     pub ts: u64,
     /// The harness that produced the call (`claude-code`, `cursor`, …).
     pub harness: String,
-    /// The project/cwd the call ran in (the per-event tag).
+    /// The project the call ran in (the per-event tag): the repository identity
+    /// when the cwd is inside a git repo, else the cwd itself. See
+    /// [`crate::io::project`].
     pub project: String,
     /// Whether this was a shell command or a tool call.
     pub kind: EventKind,
@@ -483,6 +485,11 @@ fn bump_rule(map: &mut BTreeMap<String, u64>, rule: &str) {
 /// Record one evaluation. Best-effort and fail-open: gated off by default,
 /// returns silently when disabled or when no config home is resolvable, and
 /// swallows every I/O error so the calling hook's decision is never affected.
+///
+/// `project` is the working directory the call ran in; it is resolved to a
+/// durable repository identity ([`crate::io::project::identify`]) before tagging,
+/// so the same repo's clones and subdirectories aggregate. The repo lookup is
+/// done here, after the enabled check, so a disabled store costs nothing.
 pub fn record(
     enabled_in_config: bool,
     harness: &str,
@@ -496,7 +503,8 @@ pub fn record(
     let Some(dir) = configfs::default_history_dir(&Env::from_process()) else {
         return;
     };
-    let event = build_event(harness, project, subject, result, now_secs());
+    let project = crate::io::project::identify(project);
+    let event = build_event(harness, &project, subject, result, now_secs());
     let _ = append_event(&dir, &event);
 }
 
@@ -1099,6 +1107,38 @@ mod tests {
         // A second compact with nothing pending is a harmless no-op.
         compact(dir.path()).unwrap();
         assert_eq!(aggregate(dir.path()).events_total, 2);
+    }
+
+    #[test]
+    fn legacy_folder_keyed_summary_survives_new_repo_keyed_events() {
+        // Upgrade safety: a summary written before repo-identity tagging keys its
+        // projects by folder path. After the upgrade, new events key by repo
+        // identity instead. The old folder counts must persist untouched (no
+        // migration, no re-keying) while the new identity accumulates alongside.
+        let dir = TempDir::new().unwrap();
+        let mut legacy = Summary::default();
+        legacy.record(&shell_event("ls -la", "/home/user/myrepo", 1));
+        legacy.record(&shell_event("ls -la", "/home/user/myrepo", 2));
+        fs::write(
+            dir.path().join(SUMMARY),
+            serde_json::to_string(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        // A new event tagged by repo identity, the post-upgrade shape.
+        append_event(
+            dir.path(),
+            &shell_event("ls -la", "github.com/octocat/Hello-World", 3),
+        )
+        .unwrap();
+
+        let summary = aggregate(dir.path());
+        let frag = &summary.fragments["ls -la"];
+        // The pre-upgrade folder key is exactly as it was.
+        assert_eq!(frag.projects["/home/user/myrepo"].allow, 2);
+        // The repo identity is a separate, new key — both coexist, nothing merged.
+        assert_eq!(frag.projects["github.com/octocat/Hello-World"].allow, 1);
+        assert_eq!(summary.events_total, 3);
     }
 
     #[test]

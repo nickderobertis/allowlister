@@ -240,6 +240,28 @@ mod tests {
     }
 
     #[test]
+    fn destructive_mcp_tool_is_denied() {
+        // Regression for the live MCP e2e: Copilot reports an MCP tool's name as
+        // the dash-joined `server-tool` form (e.g. `altest-deletewidget`), which
+        // must normalize to an MCP call so a `tool: mcp` deny on `delete*` holds.
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(
+            dir.path().join(".allowlister.json"),
+            r#"{"rules":[{"name":"deny destructive mcp","tool":"mcp","action":"deny","params":{"mcp_tool":["delete*"]}}]}"#,
+        )
+        .unwrap();
+        let cwd = serde_json::to_string(&dir.path().to_string_lossy().into_owned()).unwrap();
+        // Copilot encodes `toolArgs` as a JSON string; the deny holds regardless.
+        let payload = format!(
+            r#"{{"toolName":"altest-deletewidget","toolArgs":"{{\"id\":\"1\"}}","cwd":{cwd}}}"#
+        );
+        let (code, stdout) = run_payload(&payload);
+        assert_eq!(code, 0);
+        assert_eq!(decision(&stdout), "deny");
+    }
+
+    #[test]
     fn allowed_command_maps_to_allow() {
         let dir = TempDir::new().unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();

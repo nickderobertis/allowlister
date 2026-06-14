@@ -60,8 +60,13 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# On Windows, resolve the harness command to a path the native oneharness can
+# spawn — npm installs a <name>.cmd shim, not a bare-name .exe. No-op off Windows.
+agent_bin="$(al_spawnable_bin "$agent_bin")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into crush.json —
@@ -70,6 +75,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -106,7 +116,7 @@ note "» wiring the project with \`allowlister init --harness crush\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness crush --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook crush' "$proj/crush.json" \
+grep -q 'hook crush' "$proj/crush.json" \
     || fail "init did not register the hook in crush.json"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server beside
@@ -139,7 +149,7 @@ run_agent() {
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
     al_run crush "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin crush="$agent_bin" \
-        "${model_args[@]}"
+        ${model_args[@]+"${model_args[@]}"}
 }
 
 # True if allowlister's own reason text reached the Crush transcript. Crush may
@@ -174,15 +184,23 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Crush rendered its own block)"
 fi
 
-note "» case 2/4: shell allow — \`echo\` must run"
-allow_sentinel="$sandbox/sentinel-allow.txt"
-rm -f "$allow_sentinel"
-marker="allowed-by-allowlister"
-run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
+note "» case 2/4: shell allow — \`mkdir\` must run"
+# Use mkdir, which the rules explicitly allow, rather than `echo > file`: the
+# output redirection is a separate write the gate evaluates on its own, and a
+# bare relative redirect target reads as an unpermitted write (the redirection
+# policy is covered hermetically in the unit and tests/e2e suites). The run cwd
+# is $proj, so a bare-name arg both resolves under cmd.exe and lands in $proj.
+allow_sentinel="$proj/sentinel-allow.d"
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
-grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
-note "  ok: command executed (allow fell through to Crush's normal flow)"
+[ -d "$allow_sentinel" ] || {
+    dump_deny_diagnostic "$sandbox/allow.stream"
+    fail "allowed command did not execute: $allow_sentinel was not created"
+}
+note "  ok: command executed (allow matched the allow rule)"
 
 note "» case 3/4: built-in read tool — reading the secret must be blocked"
 run_agent "There are two files in this project. Use your file-reading tool (view) to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \

@@ -56,6 +56,7 @@ fi
 
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into hooks.json —
@@ -63,7 +64,24 @@ note "» building release binary"
 bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
+# Outer run guard: GNU `timeout` (Linux) or coreutils `gtimeout` (macOS via brew),
+# falling back to none. run_pty.py enforces PTY_TIMEOUT itself, so this is only a
+# safety net — macOS has no `timeout` by default, so requiring it would make every
+# turn a no-op there (the command never runs, the deny falsely "passes").
+if command -v timeout >/dev/null 2>&1; then pty_guard=(timeout --signal=KILL 120)
+elif command -v gtimeout >/dev/null 2>&1; then pty_guard=(gtimeout --signal=KILL 120)
+else pty_guard=(); fi
+
 sandbox="$(mktemp -d)"
+# macOS mktemp lives under /var/folders, a symlink to /private/var; Codex
+# canonicalizes the project cwd, so a /var/... folder-trust entry won't match and
+# the trust dialog blocks the headless turn. Resolve to the physical path first.
+sandbox="$(cd "$sandbox" && pwd -P)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -76,6 +94,9 @@ git init -q "$proj"
 # exec/app-server path never wires them — so this check drives the INTERACTIVE
 # `codex` TUI (in a pseudo-terminal), which is the entry point that consults hooks.
 export HOME="$sandbox/home"
+# Some tools resolve the user home from USERPROFILE on Windows, not $HOME; point
+# it at the sandbox too so the global hook and the harness agree. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 mkdir -p "$HOME/.codex"
 
 # Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
@@ -102,9 +123,9 @@ note "» wiring user + project with \`allowlister init --harness codex\`"
     || fail "allowlister init --global failed"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness codex --hooks --force ) >/dev/null \
     || fail "allowlister init --local failed"
-grep -q 'allowlister hook codex' "$HOME/.codex/hooks.json" \
+grep -q 'hook codex' "$HOME/.codex/hooks.json" \
     || fail "init did not register the user hook in ~/.codex/hooks.json"
-grep -q 'allowlister hook codex' "$proj/.codex/hooks.json" \
+grep -q 'hook codex' "$proj/.codex/hooks.json" \
     || fail "init did not register the project hook in .codex/hooks.json"
 cat >> "$HOME/.codex/config.toml" <<TOML
 [projects."$proj"]
@@ -208,12 +229,12 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
-    ( cd "$proj" && PTY_TIMEOUT=90 PTY_LOG="$stream" timeout --signal=KILL 120 \
+    ( cd "$proj" && PTY_TIMEOUT=90 PTY_LOG="$stream" ${pty_guard[@]+"${pty_guard[@]}"} \
         python3 "$sandbox/run_pty.py" "$agent_bin" \
             --sandbox danger-full-access \
             -a never \
             --dangerously-bypass-hook-trust \
-            "${model_args[@]}" \
+            ${model_args[@]+"${model_args[@]}"} \
             "$prompt" ) >"$stream.err" 2>&1 || true
 }
 
@@ -227,7 +248,7 @@ dump_transcript() {
     local stream="$1" label="$2"
     note "  ── $label transcript diagnostic (TUI, control chars stripped) ──"
     sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\x1b[][()=>][0-9;?]*//g; s/\r/\\n/g' "$stream" 2>/dev/null \
-        | grep -avE '^[[:space:]]*$' | tail -40 | sed 's/^/    /'
+        | grep -avE '^[[:space:]]*$' | tail -40 | sed 's/^/    /' || true
     note "  stderr tail:"
     tail -12 "$stream.err" 2>/dev/null | sed 's/^/    /'
     note "  ────────────────────────────────────────────────────────"

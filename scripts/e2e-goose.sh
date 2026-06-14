@@ -60,8 +60,13 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# On Windows, resolve the harness command to a path the native oneharness can
+# spawn (goose.exe). No-op off Windows.
+agent_bin="$(al_spawnable_bin "$agent_bin")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the hook command `init` writes into hooks.json —
@@ -70,6 +75,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -81,6 +91,9 @@ mkdir -p "$proj/.git"
 # config.yaml is needed. The project plugin under <proj>/.agents/plugins is
 # discovered relative to the cwd regardless of HOME.
 export HOME="$sandbox/home"
+# Node/Electron tools resolve the user home from USERPROFILE on Windows, not
+# $HOME; point it at the sandbox too. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 mkdir -p "$HOME"
 export GOOSE_MODE=auto
 export GOOSE_DISABLE_SESSION_NAMING=true
@@ -112,7 +125,7 @@ note "» wiring the project with \`allowlister init --harness goose\`"
 ( cd "$proj" && "$bin" init --local --profile "$rules" --harness goose --hooks --force ) >/dev/null \
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
-grep -q 'allowlister hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
+grep -q 'hook goose' "$proj/.agents/plugins/allowlister/hooks/hooks.json" \
     || fail "init did not register the hook in the plugin's hooks.json"
 
 # Plant the write fixture target and wire the shared stdio MCP server as a Goose
@@ -150,7 +163,7 @@ run_agent() {
     local prompt="$1" stream="$2"
     al_run goose "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin goose="$agent_bin" \
-        -- "${goose_ext_args[@]}"
+        -- ${goose_ext_args[@]+"${goose_ext_args[@]}"}
 }
 
 # True if allowlister's own reason text reached the Goose transcript. Goose may
@@ -187,8 +200,13 @@ fi
 
 note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows the harness runs the command via cmd.exe, which rejects an absolute
+# C:/... arg ("The syntax of the command is incorrect"); the run cwd is $proj, so
+# pass a bare name. The assertion still checks the absolute path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow

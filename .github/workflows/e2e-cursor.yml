@@ -29,13 +29,22 @@ env:
 
 jobs:
   live:
-    name: cursor live e2e
+    name: cursor live e2e (${{ matrix.os }})
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # so Windows runs them through Git Bash rather than the default PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -58,25 +67,50 @@ jobs:
       # script skips (a missing oneharness is a skip, like a missing harness).
       - name: Install oneharness (drives the live check)
         run: |
-          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.1.1 --locked
+          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
           oneharness --version
 
       - name: Install Cursor CLI
         run: |
-          curl https://cursor.com/install -fsS | bash
-          # The installer drops `cursor-agent` under ~/.local/bin; add it to PATH
-          # for later steps. Fall back to locating it if the layout differs.
-          if [ -x "$HOME/.local/bin/cursor-agent" ]; then
-            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          case "$RUNNER_OS" in
+            Linux | macOS)
+              curl https://cursor.com/install -fsS | bash
+              ;;
+            Windows)
+              # cursor-agent has no Unix curl|bash installer for Windows; use the
+              # documented PowerShell installer. Native Windows support is limited,
+              # so this path is best-effort and iterated on in CI.
+              powershell -NoProfile -Command "irm 'https://cursor.com/install?win32=true' | iex"
+              ;;
+          esac
+          # The binary is `cursor-agent` on Unix but `agent`/`agent.exe` via the
+          # win32 installer, and lands in different dirs. Locate it, add its dir to
+          # PATH, and pin CURSOR_AGENT_BIN so the test invokes it by exact path.
+          echo "post-install agent candidates:"
+          find "$HOME" -type f \( -iname 'cursor-agent*' -o -iname 'agent.exe' \) 2>/dev/null | sed 's/^/  /' | head -20 || true
+          bin="$(command -v cursor-agent 2>/dev/null || true)"
+          # The win32 installer ships the CLI as cursor-agent.cmd. The top-level
+          # ~/AppData/Local/cursor-agent/cursor-agent.cmd dispatcher fails with "No
+          # version directories found", so prefer the concrete per-version launcher
+          # under versions/<ver>/ (newest). A sibling cursor-agent-svc.* is the
+          # service helper, not the CLI — exclude it.
+          if [ -z "$bin" ]; then
+            bin="$(find "$HOME" -type f -ipath '*cursor-agent/versions/*' -iname 'cursor-agent.cmd' 2>/dev/null \
+              | grep -iv svc | sort | tail -1)"
+          fi
+          [ -z "$bin" ] && bin="$(find "$HOME" -type f \( -iname 'cursor-agent' -o -iname 'cursor-agent.exe' -o -iname 'cursor-agent.cmd' \) 2>/dev/null | grep -iv svc | head -1)"
+          if [ -n "$bin" ]; then
+            echo "$(dirname "$bin")" >> "$GITHUB_PATH"
+            echo "CURSOR_AGENT_BIN=$bin" >> "$GITHUB_ENV"
+            echo "resolved cursor agent binary: $bin"
           else
-            dir="$(dirname "$(find "$HOME" -name cursor-agent -type f 2>/dev/null | head -1)")"
-            [ -n "$dir" ] && echo "$dir" >> "$GITHUB_PATH"
+            echo "::warning::cursor agent binary not found after install"
           fi
 
       # Fails the job (rather than letting the script skip) if the install did not
-      # put cursor-agent on PATH — a missing CLI must not read as a silent pass.
+      # produce an agent binary — a missing CLI must not read as a silent pass.
       - name: Show cursor-agent version
-        run: cursor-agent --version
+        run: '"${CURSOR_AGENT_BIN:-cursor-agent}" --version'
 
       - name: Live hook e2e against the real CLI
         env:

@@ -67,6 +67,7 @@ Glob syntax is extended-glob: `*`, `**` (tail, in `argv`), and `@(a|b)` alternat
 allowlister history path                                              # store location
 allowlister history --json                                           # full summary (has events_total)
 allowlister history --view fragments --verdict <V> --top <N> --json  # V ∈ allow|ask|deny|defer
+allowlister history --view programs  --verdict <V> --by-project --json  # per-project verdict breakdown
 allowlister history recent --json                                    # recent raw events (with project tag)
 allowlister install <file.json> --global                            # merge into user config
 allowlister install <file.json> --local                             # merge into ./.allowlister.json
@@ -89,12 +90,21 @@ allowlister check --json "<command>"                                # machine-re
     { "key": "cargo test", "total": 12,
       "allow": 0, "ask": 0, "deny": 0, "defer": 12,
       "first_ts": 1679000000, "last_ts": 1680086400,   // first / latest use (Unix seconds)
-      "recent": { "defer": 9.1 },       // per-verdict recency weight (zeros omitted)
+      "recent": { "defer": 9.1 },       // per-verdict recency weight (zeros omitted; absent when fully decayed)
       "recent_total": 9.1,
+      "project_count": 3,               // distinct projects that ran this key — global-vs-local signal
       "rules": {} }
   ]
 }
 ```
+
+`project_count` is always present; the global-vs-local discriminator (high → global,
+`1` → local to that one project). Adding `--by-project` also emits a `projects` map
+(`{ "<project>": { per-verdict counts… }, … }`, each key a git-repo identity or, outside a
+repo, a folder path) per row — the per-project breakdown the skill
+uses to enumerate every live project, not just the most recent. The `recent` weight is summed
+across all projects, so a recency-ranked list does not reveal project breadth; use
+`project_count` / `--by-project` for that.
 
 Recency semantics: each `recent` weight is the sum of `0.5^(age / 30 days)` over that
 verdict's events, decayed to `as_of` — steady current use scores near its monthly volume,

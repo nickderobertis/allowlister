@@ -48,8 +48,34 @@ of first/latest use), `recent` (per-verdict recency weight, 30-day half-life, de
 report's `as_of`), and `recent_total`. **Weigh recency, not just totals**: a key whose
 `recent` is near zero (or missing — fully decayed) was a burst of past use that stopped; raw
 counts alone overstate it. Compare `recent_total` to `total` and `as_of - last_ts` to judge
-whether a candidate is still live. For project context use `--view commands`, and
-`allowlister history recent --json` to see real invocations and their `project` tag.
+whether a candidate is still live.
+
+Each row also carries `project_count` — the number of distinct projects that ran this key.
+This is your primary **global-vs-local** discriminator: a high `project_count` points global;
+`project_count == 1` is a candidate for that one project's local config. Do **not** read
+project breadth off the recency ranking — `recent` blends every project together, so a flat
+recency-ranked list is dominated by whatever project you touched most recently. And do not use
+`allowlister history recent` for breadth either: it's a bounded (~20-event) window, not a
+census. Rows with `project_count: 0` / `first_ts: 0` / no `recent` (i.e. `recent_total: 0`)
+are usually imported or synced history from before tagging — judge them by recency and don't
+let their totals mislead. For the per-project breakdown, add `--by-project` (Step 1.5).
+
+## Step 1.5 — Map the project landscape (don't anchor on the most recent)
+
+Before ranking candidates, enumerate **every** project with live activity, so you produce
+one global ruleset plus a local ruleset per live project — not just for the most recent one.
+
+```bash
+allowlister history --view programs --verdict defer --by-project --json   # per-project verdict breakdown
+```
+
+Build the set of projects whose `recent_total > 0` (read the per-project `projects` map that
+`--by-project` adds). A project being live does **not** mean it has many bespoke candidates:
+an active project whose work is all generic (`git`, `cd`, reads/edits, `head`) is fully served
+by global rules and correctly yields zero local rules — that is not the same as a stale
+project. Conversely, don't skip a live project just because it ranks below the newest one. Plan
+a target for each live project, then decide per command whether it belongs global
+(cross-project) or in that project's local config.
 
 ## Step 2 — Read the current config (avoid duplicates)
 
@@ -76,9 +102,12 @@ broad ones, and toward **fewer, legible** rules.
 | Risky: `rm -rf`, `curl … \| sh`, `chmod 777`, `sudo`, secret/key reads, writes outside the repo, history rewrite, force-push | `deny` (hard) or `ask` (sometimes-legit) — **never `allow`** (recency does not soften this) |
 | Already decided by a matching rule | skip (don't restate) |
 
-**Target (global vs local):**
+**Target (global vs local):** decide by `project_count`, not by which project is newest. A
+key seen across many projects is global even if its latest use was in one repo; a
+`project_count == 1` key is local to that repo. Survey **all** live projects from Step 1.5
+before finalizing — the most-recent project is not the only target.
 - Global for tools that are safe everywhere and recur across projects (`ls`, `git status`,
-  `cat`, `rg`). Use the `project` tag spread in `history recent` to judge generality.
+  `cat`, `rg`) — high `project_count`.
 - Local (`.allowlister.jsonc`) for project-specific commands (a repo's `just` recipes, its
   task runner, its scripts). When unsure, prefer **local** — narrower blast radius.
 
@@ -93,16 +122,22 @@ examples: `references/REFERENCE.md`.
 Show the proposal as a grouped, scannable table — by **action** then **target** — with the
 evidence and a one-line rationale per rule:
 
+Structure it as a **GLOBAL** section, then one **LOCAL** section per live project path
+(from Step 1.5), then **SKIPPED** — so every live project gets its own block even when that
+block ends up empty (which is itself a finding: that project is fully served by global rules).
+
 ```
 GLOBAL — allow
-  cargo test      (defer ×12, recent 9.1, last 2d)   safe test runner, in active use
-  git status      (defer ×9,  recent 7.4, last 1d)   read-only VCS
-LOCAL (.allowlister.jsonc) — allow
-  just check      (ask ×6, recent 4.2, last 3d)      project gate, always confirmed
-LOCAL — deny
-  rm -rf *        (defer ×2, last 1d)                destructive; block outright
+  cargo test      (defer ×12, recent 9.1, last 2d, projects 4)   safe test runner, cross-project
+  git status      (defer ×9,  recent 7.4, last 1d, projects 5)   read-only VCS
+LOCAL — /repos/referral-app — allow
+  just check      (ask ×6, recent 4.2, last 3d, projects 1)      project gate, always confirmed
+LOCAL — /repos/referral-app — deny
+  rm -rf *        (defer ×2, last 1d, projects 1)                destructive; block outright
+LOCAL — /repos/hellopatient — allow
+  ./scripts/dev   (defer ×5, recent 3.1, last 2d, projects 1)    project script
 SKIPPED — stale
-  npm run build   (defer ×40, recent 0, last 4mo)    heavy past use, dead since
+  npm run build   (defer ×40, recent_total 0, last 4mo)          heavy past use, dead since
 ```
 
 Explicitly invite the user to **add, remove, retarget (global↔local), loosen, or tighten**
@@ -153,4 +188,7 @@ the allowlist keeps converging on real behavior.
   let stale counts stand in for current need — an `allow` needs recent activity behind it.
 - Don't restate rules that already decide a command; don't reuse a name unless you intend to
   overwrite that rule.
+- Cover **every** live project, not just the most recently used one. Anchoring on the newest
+  project's commands and dismissing the rest as stale is a failure mode — distinguish "stale"
+  (low `recent`) from "served by global rules" (live project, few bespoke commands).
 - Apply only after explicit user confirmation, and only via `allowlister install`.
