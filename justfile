@@ -100,20 +100,26 @@ run *args:
     @cargo run --quiet --locked -- {{args}}
 
 # Format the workspace in place.
-fmt:
+format:
     cargo fmt --all
+
+# Alias for `format` (kept for muscle memory and existing docs).
+fmt: format
 
 # Check formatting without writing (fails on any diff).
 fmt-check:
     cargo fmt --all --check
 
-# Type-check all targets and features.
-check:
+# Type-check all targets and features (a phase of the `check` gate).
+typecheck:
     cargo check --locked --all-targets --all-features
 
 # Lint with every warning treated as an error.
-clippy:
+lint:
     cargo clippy --locked --all-targets --all-features -- -D warnings
+
+# Alias for `lint` (kept for muscle memory and existing docs).
+clippy: lint
 
 # Apply machine-applicable clippy fixes.
 clippy-fix:
@@ -259,13 +265,17 @@ profile *args:
     @bash scripts/profile.sh {{args}}
 
 # Full quality gate. Stops at the first failing phase; minimal output on success.
-full-check:
+# This is THE gate: format, type-check, lint, the full test suite (unit +
+# integration + binary e2e), enforced coverage, then dependency/security/docs/
+# release checks. `bootstrap` then `check` is what CI runs and what proves the
+# artifact; nothing here is warnings-only.
+check:
     #!/usr/bin/env bash
     set -euo pipefail
     phase() { printf '\n» %s\n' "$1"; }
     phase "format";        just fmt-check
-    phase "check";         just check
-    phase "clippy";        just clippy
+    phase "typecheck";     just typecheck
+    phase "lint";          just lint
     phase "test";          just test
     phase "test-e2e";      just test-e2e
     phase "coverage";      just test-cov
@@ -274,7 +284,10 @@ full-check:
     phase "docs";          just doc
     phase "release build"; just build-release
     phase "dist-plan";     just dist-plan
-    printf '\n✓ full-check passed\n'
+    printf '\n✓ check passed\n'
+
+# Alias for `check` (kept so existing docs/scripts that say `full-check` work).
+full-check: check
 
 # Remove build artifacts.
 clean:
