@@ -29,13 +29,22 @@ env:
 
 jobs:
   live:
-    name: cursor live e2e
+    name: cursor live e2e (${{ matrix.os }})
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # so Windows runs them through Git Bash rather than the default PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -63,13 +72,23 @@ jobs:
 
       - name: Install Cursor CLI
         run: |
-          curl https://cursor.com/install -fsS | bash
+          case "$RUNNER_OS" in
+            Linux | macOS)
+              curl https://cursor.com/install -fsS | bash
+              ;;
+            Windows)
+              # The curl|bash installer is Unix-only; use the PowerShell installer
+              # on Windows. Best-effort — the Windows install path is iterated on in
+              # CI, so this step (and the version check below) may need adjusting.
+              powershell -NoProfile -Command "irm https://cursor.com/install.ps1 | iex"
+              ;;
+          esac
           # The installer drops `cursor-agent` under ~/.local/bin; add it to PATH
           # for later steps. Fall back to locating it if the layout differs.
           if [ -x "$HOME/.local/bin/cursor-agent" ]; then
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           else
-            dir="$(dirname "$(find "$HOME" -name cursor-agent -type f 2>/dev/null | head -1)")"
+            dir="$(dirname "$(find "$HOME" -name 'cursor-agent*' -type f 2>/dev/null | head -1)")"
             [ -n "$dir" ] && echo "$dir" >> "$GITHUB_PATH"
           fi
 
