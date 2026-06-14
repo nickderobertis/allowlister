@@ -97,7 +97,9 @@ pub struct Event {
     pub ts: u64,
     /// The harness that produced the call (`claude-code`, `cursor`, …).
     pub harness: String,
-    /// The project/cwd the call ran in (the per-event tag).
+    /// The project the call ran in (the per-event tag): the repository identity
+    /// when the cwd is inside a git repo, else the cwd itself. See
+    /// [`crate::io::project`].
     pub project: String,
     /// Whether this was a shell command or a tool call.
     pub kind: EventKind,
@@ -483,6 +485,11 @@ fn bump_rule(map: &mut BTreeMap<String, u64>, rule: &str) {
 /// Record one evaluation. Best-effort and fail-open: gated off by default,
 /// returns silently when disabled or when no config home is resolvable, and
 /// swallows every I/O error so the calling hook's decision is never affected.
+///
+/// `project` is the working directory the call ran in; it is resolved to a
+/// durable repository identity ([`crate::io::project::identify`]) before tagging,
+/// so the same repo's clones and subdirectories aggregate. The repo lookup is
+/// done here, after the enabled check, so a disabled store costs nothing.
 pub fn record(
     enabled_in_config: bool,
     harness: &str,
@@ -496,7 +503,8 @@ pub fn record(
     let Some(dir) = configfs::default_history_dir(&Env::from_process()) else {
         return;
     };
-    let event = build_event(harness, project, subject, result, now_secs());
+    let project = crate::io::project::identify(project);
+    let event = build_event(harness, &project, subject, result, now_secs());
     let _ = append_event(&dir, &event);
 }
 

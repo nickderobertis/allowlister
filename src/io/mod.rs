@@ -7,3 +7,4 @@ pub mod configfs;
 pub mod harness;
 pub mod history;
 pub mod hooks;
+pub mod project;

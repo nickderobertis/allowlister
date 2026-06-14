@@ -16,8 +16,9 @@ use crate::domain::{self, DecisionResult, ToolCall};
 use crate::io::history::{self, Subject};
 
 /// Evaluate a shell command against the loaded rules and record the evaluation.
-/// `harness` names the calling adapter and `project` is the cwd it ran in (the
-/// history tag).
+/// `harness` names the calling adapter and `project` is the cwd it ran in;
+/// recording resolves that to a repository identity so clones aggregate (see
+/// [`crate::io::project`]).
 pub(crate) fn evaluate_shell(
     config: &LoadedConfig,
     harness: &str,

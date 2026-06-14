@@ -2112,6 +2112,77 @@ fn history_reports_the_project_dimension() {
 }
 
 #[test]
+fn history_aggregates_clones_of_one_repo_by_remote() {
+    // Two separate checkouts of the same repository (one origin remote, two
+    // different folders) must collapse to a single project in the user-global
+    // store — the whole point of git-based tracking.
+    let xdg = TempDir::new().unwrap();
+    let allowlister_dir = xdg.path().join("allowlister");
+    fs::create_dir_all(&allowlister_dir).unwrap();
+    fs::write(
+        allowlister_dir.join("config.json"),
+        r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
+    )
+    .unwrap();
+
+    let remote = "https://github.com/octocat/Hello-World.git";
+    let make_clone = || {
+        let dir = TempDir::new().unwrap();
+        let git = dir.path().join(".git");
+        fs::create_dir_all(&git).unwrap();
+        fs::write(
+            git.join("config"),
+            format!("[remote \"origin\"]\n\turl = {remote}\n"),
+        )
+        .unwrap();
+        dir
+    };
+    let clone_a = make_clone();
+    let clone_b = make_clone();
+
+    let run = |cwd: &Path| {
+        let payload = format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"ls -la"}},"cwd":{}}}"#,
+            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+        );
+        Command::cargo_bin("allowlister")
+            .unwrap()
+            .env("XDG_CONFIG_HOME", xdg.path())
+            .env("ALLOWLISTER_HISTORY", "1")
+            .args(["hook", "claude-code"])
+            .write_stdin(payload)
+            .assert()
+            .success();
+    };
+    run(clone_a.path());
+    run(clone_b.path());
+
+    // Both folders report under the one repository identity, with both runs.
+    let out = Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg.path())
+        .args(["history", "--by-project", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    let row = value["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "ls -la")
+        .unwrap();
+    assert_eq!(row["project_count"], 1, "{row}");
+    let projects = row["projects"].as_object().unwrap();
+    assert_eq!(
+        projects["github.com/octocat/Hello-World"]["allow"], 2,
+        "both clones aggregate to the remote identity: {row}"
+    );
+}
+
+#[test]
 fn history_filter_recent_path_compact_and_clear() {
     let sandbox = Sandbox::new();
     for command in ["some_unknown_tool --flag", "gh pr list | head -20"] {

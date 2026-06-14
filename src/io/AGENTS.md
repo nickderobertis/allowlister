@@ -34,3 +34,8 @@
 - Per-key time information stays fixed-size: first/latest timestamps plus decayed
   recency weights, never a per-event timeline or time-bucket series. The decay
   math must be order-independent, since folds can see events out of order.
+- A recorded event's project tag is repository identity, not the raw cwd: a cwd
+  inside a git repo tags by its remote URL (normalized so clones over any
+  transport agree), or the repo root when there is no remote, so one user-global
+  store aggregates a repo across clones and subdirectories. A non-git cwd keeps
+  the folder tag. Resolution is best-effort and runs after the enabled check.
