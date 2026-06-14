@@ -57,9 +57,14 @@ bootstrap:
     fi
     # Prefer a prebuilt binary; if every binary source is unreachable, build from
     # source so a network-restricted environment can still provision.
+    # `--force` so a binary already present (a warm CI cache, a prior run) is
+    # reinstalled rather than erroring with "already exists in destination".
+    # cargo-binstall reads GITHUB_TOKEN from the env (set in CI) to authenticate
+    # its GitHub API calls and avoid the rate-limit 403 that triggers the
+    # source-build fallback in the first place.
     binstall_or_build() {
-        cargo binstall --no-confirm --disable-telemetry "$1" \
-            || { echo "» no prebuilt binary reachable for $1 — building from source"; cargo install --locked "$1"; }
+        cargo binstall --no-confirm --disable-telemetry --force "$1" \
+            || { echo "» no prebuilt binary reachable for $1 — building from source"; cargo install --locked --force "$1"; }
     }
     echo "» installing pinned dev tools"
     for tool in \
@@ -73,7 +78,7 @@ bootstrap:
     # lefthook is a Go binary (no cargo source build), so install the prebuilt
     # only and warn rather than fail if it cannot be reached.
     if ! command -v lefthook >/dev/null; then
-        cargo binstall --no-confirm --disable-telemetry lefthook \
+        cargo binstall --no-confirm --disable-telemetry --force lefthook \
             || echo "! lefthook unavailable (no prebuilt reachable); install it manually to enable git hooks"
     fi
     echo "» installing benchmark + profiling tools"
