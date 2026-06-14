@@ -1426,10 +1426,13 @@ mod tests {
             doc["hooks"]["PreToolUse"][0]["matcher"],
             "^(shell|read|write|edit|text_editor)$|__"
         );
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "allowlister hook goose"
-        );
+        // On Windows the goose command is the absolute exe path (its plugin runner
+        // spawns it directly); elsewhere it is the bare name. Assert the gate
+        // subcommand, not the program token.
+        assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook goose"));
     }
 
     #[test]

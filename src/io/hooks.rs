@@ -163,7 +163,7 @@ pub(crate) fn install_hook(
 ) -> Result<HookOutcome> {
     let policy = policy_for(harness);
     let spec = by_id(policy.id).expect("oneharness registry has every harness allowlister wires");
-    let command = format!("{} hook {}", gate_program(), policy.id);
+    let command = format!("{} hook {}", gate_program(harness), policy.id);
 
     // `Scope::Global` borrows the resolved dirs; build them once and keep them
     // alive for the duration of every install call below.
@@ -232,21 +232,22 @@ pub(crate) fn install_hook(
     })
 }
 
-/// The program token for the installed gate command (`<program> hook <id>`). On
-/// Unix the bare `allowlister` resolves on PATH the way the harness spawns it. On
-/// Windows a harness that spawns the hook directly rather than through a shell
-/// (Goose's plugin runner) can't find a bare name with no extension and fails
-/// open — letting a denied command run — so use the absolute path to this
-/// executable instead. The init summary still prints the friendly bare form.
-fn gate_program() -> String {
-    gate_program_for(std::env::current_exe().ok(), cfg!(windows))
+/// The program token for the installed gate command (`<program> hook <id>`).
+/// Almost always the bare `allowlister`, which resolves on PATH the way harnesses
+/// spawn the hook (through a shell, where PATHEXT also supplies the `.exe`). The
+/// exception is Goose on Windows: its plugin runner spawns the hook *directly*, so
+/// a bare name with no extension isn't found and the adapter fails open — letting
+/// a denied command run — hence the absolute path to this executable there. The
+/// init summary still prints the friendly bare form for every harness.
+fn gate_program(harness: Harness) -> String {
+    gate_program_for(harness, std::env::current_exe().ok(), cfg!(windows))
 }
 
 /// Pure core of [`gate_program`], split out so both platform branches are
 /// testable on any host. Falls back to a bare `allowlister.exe` when the current
 /// executable path can't be resolved on Windows.
-fn gate_program_for(current_exe: Option<PathBuf>, windows: bool) -> String {
-    if windows {
+fn gate_program_for(harness: Harness, current_exe: Option<PathBuf>, windows: bool) -> String {
+    if windows && matches!(harness, Harness::Goose) {
         current_exe
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "allowlister.exe".to_string())
@@ -378,25 +379,40 @@ mod tests {
         assert_eq!(harness_id(Harness::Copilot), "copilot");
     }
 
-    /// On Unix the gate command stays the bare name that resolves on PATH.
+    /// On Unix the gate command stays the bare name that resolves on PATH, for
+    /// every harness including Goose.
     #[test]
     fn gate_program_is_bare_name_on_unix() {
+        let exe = Some(PathBuf::from("/opt/bin/allowlister"));
         assert_eq!(
-            gate_program_for(Some(PathBuf::from("/opt/bin/allowlister")), false),
+            gate_program_for(Harness::Goose, exe.clone(), false),
             "allowlister"
+        );
+        assert_eq!(gate_program_for(Harness::Codex, exe, false), "allowlister");
+    }
+
+    /// On Windows the Goose gate command is the absolute executable path, so its
+    /// plugin runner (which spawns the hook directly) can find it — a bare name
+    /// with no extension would fail open. Falls back to `allowlister.exe` if the
+    /// executable path can't be resolved.
+    #[test]
+    fn gate_program_is_absolute_exe_for_goose_on_windows() {
+        let exe = PathBuf::from(r"C:\Tools\allowlister.exe");
+        assert_eq!(
+            gate_program_for(Harness::Goose, Some(exe.clone()), true),
+            exe.display().to_string()
+        );
+        assert_eq!(
+            gate_program_for(Harness::Goose, None, true),
+            "allowlister.exe"
         );
     }
 
-    /// On Windows the gate command is the absolute executable path, so a harness
-    /// that spawns the hook directly can find it (a bare name with no extension
-    /// would fail open). It falls back to a bare `allowlister.exe` if unresolved.
+    /// Every non-Goose harness keeps the bare name even on Windows: they run the
+    /// hook through a shell, where the bare PATH name (and PATHEXT) resolves.
     #[test]
-    fn gate_program_is_absolute_exe_on_windows() {
-        let exe = PathBuf::from(r"C:\Tools\allowlister.exe");
-        assert_eq!(
-            gate_program_for(Some(exe.clone()), true),
-            exe.display().to_string()
-        );
-        assert_eq!(gate_program_for(None, true), "allowlister.exe");
+    fn gate_program_stays_bare_for_non_goose_on_windows() {
+        let exe = Some(PathBuf::from(r"C:\Tools\allowlister.exe"));
+        assert_eq!(gate_program_for(Harness::Copilot, exe, true), "allowlister");
     }
 }
