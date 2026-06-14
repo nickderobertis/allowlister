@@ -15,6 +15,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Authenticate cargo-binstall's GitHub API calls in `just bootstrap` so it is
+  # not rate-limited — an unauthenticated 403 silently triggers a source-build
+  # fallback that then collides with the already-installed tool on macOS.
+  GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   # The gate. A clean checkout runs `just bootstrap` then `just check` — the same
@@ -34,6 +38,11 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Don't cache ~/.cargo/bin: a stale cached tool binary collides with
+          # bootstrap's reinstall ("already exists in destination"). Reinstalling
+          # the prebuilt each run is cheap and deterministic.
+          cache-bin: false
       # Prebuilt binaries for the cargo subcommands the gate needs; `bootstrap`
       # below is idempotent and no-ops over anything already present.
       - uses: taiki-e/install-action@v2
