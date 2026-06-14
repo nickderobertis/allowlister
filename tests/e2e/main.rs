@@ -1142,10 +1142,13 @@ fn init_goose_local_registers_plugin() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(shell|read|write|edit|text_editor)$|__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook goose"
-    );
+    // On Windows the goose command is the absolute exe path (its plugin runner
+    // spawns it directly, where a bare name wouldn't resolve); elsewhere it is the
+    // bare name. Assert the gate subcommand, not the program token.
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook goose"));
 }
 
 #[test]
@@ -3274,8 +3277,11 @@ fn init_global_registers_each_harness_under_home_or_xdg() {
                 "{harness}: the plugin shim must spawn the right adapter"
             );
         } else {
+            // Match the gate subcommand, not the program token: on Windows the
+            // goose command is the absolute exe path, every other harness the bare
+            // name.
             assert!(
-                text.contains(&format!("allowlister hook {harness}")),
+                text.contains(&format!("hook {harness}")),
                 "{harness}: the hook file must invoke the right adapter"
             );
             // Every non-plugin hook file is JSON a harness will parse.
