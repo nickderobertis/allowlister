@@ -330,9 +330,13 @@ or takes `--history` / `--no-history`; either way the choice is stored in your
 config as `"history": { "enabled": true }`. The `ALLOWLISTER_HISTORY=1` (or `0`)
 environment variable overrides the config per run.
 
-Each evaluation is recorded with its harness, project (the cwd it ran in), a
-timestamp, the overall verdict, and every parsed subcommand with the rule that
-decided it.
+Each evaluation is recorded with its harness, project, a timestamp, the overall
+verdict, and every parsed subcommand with the rule that decided it. The project
+is tracked by **git repository**, not folder: a command run inside a git repo is
+tagged by the repo's remote URL (normalized so the same repo agrees whether
+cloned over HTTPS or SSH), so the counts aggregate across every clone and
+subdirectory of that repo. A command outside any git repo falls back to the
+working directory it ran in.
 
 ```text
 $ allowlister history
@@ -372,8 +376,8 @@ That is the unit a rule matches, which makes the report directly actionable:
 ### Bounded storage
 
 History lives under your config directory (e.g.
-`~/.config/allowlister/history/`), user-global and tagged per project, never in
-version control. It never grows without bound: raw events accumulate in a small
+`~/.config/allowlister/history/`), user-global and tagged per project (by git
+repository where available), never in version control. It never grows without bound: raw events accumulate in a small
 recent log that is periodically folded into a cumulative `summary.json`, whose
 size is bounded by the number of *distinct* commands — not by how many ran. Time
 information survives that folding without growing either: each command keeps

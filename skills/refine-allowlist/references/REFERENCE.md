@@ -100,7 +100,8 @@ allowlister check --json "<command>"                                # machine-re
 
 `project_count` is always present; the global-vs-local discriminator (high → global,
 `1` → local to that one project). Adding `--by-project` also emits a `projects` map
-(`{ "<path>": { per-verdict counts… }, … }`) per row — the per-project breakdown the skill
+(`{ "<project>": { per-verdict counts… }, … }`, each key a git-repo identity or, outside a
+repo, a folder path) per row — the per-project breakdown the skill
 uses to enumerate every live project, not just the most recent. The `recent` weight is summed
 across all projects, so a recency-ranked list does not reveal project breadth; use
 `project_count` / `--by-project` for that.
