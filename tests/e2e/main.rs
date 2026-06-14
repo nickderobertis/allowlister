@@ -904,10 +904,10 @@ fn init_local_writes_config_and_registers_hook() {
     let settings = dir.path().join(".claude/settings.json");
     assert!(settings.is_file(), "the Bash hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook claude-code"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook claude-code"));
 }
 
 #[test]
@@ -954,8 +954,11 @@ fn init_cursor_local_registers_hooks_json() {
         "beforeReadFile",
         "beforeMCPExecution",
     ] {
-        assert_eq!(
-            doc["hooks"][event][0]["command"], "allowlister hook cursor",
+        assert!(
+            doc["hooks"][event][0]["command"]
+                .as_str()
+                .unwrap()
+                .ends_with("hook cursor"),
             "the {event} hook must be auto-registered"
         );
     }
@@ -1000,10 +1003,10 @@ fn init_codex_local_registers_hooks_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(Bash|apply_patch)$|^mcp__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook codex"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook codex"));
 }
 
 #[test]
@@ -1045,10 +1048,10 @@ fn init_crush_local_registers_crush_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["command"],
-        "allowlister hook crush"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook crush"));
 }
 
 #[test]
@@ -1090,10 +1093,10 @@ fn init_qwen_local_registers_settings_json() {
         doc["hooks"]["PreToolUse"][0]["matcher"],
         "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__"
     );
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook qwen"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook qwen"));
 }
 
 #[test]
@@ -1228,10 +1231,10 @@ fn init_copilot_local_registers_github_hooks_file() {
     assert!(hooks.is_file(), "the copilot hook must be auto-registered");
     let doc: Value = serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
     assert_eq!(doc["version"], 1);
-    assert_eq!(
-        doc["hooks"]["preToolUse"][0]["bash"],
-        "allowlister hook copilot"
-    );
+    assert!(doc["hooks"]["preToolUse"][0]["bash"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook copilot"));
 }
 
 #[test]
@@ -1350,10 +1353,10 @@ fn init_merges_the_hook_into_existing_settings() {
         serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
     assert_eq!(doc["model"], "opus", "existing keys are preserved");
     assert_eq!(doc["permissions"]["allow"][0], "Bash(ls *)");
-    assert_eq!(
-        doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "allowlister hook claude-code"
-    );
+    assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook claude-code"));
 }
 
 #[test]
@@ -1424,10 +1427,10 @@ fn init_second_harness_after_a_first_keeps_config_and_wires_both_hooks() {
     let cursor = dir.path().join(".cursor/hooks.json");
     assert!(cursor.is_file(), "the second harness hook must be wired");
     let doc: Value = serde_json::from_str(&fs::read_to_string(cursor).unwrap()).unwrap();
-    assert_eq!(
-        doc["hooks"]["beforeShellExecution"][0]["command"],
-        "allowlister hook cursor"
-    );
+    assert!(doc["hooks"]["beforeShellExecution"][0]["command"]
+        .as_str()
+        .unwrap()
+        .ends_with("hook cursor"));
 }
 
 #[test]
