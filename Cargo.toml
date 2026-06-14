@@ -41,7 +41,7 @@ fancy-regex = "0.18.0"
 # harness's native shape, so the eight install/merge/path implementations live in
 # one place instead of being duplicated here. Pinned by git tag; not on crates.io
 # yet, so a future crates.io publish of allowlister would need it released there.
-oneharness-core = { git = "https://github.com/nickderobertis/oneharness", tag = "v0.2.40", version = "0.2" }
+oneharness-core = { git = "https://github.com/nickderobertis/oneharness", tag = "v0.2.44", version = "0.2" }
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
