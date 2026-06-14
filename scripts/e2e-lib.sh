@@ -95,7 +95,7 @@ al_dump_stream() {
     local stream="$1"
     note "  ── transcript tail (control chars stripped) ──"
     sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\r/\\n/g' "$stream" 2>/dev/null \
-        | grep -avE '^[[:space:]]*$' | tail -60 | sed 's/^/    /'
+        | grep -avE '^[[:space:]]*$' | tail -60 | sed 's/^/    /' || true
     if [ -s "$stream.err" ]; then
         note "  stderr tail:"
         tail -10 "$stream.err" | sed 's/^/    /'
@@ -196,11 +196,19 @@ al_run() {
     # parser. A non-zero harness exit is not fatal here — the outcome is judged by
     # the stream and the command's side effects, exactly as before.
     oneharness run --harness "$id" --prompt "$prompt" \
-        --output-dir "$od" --compact "$@" >/dev/null 2>"$od/oneharness.err" || true
+        --output-dir "$od" --compact "$@" >"$od/report.json" 2>"$od/oneharness.err" || true
     cp -f "$od/$id.stdout" "$stream" 2>/dev/null || : >"$stream"
     cp -f "$od/$id.stderr" "$stream.err" 2>/dev/null || : >"$stream.err"
     # Append oneharness's own diagnostics (a spawn failure or timeout note) so a
     # CI failure points straight at the cause.
     [ -s "$od/oneharness.err" ] && cat "$od/oneharness.err" >>"$stream.err"
+    # oneharness reports a failed harness run as "see results[].status and
+    # results[].error", but that detail lives in the JSON report on stdout (above,
+    # otherwise discarded). Surface those fields so a CI failure shows *why* the
+    # harness run did not succeed (e.g. a non-zero command exit on Windows).
+    if [ -s "$od/report.json" ]; then
+        grep -oE '"(status|error|exit_code|exitCode|code|signal)"[[:space:]]*:[^,}]*' \
+            "$od/report.json" 2>/dev/null | sed 's/^/oneharness-report: /' >>"$stream.err" || true
+    fi
     rm -rf "$od"
 }

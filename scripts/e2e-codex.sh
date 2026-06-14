@@ -64,6 +64,14 @@ note "» building release binary"
 bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
+# Outer run guard: GNU `timeout` (Linux) or coreutils `gtimeout` (macOS via brew),
+# falling back to none. run_pty.py enforces PTY_TIMEOUT itself, so this is only a
+# safety net — macOS has no `timeout` by default, so requiring it would make every
+# turn a no-op there (the command never runs, the deny falsely "passes").
+if command -v timeout >/dev/null 2>&1; then pty_guard=(timeout --signal=KILL 120)
+elif command -v gtimeout >/dev/null 2>&1; then pty_guard=(gtimeout --signal=KILL 120)
+else pty_guard=(); fi
+
 sandbox="$(mktemp -d)"
 # On Windows the harness, oneharness and allowlister binaries are native, so the
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
@@ -214,7 +222,7 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
-    ( cd "$proj" && PTY_TIMEOUT=90 PTY_LOG="$stream" timeout --signal=KILL 120 \
+    ( cd "$proj" && PTY_TIMEOUT=90 PTY_LOG="$stream" ${pty_guard[@]+"${pty_guard[@]}"} \
         python3 "$sandbox/run_pty.py" "$agent_bin" \
             --sandbox danger-full-access \
             -a never \
@@ -233,7 +241,7 @@ dump_transcript() {
     local stream="$1" label="$2"
     note "  ── $label transcript diagnostic (TUI, control chars stripped) ──"
     sed $'s/\x1b\\[[0-9;?]*[a-zA-Z]//g; s/\x1b[][()=>][0-9;?]*//g; s/\r/\\n/g' "$stream" 2>/dev/null \
-        | grep -avE '^[[:space:]]*$' | tail -40 | sed 's/^/    /'
+        | grep -avE '^[[:space:]]*$' | tail -40 | sed 's/^/    /' || true
     note "  stderr tail:"
     tail -12 "$stream.err" 2>/dev/null | sed 's/^/    /'
     note "  ────────────────────────────────────────────────────────"
