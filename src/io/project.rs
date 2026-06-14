@@ -19,7 +19,7 @@
 //! read the repo just degrades to the next fallback, never an error.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// The project tag for a working directory: repository identity when `cwd` is
 /// inside a git repo, else the directory itself (unchanged folder tag).
@@ -29,22 +29,24 @@ pub(crate) fn identify(cwd: &str) -> String {
 
 /// Repository identity for `cwd`, or `None` when it is not inside a git repo.
 fn git_identity(cwd: &str) -> Option<String> {
-    // Canonicalize so a relative cwd still finds its ancestor `.git`, and so two
-    // spellings of the same checkout resolve to one root.
-    let start = fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd));
-    let root = find_repo_root(&start)?;
-    // A remote keys clones together; without one the root path is the best we can
-    // do (it still merges a checkout's subdirectories).
-    Some(remote_identity(&root).unwrap_or_else(|| root.to_string_lossy().into_owned()))
+    // Walk the path as given (like project-config discovery, which also does not
+    // canonicalize): a remote keys clones together regardless of checkout path,
+    // and for the no-remote fallback the root is reported in the same spelling the
+    // caller used — so the tag matches what users and `--project` filters see,
+    // not a platform-canonicalized form (e.g. Windows `\\?\` verbatim paths).
+    let root = find_repo_root(Path::new(cwd))?;
+    // Without a remote the root path is the best we can do (it still merges a
+    // checkout's subdirectories).
+    Some(remote_identity(root).unwrap_or_else(|| root.to_string_lossy().into_owned()))
 }
 
 /// Walk up from `start` to the nearest ancestor containing a `.git` entry — the
 /// same boundary project-config discovery stops at.
-fn find_repo_root(start: &Path) -> Option<PathBuf> {
+fn find_repo_root(start: &Path) -> Option<&Path> {
     let mut current = Some(start);
     while let Some(dir) = current {
         if dir.join(".git").exists() {
-            return Some(dir.to_path_buf());
+            return Some(dir);
         }
         current = dir.parent();
     }
@@ -216,10 +218,11 @@ mod tests {
     fn repo_without_a_remote_falls_back_to_the_root_path() {
         let dir = TempDir::new().unwrap();
         init_repo(dir.path(), "");
-        let root = fs::canonicalize(dir.path()).unwrap();
+        // No remote to key on: the repo root path, in the spelling the caller
+        // passed (not canonicalized), is the tag.
         assert_eq!(
             identify(&dir.path().to_string_lossy()),
-            root.to_string_lossy()
+            dir.path().to_string_lossy()
         );
     }
 
@@ -234,10 +237,9 @@ mod tests {
             "gitdir: /elsewhere/.git/worktrees/wt\n",
         )
         .unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
         assert_eq!(
             identify(&dir.path().to_string_lossy()),
-            root.to_string_lossy()
+            dir.path().to_string_lossy()
         );
     }
 
