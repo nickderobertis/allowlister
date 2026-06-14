@@ -76,7 +76,10 @@ jobs:
         # installer works on every platform.
         run: |
           curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+          # The installer drops goose under ~/.local/bin on Unix but ~/goose on
+          # Windows; add both so the binary is found regardless of platform.
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/goose" >> "$GITHUB_PATH"
 
       - name: Live hook e2e against the real CLI
         env:
