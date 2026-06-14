@@ -2111,56 +2111,59 @@ fn history_reports_the_project_dimension() {
     }
 }
 
-#[test]
-fn history_aggregates_clones_of_one_repo_by_remote() {
-    // Two separate checkouts of the same repository (one origin remote, two
-    // different folders) must collapse to a single project in the user-global
-    // store — the whole point of git-based tracking.
+/// A shared user-global store (XDG home) whose user config allows `ls`, so the
+/// git-identity history tests record an `allow` for every `ls` they run.
+fn history_xdg() -> TempDir {
     let xdg = TempDir::new().unwrap();
-    let allowlister_dir = xdg.path().join("allowlister");
-    fs::create_dir_all(&allowlister_dir).unwrap();
+    let dir = xdg.path().join("allowlister");
+    fs::create_dir_all(&dir).unwrap();
     fs::write(
-        allowlister_dir.join("config.json"),
+        dir.join("config.json"),
         r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
     )
     .unwrap();
+    xdg
+}
 
-    let remote = "https://github.com/octocat/Hello-World.git";
-    let make_clone = || {
-        let dir = TempDir::new().unwrap();
-        let git = dir.path().join(".git");
-        fs::create_dir_all(&git).unwrap();
-        fs::write(
-            git.join("config"),
-            format!("[remote \"origin\"]\n\turl = {remote}\n"),
-        )
-        .unwrap();
-        dir
+/// A git checkout whose `.git/config` names `origin` = `remote` (no remote when
+/// `remote` is empty).
+fn git_checkout(remote: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let git = dir.path().join(".git");
+    fs::create_dir_all(&git).unwrap();
+    let body = if remote.is_empty() {
+        "[core]\n\tbare = false\n".to_string()
+    } else {
+        format!("[core]\n\tbare = false\n[remote \"origin\"]\n\turl = {remote}\n")
     };
-    let clone_a = make_clone();
-    let clone_b = make_clone();
+    fs::write(git.join("config"), body).unwrap();
+    dir
+}
 
-    let run = |cwd: &Path| {
-        let payload = format!(
-            r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"ls -la"}},"cwd":{}}}"#,
-            serde_json::to_string(&cwd.to_string_lossy()).unwrap()
-        );
-        Command::cargo_bin("allowlister")
-            .unwrap()
-            .env("XDG_CONFIG_HOME", xdg.path())
-            .env("ALLOWLISTER_HISTORY", "1")
-            .args(["hook", "claude-code"])
-            .write_stdin(payload)
-            .assert()
-            .success();
-    };
-    run(clone_a.path());
-    run(clone_b.path());
+/// Record one `claude-code` hook evaluation of `command` run in `cwd`, into the
+/// history store under `xdg`.
+fn record_in(xdg: &Path, cwd: &Path, command: &str) {
+    let payload = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":{}}},"cwd":{}}}"#,
+        serde_json::to_string(command).unwrap(),
+        serde_json::to_string(&cwd.to_string_lossy()).unwrap()
+    );
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", xdg)
+        .env("ALLOWLISTER_HISTORY", "1")
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success();
+}
 
-    // Both folders report under the one repository identity, with both runs.
+/// The `--by-project --json` `projects` map for the `ls -la` row — the per-project
+/// tags the store recorded.
+fn ls_projects(xdg: &Path) -> serde_json::Map<String, Value> {
     let out = Command::cargo_bin("allowlister")
         .unwrap()
-        .env("XDG_CONFIG_HOME", xdg.path())
+        .env("XDG_CONFIG_HOME", xdg)
         .args(["history", "--by-project", "--json"])
         .assert()
         .success()
@@ -2168,17 +2171,81 @@ fn history_aggregates_clones_of_one_repo_by_remote() {
         .stdout
         .clone();
     let value: Value = serde_json::from_slice(&out).unwrap();
-    let row = value["rows"]
+    value["rows"]
         .as_array()
         .unwrap()
         .iter()
         .find(|r| r["key"] == "ls -la")
-        .unwrap();
-    assert_eq!(row["project_count"], 1, "{row}");
-    let projects = row["projects"].as_object().unwrap();
+        .expect("an `ls -la` row")["projects"]
+        .as_object()
+        .expect("a projects map under --by-project")
+        .clone()
+}
+
+#[test]
+fn history_aggregates_clones_of_one_repo_by_remote() {
+    // Two separate checkouts of the same repository (one origin remote, two
+    // different folders) must collapse to a single project in the user-global
+    // store — the whole point of git-based tracking.
+    let xdg = history_xdg();
+    let clone_a = git_checkout("https://github.com/octocat/Hello-World.git");
+    let clone_b = git_checkout("https://github.com/octocat/Hello-World.git");
+    record_in(xdg.path(), clone_a.path(), "ls -la");
+    record_in(xdg.path(), clone_b.path(), "ls -la");
+
+    // Both folders report under the one repository identity, with both runs.
+    let projects = ls_projects(xdg.path());
+    assert_eq!(projects.len(), 1, "{projects:?}");
     assert_eq!(
         projects["github.com/octocat/Hello-World"]["allow"], 2,
-        "both clones aggregate to the remote identity: {row}"
+        "both clones aggregate to the remote identity: {projects:?}"
+    );
+}
+
+#[test]
+fn history_keeps_distinct_repos_and_non_git_dirs_separate() {
+    // The flip side of aggregation: different repositories — and a directory that
+    // is not a repository at all — must stay distinct, so project breadth is not
+    // silently collapsed.
+    let xdg = history_xdg();
+    let repo_x = git_checkout("https://github.com/octocat/Hello-World.git");
+    let repo_y = git_checkout("git@gitlab.com:group/other.git");
+    let plain = TempDir::new().unwrap(); // no `.git`: a non-repo folder
+
+    record_in(xdg.path(), repo_x.path(), "ls -la");
+    record_in(xdg.path(), repo_y.path(), "ls -la");
+    record_in(xdg.path(), plain.path(), "ls -la");
+
+    let projects = ls_projects(xdg.path());
+    // Two repos keyed by remote identity, plus the non-git folder by its path.
+    assert_eq!(projects.len(), 3, "{projects:?}");
+    assert!(projects.contains_key("github.com/octocat/Hello-World"));
+    assert!(projects.contains_key("gitlab.com/group/other"));
+    // A non-git cwd keeps its literal folder tag (the path the harness passed,
+    // unchanged — the fallback never rewrites it).
+    let folder = plain.path().to_string_lossy().into_owned();
+    assert!(
+        projects.contains_key(&folder),
+        "non-git cwd keeps the folder tag: {projects:?}"
+    );
+}
+
+#[test]
+fn history_tags_a_subdirectory_by_its_repo() {
+    // A command run deep inside a checkout must walk up to the repo and tag by its
+    // identity — not by the subdirectory it happened to run in.
+    let xdg = history_xdg();
+    let repo = git_checkout("https://github.com/octocat/Hello-World.git");
+    let nested = repo.path().join("crates/core/src");
+    fs::create_dir_all(&nested).unwrap();
+
+    record_in(xdg.path(), &nested, "ls -la");
+
+    let projects = ls_projects(xdg.path());
+    assert_eq!(projects.len(), 1, "{projects:?}");
+    assert!(
+        projects.contains_key("github.com/octocat/Hello-World"),
+        "a subdirectory still tags as the one repository: {projects:?}"
     );
 }
 

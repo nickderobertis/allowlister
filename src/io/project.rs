@@ -224,6 +224,24 @@ mod tests {
     }
 
     #[test]
+    fn git_file_worktree_falls_back_to_the_root_path() {
+        // A linked worktree or submodule has a `.git` *file* (`gitdir: …`), not a
+        // directory, so there is no `<root>/.git/config` to read. The lookup must
+        // still treat the directory as a repo root and fall back to its path.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join(".git"),
+            "gitdir: /elsewhere/.git/worktrees/wt\n",
+        )
+        .unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            identify(&dir.path().to_string_lossy()),
+            root.to_string_lossy()
+        );
+    }
+
+    #[test]
     fn origin_is_preferred_over_other_remotes() {
         let config = "[remote \"upstream\"]\n\turl = https://github.com/up/stream.git\n\
                       [remote \"origin\"]\n\turl = https://github.com/me/fork.git\n";
