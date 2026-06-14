@@ -147,14 +147,8 @@ run_agent() {
     local prompt="$1" stream="$2"
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
-    # On Windows blank SHELL so crush runs commands via cmd in the run cwd ($proj),
-    # where the bare-name allow sentinel resolves; with SHELL set it routes through
-    # Git Bash and the relative write lands outside $proj. No-op off Windows.
-    local win_env=()
-    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run crush "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin crush="$agent_bin" \
-        ${win_env[@]+"${win_env[@]}"} \
         ${model_args[@]+"${model_args[@]}"}
 }
 
@@ -190,24 +184,23 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Crush rendered its own block)"
 fi
 
-note "» case 2/4: shell allow — \`echo\` must run"
-allow_sentinel="$sandbox/sentinel-allow.txt"
-# On Windows the harness runs the command via cmd.exe, which rejects an absolute
-# C:/... arg; the run cwd is $proj, so write the sentinel there under a bare name.
+note "» case 2/4: shell allow — \`mkdir\` must run"
+# Use mkdir, which the rules explicitly allow, rather than `echo > file`: the
+# output redirection is a separate write the gate evaluates on its own, and a
+# bare relative redirect target reads as an unpermitted write (the redirection
+# policy is covered hermetically in the unit and tests/e2e suites). The run cwd
+# is $proj, so a bare-name arg both resolves under cmd.exe and lands in $proj.
+allow_sentinel="$proj/sentinel-allow.d"
 allow_arg="$allow_sentinel"
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_sentinel="$proj/sentinel-allow.txt"; allow_arg="sentinel-allow.txt" ;; esac
-rm -f "$allow_sentinel"
-marker="allowed-by-allowlister"
-run_agent "Use the shell to run exactly this one command, then stop: echo $marker > $allow_arg" \
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
+rm -rf "$allow_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || {
+[ -d "$allow_sentinel" ] || {
     dump_deny_diagnostic "$sandbox/allow.stream"
     fail "allowed command did not execute: $allow_sentinel was not created"
 }
-# Substring (not whole-line) match: cmd.exe's `echo x > f` appends a trailing
-# space/CRLF, so an exact-line check would spuriously fail on Windows.
-grep -aq "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
-note "  ok: command executed (allow fell through to Crush's normal flow)"
+note "  ok: command executed (allow matched the allow rule)"
 
 note "» case 3/4: built-in read tool — reading the secret must be blocked"
 run_agent "There are two files in this project. Use your file-reading tool (view) to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
