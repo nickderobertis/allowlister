@@ -249,7 +249,10 @@ fn gate_program() -> String {
 fn gate_program_for(current_exe: Option<PathBuf>, windows: bool) -> String {
     if windows {
         current_exe
-            .map(|p| p.display().to_string())
+            // Forward slashes, not backslashes: a backslashed path
+            // (…\target\release\… contains \t, \r) is misparsed when a harness
+            // spawns the hook command on Windows. CreateProcess accepts `/`.
+            .map(|p| p.display().to_string().replace('\\', "/"))
             .unwrap_or_else(|| "allowlister.exe".to_string())
     } else {
         "allowlister".to_string()
@@ -388,15 +391,15 @@ mod tests {
         );
     }
 
-    /// On Windows the gate command is the absolute executable path, so a harness
-    /// that spawns the hook directly can find it (a bare name with no extension
-    /// would fail open). Falls back to `allowlister.exe` if unresolved.
+    /// On Windows the gate command is the absolute executable path with forward
+    /// slashes, so a harness that spawns the hook directly can find it (a bare name
+    /// would fail open; backslashes get misparsed). Falls back to `allowlister.exe`.
     #[test]
     fn gate_program_is_absolute_exe_on_windows() {
         let exe = PathBuf::from(r"C:\Tools\allowlister.exe");
         assert_eq!(
-            gate_program_for(Some(exe.clone()), true),
-            exe.display().to_string()
+            gate_program_for(Some(exe), true),
+            "C:/Tools/allowlister.exe"
         );
         assert_eq!(gate_program_for(None, true), "allowlister.exe");
     }

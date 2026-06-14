@@ -117,12 +117,14 @@ case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
         if command -v jq >/dev/null 2>&1; then
             claude_cfg="$(cygpath -u "${USERPROFILE:-$HOME}")/.claude.json"
+            # Best-effort and non-aborting: reset a missing/invalid file to {}, then
+            # merge each spelling. jq reads the file directly so a bad existing file
+            # can't break the pipeline, and a failure never exits the script.
+            jq -e . "$claude_cfg" >/dev/null 2>&1 || printf '{}' > "$claude_cfg"
             for key in "$proj" "$(cygpath -w "$proj")" "$(cygpath -m "$proj")"; do
-                existing="$(cat "$claude_cfg" 2>/dev/null)"
-                [ -n "$existing" ] || existing='{}'
-                printf '%s' "$existing" \
-                    | jq --arg p "$key" '.projects[$p].hasTrustDialogAccepted = true' \
-                        > "$claude_cfg.tmp" && mv "$claude_cfg.tmp" "$claude_cfg"
+                jq --arg p "$key" '.projects[$p].hasTrustDialogAccepted = true' \
+                    "$claude_cfg" > "$claude_cfg.tmp" 2>/dev/null \
+                    && mv "$claude_cfg.tmp" "$claude_cfg" || true
             done
         fi
         ;;
