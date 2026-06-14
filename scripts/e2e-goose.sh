@@ -200,8 +200,13 @@ fi
 
 note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows the harness runs the command via cmd.exe, which rejects an absolute
+# C:/... arg ("The syntax of the command is incorrect"); the run cwd is $proj, so
+# pass a bare name. The assertion still checks the absolute path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow
