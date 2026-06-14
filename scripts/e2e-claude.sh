@@ -74,7 +74,7 @@ sandbox="$(mktemp -d)"
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
 # elsewhere.
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -108,6 +108,25 @@ note "» wiring the project with \`allowlister init\`"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 grep -q 'hook claude-code' "$proj/.claude/settings.json" \
     || fail "init did not register the hook in .claude/settings.json"
+
+# Pre-accept Claude's per-directory trust on Windows: a headless run can't answer
+# the "Do you trust this folder?" dialog, which also gates project-local hooks.
+# Seed ~/.claude.json for each spelling Claude may canonicalize the cwd to. No-op
+# elsewhere (Unix has no such gate here).
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+        if command -v jq >/dev/null 2>&1; then
+            claude_cfg="$(cygpath -u "${USERPROFILE:-$HOME}")/.claude.json"
+            for key in "$proj" "$(cygpath -w "$proj")" "$(cygpath -m "$proj")"; do
+                existing="$(cat "$claude_cfg" 2>/dev/null)"
+                [ -n "$existing" ] || existing='{}'
+                printf '%s' "$existing" \
+                    | jq --arg p "$key" '.projects[$p].hasTrustDialogAccepted = true' \
+                        > "$claude_cfg.tmp" && mv "$claude_cfg.tmp" "$claude_cfg"
+            done
+        fi
+        ;;
+esac
 
 # Plant the built-in read-tool fixtures (a gated secret + an ungated readme) and
 # wire the shared stdio MCP server via project `.mcp.json`, so the tool-use cases

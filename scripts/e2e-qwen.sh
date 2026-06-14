@@ -86,7 +86,7 @@ sandbox="$(mktemp -d)"
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
 # elsewhere.
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -99,6 +99,10 @@ git init -q "$proj"
 # allowlister user config. Both `init` and the hook process inherit these, so the
 # rules and the hook registration line up with no ambient state leaking in.
 export HOME="$sandbox/home"
+# Node resolves the user home from USERPROFILE on Windows, not $HOME, so point it
+# at the sandbox too — otherwise `qwen` reads the real ~/.qwen and never sees the
+# hook `init --global` just wrote under $HOME. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 export XDG_CONFIG_HOME="$sandbox/xdg"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME"
 export QWEN_CODE_SUPPRESS_YOLO_WARNING=1

@@ -79,7 +79,7 @@ sandbox="$(mktemp -d)"
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
 # elsewhere.
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -91,6 +91,9 @@ mkdir -p "$proj/.git"
 # config.yaml is needed. The project plugin under <proj>/.agents/plugins is
 # discovered relative to the cwd regardless of HOME.
 export HOME="$sandbox/home"
+# Node/Electron tools resolve the user home from USERPROFILE on Windows, not
+# $HOME; point it at the sandbox too. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 mkdir -p "$HOME"
 export GOOSE_MODE=auto
 export GOOSE_DISABLE_SESSION_NAMING=true

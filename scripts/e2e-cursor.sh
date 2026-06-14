@@ -72,7 +72,7 @@ sandbox="$(mktemp -d)"
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
 # elsewhere.
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -145,9 +145,15 @@ run_agent() {
     esac
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
+    # On Windows cursor-agent's hook command is a PowerShell wrapper; if $SHELL is
+    # set it tries to eval it as a POSIX shell and fails. Blank SHELL so it uses
+    # native execution. No-op off Windows.
+    local win_env=()
+    case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win_env=(--env "SHELL=") ;; esac
     al_run cursor "$prompt" "$stream" \
         --cwd "$proj" --timeout 180 --bin cursor="$agent_bin" \
         --env "XDG_CONFIG_HOME=$sandbox/xdg" \
+        ${win_env[@]+"${win_env[@]}"} \
         --output-format stream-json \
         ${model_args[@]+"${model_args[@]}"} \
         ${approve[@]+"${approve[@]}"}

@@ -66,7 +66,9 @@ al_spawnable_bin() {
             || command -v "$cmd" 2>/dev/null || true)"
     fi
     [ -n "$resolved" ] || { printf '%s' "$cmd"; return 0; }
-    cygpath -w "$resolved" 2>/dev/null || printf '%s' "$resolved"
+    # Forward slashes (cygpath -m), not backslashes (-w): a backslashed path
+    # breaks when interpolated into TOML/args the harness later parses.
+    cygpath -m "$resolved" 2>/dev/null || printf '%s' "$resolved"
 }
 
 # Register the stdio MCP server fixture as server "altest" in a JSON settings file

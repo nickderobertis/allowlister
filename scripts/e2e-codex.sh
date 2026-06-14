@@ -81,7 +81,7 @@ sandbox="$(cd "$sandbox" && pwd -P)"
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op
 # elsewhere.
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -m "$sandbox")" ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -94,6 +94,9 @@ git init -q "$proj"
 # exec/app-server path never wires them — so this check drives the INTERACTIVE
 # `codex` TUI (in a pseudo-terminal), which is the entry point that consults hooks.
 export HOME="$sandbox/home"
+# Some tools resolve the user home from USERPROFILE on Windows, not $HOME; point
+# it at the sandbox too so the global hook and the harness agree. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 mkdir -p "$HOME/.codex"
 
 # Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
