@@ -394,7 +394,10 @@ mod tests {
     #[test]
     fn gate_program_is_absolute_exe_on_windows() {
         let exe = PathBuf::from(r"C:\Tools\allowlister.exe");
-        assert_eq!(gate_program_for(Some(exe), true), "C:/Tools/allowlister.exe");
+        assert_eq!(
+            gate_program_for(Some(exe), true),
+            "C:/Tools/allowlister.exe"
+        );
         assert_eq!(gate_program_for(None, true), "allowlister.exe");
     }
 }
