@@ -89,9 +89,15 @@ jobs:
           echo "post-install agent candidates:"
           find "$HOME" -type f \( -iname 'cursor-agent*' -o -iname 'agent.exe' \) 2>/dev/null | sed 's/^/  /' | head -20 || true
           bin="$(command -v cursor-agent 2>/dev/null || true)"
-          [ -z "$bin" ] && bin="$(find "$HOME" -type f \( -iname 'cursor-agent' -o -iname 'cursor-agent.exe' \) 2>/dev/null | head -1)"
-          [ -z "$bin" ] && bin="$(find "$HOME" -type f -iname 'agent.exe' 2>/dev/null | grep -iE 'cursor|/\.local/' | head -1)"
-          [ -z "$bin" ] && bin="$(find "$HOME" -type f -iname 'agent.exe' 2>/dev/null | head -1)"
+          # The win32 installer ships the CLI as cursor-agent.cmd under
+          # ~/AppData/Local/cursor-agent (a sibling cursor-agent-svc.* is the
+          # service helper, not the CLI — exclude it; prefer the top-level shim
+          # over the per-version copies).
+          if [ -z "$bin" ]; then
+            bin="$(find "$HOME" -type f \( -iname 'cursor-agent' -o -iname 'cursor-agent.exe' -o -iname 'cursor-agent.cmd' \) 2>/dev/null \
+              | grep -ivE 'svc|/versions/' | head -1)"
+          fi
+          [ -z "$bin" ] && bin="$(find "$HOME" -type f -iname 'cursor-agent.cmd' 2>/dev/null | grep -iv svc | head -1)"
           if [ -n "$bin" ]; then
             echo "$(dirname "$bin")" >> "$GITHUB_PATH"
             echo "CURSOR_AGENT_BIN=$bin" >> "$GITHUB_ENV"
