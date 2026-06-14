@@ -29,13 +29,25 @@ env:
 
 jobs:
   live:
-    name: copilot live e2e
+    name: copilot live e2e (${{ matrix.os }})
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux/macOS only: GitHub Copilot CLI does not load its preToolUse hook
+        # on Windows, so the gate cannot be enforced there (a harness limitation
+        # oneharness documents and excludes too). See the README support matrix.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # so Windows runs them through Git Bash rather than the default PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -58,7 +70,7 @@ jobs:
       # script skips (a missing oneharness is a skip, like a missing harness).
       - name: Install oneharness (drives the live check)
         run: |
-          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.1.1 --locked
+          cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
           oneharness --version
 
       - name: Install Copilot CLI

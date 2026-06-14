@@ -59,8 +59,13 @@ if ! command -v oneharness >/dev/null 2>&1; then
     exit 0
 fi
 
+# On Windows, resolve the harness command to a path the native oneharness can
+# spawn — npm installs a <name>.cmd shim, not a bare-name .exe. No-op off Windows.
+agent_bin="$(al_spawnable_bin "$agent_bin")"
+
 note "» building release binary"
 ( cd "$repo_root" && cargo build --release --locked --quiet )
+[ -x "$bin" ] || bin="$bin.exe"  # Windows builds produce allowlister.exe
 [ -x "$bin" ] || fail "release binary not found at $bin"
 
 # allowlister must be on PATH so the plugin shim's `allowlister hook opencode`
@@ -69,6 +74,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# On Windows the harness, oneharness and allowlister binaries are native, so the
+# bash sandbox path must be one they understand: cygpath -m yields a C:/... path
+# (forward slashes still work for bash builtins and in JSON config). No-op
+# elsewhere.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) sandbox="$(cygpath -ml "$sandbox" 2>/dev/null || cygpath -m "$sandbox")" ;; esac
 cleanup() { [ "${ALLOWLISTER_E2E_KEEP:-0}" = "1" ] || rm -rf "$sandbox"; }
 trap cleanup EXIT
 
@@ -80,6 +90,9 @@ mkdir -p "$proj/.git"
 # is needed. The project plugin under <proj>/.opencode/plugin is discovered from
 # the cwd regardless of HOME.
 export HOME="$sandbox/home"
+# Node tools resolve the user home from USERPROFILE on Windows, not $HOME; point
+# it at the sandbox too. No-op off Windows.
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) export USERPROFILE="$(cygpath -w "$HOME")" ;; esac
 mkdir -p "$HOME"
 
 # Deterministic rules: deny `touch`, allow `mkdir`. The allow case is a
@@ -107,7 +120,7 @@ note "» wiring the project with \`allowlister init --harness opencode\`"
     || fail "allowlister init failed to set the project up"
 [ -f "$proj/.allowlister.jsonc" ] || fail "init did not write the project config"
 # The shim spawns the gate command as a JSON argv array, not a spaced string.
-grep -q '"allowlister","hook","opencode"' "$proj/.opencode/plugin/allowlister.js" \
+grep -q '"hook","opencode"' "$proj/.opencode/plugin/allowlister.js" \
     || fail "init did not write the OpenCode plugin shim"
 
 # Plant the built-in read fixtures and register the shared stdio MCP server in
@@ -179,8 +192,13 @@ fi
 
 note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
+# On Windows an absolute C:/... arg breaks in the harness shell (cmd rejects
+# forward slashes, Git Bash mis-roots a bare C:); the harness runs with cwd=$proj,
+# so pass a bare name it creates there. The assertion still checks the abs path.
+allow_arg="$allow_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
 rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
     "$sandbox/allow.stream"
 [ -d "$allow_sentinel" ] || {
     dump_transcript "$sandbox/allow.stream" allow

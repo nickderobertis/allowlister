@@ -163,7 +163,7 @@ pub(crate) fn install_hook(
 ) -> Result<HookOutcome> {
     let policy = policy_for(harness);
     let spec = by_id(policy.id).expect("oneharness registry has every harness allowlister wires");
-    let command = format!("allowlister hook {}", policy.id);
+    let command = format!("{} hook {}", gate_program(), policy.id);
 
     // `Scope::Global` borrows the resolved dirs; build them once and keep them
     // alive for the duration of every install call below.
@@ -230,6 +230,30 @@ pub(crate) fn install_hook(
         denies_added,
         changed,
     })
+}
+
+/// The program token for the installed gate command (`<program> hook <id>`). On
+/// Unix the bare `allowlister` resolves on PATH the way harnesses spawn the hook.
+/// On Windows use the absolute path to this executable with forward slashes — the
+/// form oneharness's own cross-harness hook-enforcement uses: it resolves however
+/// a harness spawns the hook (a bare name fails open for the direct spawners), and
+/// forward slashes avoid the backslash misparse (…\target\release\… has \t, \r).
+/// The init summary still prints the friendly bare form for every harness.
+fn gate_program() -> String {
+    gate_program_for(std::env::current_exe().ok(), cfg!(windows))
+}
+
+/// Pure core of [`gate_program`], split out so both platform branches are
+/// testable on any host. Falls back to a bare `allowlister.exe` when the current
+/// executable path can't be resolved on Windows.
+fn gate_program_for(current_exe: Option<PathBuf>, windows: bool) -> String {
+    if windows {
+        current_exe
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .unwrap_or_else(|| "allowlister.exe".to_string())
+    } else {
+        "allowlister".to_string()
+    }
 }
 
 /// Build the normalized hook for one matcher of a policy.
@@ -353,5 +377,27 @@ mod tests {
         assert_eq!(harness_id(Harness::ClaudeCode), "claude-code");
         assert_eq!(harness_id(Harness::OpenCode), "opencode");
         assert_eq!(harness_id(Harness::Copilot), "copilot");
+    }
+
+    /// On Unix the gate command is the bare name that resolves on PATH.
+    #[test]
+    fn gate_program_is_bare_name_on_unix() {
+        assert_eq!(
+            gate_program_for(Some(PathBuf::from("/opt/bin/allowlister")), false),
+            "allowlister"
+        );
+    }
+
+    /// On Windows it is the absolute executable path with forward slashes, so a
+    /// harness that spawns the hook directly finds it (a bare name fails open;
+    /// backslashes get misparsed). Falls back to `allowlister.exe`.
+    #[test]
+    fn gate_program_is_absolute_exe_on_windows() {
+        let exe = PathBuf::from(r"C:\Tools\allowlister.exe");
+        assert_eq!(
+            gate_program_for(Some(exe), true),
+            "C:/Tools/allowlister.exe"
+        );
+        assert_eq!(gate_program_for(None, true), "allowlister.exe");
     }
 }

@@ -834,7 +834,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oneharness-core"
 version = "0.2.38"
-source = "git+https://github.com/nickderobertis/oneharness?tag=v0.2.40#dc8f80735212a8f778ced37bedd7777431afb4cd"
+source = "git+https://github.com/nickderobertis/oneharness?tag=v0.2.44#bd807a2079739b3129263f5b1c95af06cd34ed28"
 dependencies = [
  "serde",
  "serde_json",

@@ -29,13 +29,25 @@ env:
 
 jobs:
   live:
-    name: codex live e2e
+    name: codex live e2e (${{ matrix.os }})
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux/macOS only: Codex loads hooks solely in its interactive TUI, which
+        # this check drives through a pseudo-terminal — unavailable on Windows — so
+        # the gate cannot be enforced there. See the README support matrix.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # so Windows runs them through Git Bash rather than the default PowerShell.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

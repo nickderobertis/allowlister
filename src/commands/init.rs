@@ -1034,10 +1034,10 @@ mod tests {
         assert!(settings.is_file(), "the hook must be registered locally");
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(settings).unwrap()).unwrap();
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "allowlister hook claude-code"
-        );
+        assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook claude-code"));
     }
 
     #[test]
@@ -1159,10 +1159,10 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
         assert_eq!(doc["version"], 1);
-        assert_eq!(
-            doc["hooks"]["beforeShellExecution"][0]["command"],
-            "allowlister hook cursor"
-        );
+        assert!(doc["hooks"]["beforeShellExecution"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook cursor"));
     }
 
     #[test]
@@ -1223,10 +1223,10 @@ mod tests {
             doc["hooks"]["PreToolUse"][0]["matcher"],
             "^(Bash|apply_patch)$|^mcp__"
         );
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "allowlister hook codex"
-        );
+        assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook codex"));
     }
 
     #[test]
@@ -1290,10 +1290,10 @@ mod tests {
             doc["hooks"]["PreToolUse"][0]["matcher"],
             "^(bash|view|write|edit|multiedit|fetch|web_fetch|web_search|glob|grep)$|^mcp_"
         );
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["command"],
-            "allowlister hook crush"
-        );
+        assert!(doc["hooks"]["PreToolUse"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook crush"));
     }
 
     #[test]
@@ -1357,10 +1357,10 @@ mod tests {
             doc["hooks"]["PreToolUse"][0]["matcher"],
             "^(run_shell_command|read_file|write_file|edit|glob|grep_search|web_fetch)$|^mcp__"
         );
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "allowlister hook qwen"
-        );
+        assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook qwen"));
     }
 
     #[test]
@@ -1426,10 +1426,13 @@ mod tests {
             doc["hooks"]["PreToolUse"][0]["matcher"],
             "^(shell|read|write|edit|text_editor)$|__"
         );
-        assert_eq!(
-            doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-            "allowlister hook goose"
-        );
+        // On Windows the goose command is the absolute exe path (its plugin runner
+        // spawns it directly); elsewhere it is the bare name. Assert the gate
+        // subcommand, not the program token.
+        assert!(doc["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook goose"));
     }
 
     #[test]
@@ -1492,7 +1495,9 @@ mod tests {
         );
         let text = fs::read_to_string(plugin).unwrap();
         // The installed shim spawns the gate command as a JSON argv array.
-        assert!(text.contains(r#"["allowlister","hook","opencode"]"#));
+        // On Windows the program token is the absolute exe path; match the gate
+        // subcommand tail of the argv array, not the program element.
+        assert!(text.contains(r#","hook","opencode"]"#));
         assert!(text.contains("tool.execute.before"));
     }
 
@@ -1558,10 +1563,10 @@ mod tests {
         let doc: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(hooks).unwrap()).unwrap();
         assert_eq!(doc["version"], 1);
-        assert_eq!(
-            doc["hooks"]["preToolUse"][0]["bash"],
-            "allowlister hook copilot"
-        );
+        assert!(doc["hooks"]["preToolUse"][0]["bash"]
+            .as_str()
+            .unwrap()
+            .ends_with("hook copilot"));
     }
 
     #[test]
