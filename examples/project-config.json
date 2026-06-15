@@ -1,4 +1,5 @@
 {
+  "$schema": "https://nickderobertis.github.io/allowlister/allowlister.schema.json",
   "rules": [
     { "name": "gh api scoped to myorg",
       "argv": ["gh", "api", "repos/myorg/**"],

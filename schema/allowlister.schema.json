@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nickderobertis.github.io/allowlister/allowlister.schema.json",
+  "title": "allowlister config",
+  "description": "Configuration for allowlister: allow/deny/ask rules for AI coding-agent shell commands and tool calls. Files are JSONC (strict JSON plus // line and /* */ block comments).",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "URI of this JSON Schema, so editors validate and autocomplete the config."
+    },
+    "name": {
+      "type": "string",
+      "description": "Optional profile name (metadata; ignored by the loader)."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional profile description (metadata; ignored by the loader)."
+    },
+    "rules": {
+      "type": "array",
+      "description": "Rules evaluated against each command fragment or tool call. Order never changes the verdict (deny > ask > allow > defer), only which rule is cited in the reason.",
+      "items": { "$ref": "#/$defs/rule" }
+    },
+    "history": {
+      "type": "object",
+      "description": "Opt-in local usage-history recording. A later-loaded config (project over user) wins.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Record each evaluation (verdict plus parsed subcommands) to disk. Off by default."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "action": {
+      "type": "string",
+      "description": "What the rule does when it matches. Defaults to 'allow'.",
+      "enum": ["allow", "deny", "ask"]
+    },
+    "kind": {
+      "type": "string",
+      "description": "How 'match'/'argv' patterns are interpreted. Defaults to 'glob'.",
+      "enum": ["glob", "regex", "literal"]
+    },
+    "role": {
+      "type": "string",
+      "description": "Restrict the rule to fragments in this shell role. Default: any role.",
+      "enum": [
+        "standalone",
+        "pipe_source",
+        "pipe_filter",
+        "subshell",
+        "substitution"
+      ]
+    },
+    "glob": {
+      "description": "A single glob or an array of globs (any-of).",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "redirections": {
+      "type": "object",
+      "description": "Per-rule redirection policy. By default out-redirects are denied and in-redirects to named files are allowed.",
+      "properties": {
+        "deny": {
+          "type": "boolean",
+          "description": "Forbid all redirections on a matched command (overrides the globs below)."
+        },
+        "write_glob": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed targets for out-redirects (> >> >| &>)."
+        },
+        "read_glob": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Allowed targets for in-redirects (< << <<<)."
+        }
+      },
+      "additionalProperties": false
+    },
+    "params": {
+      "type": "object",
+      "description": "Canonical, portable tool parameters, each mapped to one or more globs (any-of). A missing param means the rule does not match.",
+      "properties": {
+        "path": { "$ref": "#/$defs/glob" },
+        "url": { "$ref": "#/$defs/glob" },
+        "query": { "$ref": "#/$defs/glob" },
+        "pattern": { "$ref": "#/$defs/glob" },
+        "content": { "$ref": "#/$defs/glob" },
+        "mcp_server": { "$ref": "#/$defs/glob" },
+        "mcp_tool": { "$ref": "#/$defs/glob" }
+      },
+      "additionalProperties": false
+    },
+    "rule": {
+      "type": "object",
+      "description": "A shell-command rule (sets exactly one of 'match' or 'argv') or a tool-call rule (sets 'tool'). The two forms are mutually exclusive.",
+      "oneOf": [
+        { "$ref": "#/$defs/bashRule" },
+        { "$ref": "#/$defs/toolRule" }
+      ]
+    },
+    "bashRule": {
+      "type": "object",
+      "description": "Gates a shell command. Sets exactly one of 'match' or 'argv'.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier shown in the decision reason."
+        },
+        "action": { "$ref": "#/$defs/action" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "match": {
+          "type": "string",
+          "description": "Pattern matched against the command's argv joined by spaces."
+        },
+        "argv": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Per-element argv patterns; a trailing '**' matches any tail."
+        },
+        "roles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/role" },
+          "description": "Restrict the rule to these shell roles. Default: any role."
+        },
+        "redirections": { "$ref": "#/$defs/redirections" },
+        "grants": {
+          "type": "string",
+          "enum": ["command", "redirections"],
+          "description": "'command' (default) authorizes the command itself; 'redirections' only widens redirection targets for an already-authorized command (requires action 'allow' and a 'redirections' block)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional free-text note."
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["match"] },
+        { "required": ["argv"] }
+      ]
+    },
+    "toolRule": {
+      "type": "object",
+      "description": "Gates a non-shell tool call. Sets 'tool' and must not set any bash-only field.",
+      "required": ["tool"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier shown in the decision reason."
+        },
+        "action": { "$ref": "#/$defs/action" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "tool": {
+          "type": "string",
+          "description": "A capability (read, write, edit, glob, grep, web_fetch, web_search), 'mcp', or a raw tool-name glob such as 'mcp__github__*'."
+        },
+        "params": { "$ref": "#/$defs/params" },
+        "jsonpath": {
+          "type": "object",
+          "description": "Match an MCP server's own (non-portable) parameters by a dotted path into the raw tool input, each mapped to one or more globs.",
+          "additionalProperties": { "$ref": "#/$defs/glob" }
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional free-text note."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

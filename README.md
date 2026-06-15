@@ -442,6 +442,17 @@ plus `//` line and `/* */` block comments, so a config can document itself.
 Name config files `.jsonc` (the default for new files) so editors accept the
 comments; the `.json` spelling remains fully supported:
 
+A published [JSON Schema](schema/allowlister.schema.json) describes the full
+config format. Reference it with a `"$schema"` key so your editor validates rules
+and autocompletes fields (allowlister ignores the key):
+
+```jsonc
+{
+  "$schema": "https://nickderobertis.github.io/allowlister/allowlister.schema.json",
+  "rules": [ /* … */ ]
+}
+```
+
 ```jsonc
 {
   "name": "human-readable identifier shown in the decision reason",

@@ -1,4 +1,5 @@
 {
+  "$schema": "https://nickderobertis.github.io/allowlister/allowlister.schema.json",
   "rules": [
     { "name": "ls",          "match": "ls*",                 "action": "allow" },
     { "name": "pwd",         "match": "pwd",                 "action": "allow" },

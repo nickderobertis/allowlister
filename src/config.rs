@@ -489,6 +489,21 @@ mod tests {
     }
 
     #[test]
+    fn schema_key_is_accepted_and_ignored() {
+        // A `"$schema"` pointing at the published JSON Schema lets editors
+        // validate the file; the loader treats it as a no-op, not a warning.
+        let dir = TempDir::new().unwrap();
+        let path = write_config(
+            &dir,
+            "c.json",
+            r#"{"$schema":"https://nickderobertis.github.io/allowlister/allowlister.schema.json","rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
+        );
+        let config = load_from_paths(&[path]);
+        assert_eq!(config.rules.len(), 1);
+        assert!(config.warnings.is_empty());
+    }
+
+    #[test]
     fn strips_line_and_block_comments_preserving_offsets() {
         let src = "{\n  // a note\n  \"rules\": [] /* trailing */\n}";
         let out = strip_jsonc_comments(src);
