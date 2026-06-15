@@ -9,13 +9,14 @@
 
 use fancy_regex::Regex;
 use serde_json::Value;
+use strum::VariantArray;
 
 use super::analyzer::{Fragment, RedirClass, Redirection, Role};
 use super::glob::{compile_glob_matcher, compile_regex, Matcher};
 use super::toolcall::{Capability, ParamKey, ToolCall};
 
 /// Whether a rule grants, blocks, or surfaces a matching fragment for approval.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, VariantArray)]
 pub enum Action {
     Allow,
     Deny,
@@ -26,6 +27,27 @@ pub enum Action {
     Ask,
 }
 
+impl Action {
+    /// The wire string for this action, as written in a rule's `action` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Action::Allow => "allow",
+            Action::Deny => "deny",
+            Action::Ask => "ask",
+        }
+    }
+
+    /// Parse the `action` config field; defaults to allow.
+    pub fn parse(value: Option<&str>) -> Result<Action, String> {
+        match value {
+            None | Some("allow") => Ok(Action::Allow),
+            Some("deny") => Ok(Action::Deny),
+            Some("ask") => Ok(Action::Ask),
+            Some(other) => Err(format!("unknown action '{other}'")),
+        }
+    }
+}
+
 /// What an allow rule grants the commands it matches.
 ///
 /// `Command` (the default) authorizes the command itself. `Redirections` grants
@@ -34,15 +56,34 @@ pub enum Action {
 /// invariant that a redirection can never be what grants execution permission,
 /// while letting a profile widen scratch-write targets (e.g. `/tmp`) for every
 /// already-allowed command without repeating the policy on each rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, VariantArray)]
 pub enum Grant {
     #[default]
     Command,
     Redirections,
 }
 
+impl Grant {
+    /// The wire string for this grant, as written in a rule's `grants` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Grant::Command => "command",
+            Grant::Redirections => "redirections",
+        }
+    }
+
+    /// Parse the `grants` config field; defaults to command.
+    pub fn parse(value: Option<&str>) -> Result<Grant, String> {
+        match value {
+            None | Some("command") => Ok(Grant::Command),
+            Some("redirections") => Ok(Grant::Redirections),
+            Some(other) => Err(format!("unknown grant '{other}'")),
+        }
+    }
+}
+
 /// How a pattern string is interpreted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, VariantArray)]
 pub enum MatchKind {
     Glob,
     Regex,
@@ -50,6 +91,15 @@ pub enum MatchKind {
 }
 
 impl MatchKind {
+    /// The wire string for this kind, as written in a rule's `kind` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MatchKind::Glob => "glob",
+            MatchKind::Regex => "regex",
+            MatchKind::Literal => "literal",
+        }
+    }
+
     /// Parse the `kind` config field; defaults to glob.
     pub fn parse(value: Option<&str>) -> Result<MatchKind, String> {
         match value {
