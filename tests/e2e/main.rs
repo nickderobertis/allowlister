@@ -1557,13 +1557,15 @@ fn install_into_an_existing_json_config_updates_it_in_place_keeping_comments() {
         "the existing .json config is the update target, not a new .jsonc"
     );
     let text = fs::read_to_string(&existing).unwrap();
-    // Everything up to the appended rules is byte-for-byte untouched — the
-    // comments keep their exact positions, and the separating comma attaches
-    // to the rule, before its trailing comment.
+    // The comment keeps its exact position; a leading "$schema" is backfilled
+    // before the rules, and the separating comma attaches to the rule, before
+    // its trailing comment. Everything else is byte-for-byte untouched.
+    let expected_prefix = format!(
+        "{{\n  // hand-written note\n  \"$schema\": \"{url}\",\n  \"rules\": [\n    {{ \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }}, // keep\n",
+        url = allowlister::config::SCHEMA_URL,
+    );
     assert!(
-        text.starts_with(
-            "{\n  // hand-written note\n  \"rules\": [\n    { \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }, // keep\n"
-        ),
+        text.starts_with(&expected_prefix),
         "comments must keep their positions: {text}"
     );
     let doc: Value =
@@ -1607,10 +1609,16 @@ fn init_history_keeps_a_commented_profiles_comments_in_place() {
         .success()
         .stdout(predicate::str::contains("history recording is ON"));
     let written = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
+    // The profile's comment survives; init backfills a leading "$schema", then
+    // the history member is spliced in at the end — every original byte else
+    // keeps its position.
+    let expected = format!(
+        "{{\n  // team notes\n  \"$schema\": \"{url}\",\n  \"rules\": [\n    {{ \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" }} // why\n  ],\n  \"history\": {{\n    \"enabled\": true\n  }}\n}}\n",
+        url = allowlister::config::SCHEMA_URL,
+    );
     assert_eq!(
-        written,
-        "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ],\n  \"history\": {\n    \"enabled\": true\n  }\n}\n",
-        "the profile text must survive byte-for-byte around the spliced history member"
+        written, expected,
+        "the profile text must survive byte-for-byte around the spliced $schema and history members"
     );
 }
 
@@ -1686,6 +1694,256 @@ fn install_from_a_file_source_via_the_binary() {
         .stdout(predicate::str::contains("Created"))
         .stdout(predicate::str::contains("1 rule(s) added"));
     assert!(out.is_file());
+}
+
+// ---- $schema stamping: init/install write the published schema key ----------
+//
+// init and install stamp the canonical "$schema" onto the configs they write, so
+// a file validates and autocompletes in an editor out of the box. New files lead
+// with it; an existing file is backfilled only when it lacks one (a user's own
+// value is never overwritten or duplicated); and the "kept as-is" init path adds
+// nothing. The key is inert to the engine, so a stamped config still gates.
+
+/// Count the top-level `"$schema"` keys in a config's text.
+fn schema_key_count(text: &str) -> usize {
+    text.matches("\"$schema\"").count()
+}
+
+/// Parse a (possibly commented) config file into a JSON value.
+fn read_config_doc(path: &Path) -> Value {
+    let raw = fs::read_to_string(path).unwrap();
+    serde_json::from_str(&allowlister::config::strip_jsonc_comments(&raw)).unwrap()
+}
+
+#[test]
+fn install_new_config_leads_with_the_schema_key() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.jsonc");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success();
+    let text = fs::read_to_string(&out).unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "{{\n  \"$schema\": \"{}\",\n",
+            allowlister::config::SCHEMA_URL
+        )),
+        "a fresh config must lead with the $schema key: {text}"
+    );
+    assert_eq!(schema_key_count(&text), 1, "exactly one $schema key");
+    assert_eq!(
+        read_config_doc(&out)["$schema"],
+        allowlister::config::SCHEMA_URL
+    );
+}
+
+#[test]
+fn install_local_new_config_is_stamped_and_still_gates() {
+    let dir = TempDir::new().unwrap();
+    // A `.git` marker stops project-config discovery at this directory.
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--local"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created"));
+    let config = dir.path().join(".allowlister.jsonc");
+    assert_eq!(
+        read_config_doc(&config)["$schema"],
+        allowlister::config::SCHEMA_URL
+    );
+    // The inert key does not disturb gating: a pure read still allows, proving the
+    // stamped config loads cleanly through the real engine.
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["check", "git status", "--cwd"])
+        .arg(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn install_from_a_file_source_stamps_the_schema_key() {
+    let dir = TempDir::new().unwrap();
+    let src = dir.path().join("custom.json");
+    // A user's own ruleset with no $schema of its own.
+    fs::write(
+        &src,
+        r#"{"rules":[{"name":"mine","match":"my_tool *","action":"allow"}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("config.json");
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .arg("install")
+        .arg(&src)
+        .arg("--output")
+        .arg(&out)
+        .assert()
+        .success();
+    let doc = read_config_doc(&out);
+    assert_eq!(doc["$schema"], allowlister::config::SCHEMA_URL);
+    assert_eq!(
+        doc["rules"][0]["name"], "mine",
+        "the source's rule survives"
+    );
+}
+
+#[test]
+fn install_backfills_the_schema_key_on_an_uncommented_existing_config() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.json");
+    fs::write(
+        &out,
+        r#"{"rules":[{"name":"keep","match":"ls*","action":"allow"}]}"#,
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated"));
+    let text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        schema_key_count(&text),
+        1,
+        "exactly one $schema key was added"
+    );
+    let doc = read_config_doc(&out);
+    assert_eq!(doc["$schema"], allowlister::config::SCHEMA_URL);
+    let names: Vec<&str> = doc["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"keep"), "the existing rule survives");
+    assert!(names.len() > 30, "the profile rules were merged in");
+}
+
+#[test]
+fn install_leaves_an_existing_custom_schema_untouched() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.json");
+    let custom = "https://example.com/my-own.schema.json";
+    fs::write(
+        &out,
+        format!(
+            r#"{{"$schema":"{custom}","rules":[{{"name":"mine","match":"ls*","action":"allow"}}]}}"#
+        ),
+    )
+    .unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["install", "read-only", "--output"])
+        .arg(&out)
+        .assert()
+        .success();
+    let text = fs::read_to_string(&out).unwrap();
+    // The user's own $schema is preserved, never overwritten with ours, and never
+    // duplicated by a second key.
+    assert_eq!(schema_key_count(&text), 1, "no duplicate $schema key");
+    assert_eq!(
+        read_config_doc(&out)["$schema"],
+        custom,
+        "an existing $schema is left exactly as the user set it"
+    );
+}
+
+#[test]
+fn install_does_not_duplicate_the_schema_key_on_reinstall() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("cfg.jsonc");
+    let run = || {
+        Command::cargo_bin("allowlister")
+            .unwrap()
+            .args(["install", "read-only", "--output"])
+            .arg(&out)
+            .assert()
+            .success();
+    };
+    run();
+    let after_first = fs::read_to_string(&out).unwrap();
+    run();
+    let after_second = fs::read_to_string(&out).unwrap();
+    // A redundant re-install (rules present, $schema present) leaves the file
+    // byte-identical with a single $schema key.
+    assert_eq!(after_first, after_second, "re-install is a no-op write");
+    assert_eq!(schema_key_count(&after_second), 1);
+}
+
+#[test]
+fn init_local_default_config_is_stamped_with_the_schema_key() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let config = dir.path().join(".allowlister.jsonc");
+    let text = fs::read_to_string(&config).unwrap();
+    assert!(
+        text.starts_with(&format!(
+            "{{\n  \"$schema\": \"{}\",\n",
+            allowlister::config::SCHEMA_URL
+        )),
+        "the default starter config must lead with $schema: {text}"
+    );
+    assert_eq!(schema_key_count(&text), 1);
+}
+
+#[test]
+fn init_force_overwrite_stamps_the_schema_key() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join(".allowlister.json"), "{}").unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args([
+            "init",
+            "--local",
+            "--force",
+            "--profile",
+            "read-only",
+            "--no-hooks",
+        ])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let doc = read_config_doc(&dir.path().join(".allowlister.json"));
+    assert_eq!(
+        doc["$schema"],
+        allowlister::config::SCHEMA_URL,
+        "a forced overwrite writes a stamped config"
+    );
+}
+
+#[test]
+fn init_kept_as_is_config_is_not_backfilled_with_a_schema_key() {
+    // `init` over an existing config (no --force) keeps it byte-for-byte and only
+    // wires the hook — it never touches the config, so it adds no $schema either.
+    let dir = TempDir::new().unwrap();
+    let config = dir.path().join(".allowlister.jsonc");
+    let original = r#"{"rules":[{"name":"keep","match":"ls*","action":"allow"}]}"#;
+    fs::write(&config, original).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already exists"));
+    let text = fs::read_to_string(&config).unwrap();
+    assert_eq!(text, original, "the kept config is untouched");
+    assert_eq!(schema_key_count(&text), 0, "no $schema is forced onto it");
 }
 
 #[test]
@@ -3312,11 +3570,13 @@ fn init_profile_from_a_file_writes_the_source_and_gates() {
         .current_dir(project.path())
         .assert()
         .success();
-    // The source file lands verbatim as the project config.
-    assert_eq!(
-        fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap(),
-        fs::read_to_string(&source).unwrap()
-    );
+    // The source's rules land as the project config, stamped with a leading
+    // "$schema" so the new file validates in an editor.
+    let written = fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap();
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&written)).unwrap();
+    assert_eq!(doc["$schema"], allowlister::config::SCHEMA_URL);
+    assert_eq!(doc["rules"][0]["name"], "my tool");
     Command::cargo_bin("allowlister")
         .unwrap()
         .args(["check", "my_company_tool --run", "--cwd"])

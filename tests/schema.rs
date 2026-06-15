@@ -11,8 +11,11 @@ use allowlister::domain::{ParamKey, Role};
 use serde_json::Value;
 
 /// The canonical, publicly hosted location of the schema. Editors and tooling
-/// reference this exact string; the example configs embed it as `"$schema"`.
-const SCHEMA_ID: &str = "https://nickderobertis.github.io/allowlister/allowlister.schema.json";
+/// reference this exact string; the example configs embed it as `"$schema"`, and
+/// `init`/`install` stamp it onto the configs they write. Tied to the crate
+/// constant so the schema file's `$id`, the docs, and what the binary writes can
+/// never drift apart.
+const SCHEMA_ID: &str = allowlister::config::SCHEMA_URL;
 
 fn schema() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schema/allowlister.schema.json");

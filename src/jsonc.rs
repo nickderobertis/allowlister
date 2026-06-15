@@ -212,6 +212,60 @@ pub(crate) fn set_top_level(text: &str, key: &str, value: &Value) -> Result<Stri
     Ok(edited)
 }
 
+/// Insert top-level `key` as the *first* member of `text`, preserving every
+/// comment and the existing formatting. A no-op when `key` is already present:
+/// its current value is left exactly where it is, never moved or overwritten.
+/// `key` must not require JSON string escaping. Used to stamp a leading
+/// `"$schema"` onto a config without disturbing the rules below it.
+pub(crate) fn set_top_level_first(text: &str, key: &str, value: &Value) -> Result<String, String> {
+    let stripped = strip_jsonc_comments(text);
+    let top = top_level(&stripped)?;
+    if top.members.iter().any(|m| m.key == key) {
+        return Ok(text.to_string());
+    }
+    let Some(first) = top.members.first() else {
+        // No members yet: the first position is the only position, so the
+        // appending insert already produces the right result.
+        return set_top_level(text, key, value);
+    };
+    let rendered = pretty(value);
+    let edited = match line_indent(&stripped, first.key_start) {
+        Some(indent) => {
+            // The first member starts its own line: add a fresh member line above
+            // it at the same indent, carrying the comma that now precedes it.
+            let at = line_start(text, first.key_start);
+            let member = format!(
+                "{indent}\"{key}\": {},\n",
+                indent_block(&rendered, &indent, false)
+            );
+            let mut out = String::with_capacity(text.len() + member.len());
+            out.push_str(&text[..at]);
+            out.push_str(&member);
+            out.push_str(&text[at..]);
+            out
+        }
+        None => {
+            // The first member shares the opening brace's line (e.g. `{ "rules": [] }`):
+            // break the object open and place the new member on its own line.
+            let at = skip_ws(stripped.as_bytes(), 0) + 1;
+            let member = format!("\n  \"{key}\": {},", indent_block(&rendered, "  ", false));
+            let mut out = String::with_capacity(text.len() + member.len());
+            out.push_str(&text[..at]);
+            out.push_str(&member);
+            out.push_str(&text[at..]);
+            out
+        }
+    };
+
+    let mut expected = parse(&stripped)?;
+    expected
+        .as_object_mut()
+        .ok_or("expected a top-level JSON object")?
+        .insert(key.to_string(), value.clone());
+    verify(&edited, &expected)?;
+    Ok(edited)
+}
+
 /// A top-level object member located in the stripped text. Offsets are equally
 /// valid in the original text, because stripping preserves every byte offset.
 struct Member {
@@ -699,5 +753,42 @@ mod tests {
         assert!(out.contains("/* last */"));
         let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
         assert_eq!(doc["rules"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn set_top_level_first_prepends_before_the_existing_members() {
+        let src = "{\n  // header\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" }\n  ]\n}\n";
+        let out = set_top_level_first(src, "$schema", &json!("https://x/s.json")).unwrap();
+        // The new member lands first, above the existing one, at its indent.
+        assert!(
+            out.starts_with("{\n  // header\n  \"$schema\": \"https://x/s.json\",\n  \"rules\": ["),
+            "{out}"
+        );
+        let doc: Value = serde_json::from_str(&strip_jsonc_comments(&out)).unwrap();
+        assert_eq!(doc["$schema"], "https://x/s.json");
+        assert_eq!(doc["rules"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_top_level_first_is_a_noop_when_present() {
+        let src = "{\n  \"$schema\": \"https://old/s.json\",\n  \"rules\": []\n}\n";
+        let out = set_top_level_first(src, "$schema", &json!("https://new/s.json")).unwrap();
+        // Present already: left exactly as-is, value never overwritten.
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn set_top_level_first_handles_empty_and_single_line_objects() {
+        let empty = set_top_level_first("{}", "$schema", &json!("https://x/s.json")).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&empty).unwrap()["$schema"],
+            "https://x/s.json"
+        );
+        let inline =
+            set_top_level_first(r#"{ "rules": [] }"#, "$schema", &json!("https://x/s.json"))
+                .unwrap();
+        let doc: Value = serde_json::from_str(&inline).unwrap();
+        assert_eq!(doc["$schema"], "https://x/s.json");
+        assert!(doc["rules"].as_array().unwrap().is_empty());
     }
 }

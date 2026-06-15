@@ -223,6 +223,17 @@ pub(crate) fn merge_rules_text(
     Ok((text, merge))
 }
 
+/// Stamp the canonical `"$schema"` onto a config as its first key, so the file
+/// `init`/`install` write validates and autocompletes in an editor. A no-op when
+/// the document already declares a `$schema`, so a user's own value is never
+/// overwritten. Best-effort: a document that cannot take a comment-preserving
+/// edit (the configs these verbs handle always can) is returned unchanged rather
+/// than failing the command over a cosmetic key.
+pub(crate) fn ensure_schema(text: &str) -> String {
+    let value = Value::String(config::SCHEMA_URL.to_string());
+    crate::jsonc::set_top_level_first(text, "$schema", &value).unwrap_or_else(|_| text.to_string())
+}
+
 /// Write `contents` to `target`, creating parent directories as needed. Shared
 /// so writing source text verbatim (`init`) and writing a merged document
 /// (`install`) report the same typed write errors.

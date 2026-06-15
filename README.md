@@ -453,6 +453,10 @@ and autocompletes fields (allowlister ignores the key):
 }
 ```
 
+`init` and `install` add this `"$schema"` key for you: a config they create leads
+with it, and one they update gains it if it was missing (an existing `"$schema"`
+is left as-is). So most configs are editor-validated without you typing the URL.
+
 ```jsonc
 {
   "name": "human-readable identifier shown in the decision reason",

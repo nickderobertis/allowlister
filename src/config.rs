@@ -17,6 +17,11 @@ use serde::Deserialize;
 use crate::domain::{Action, Grant, MatchKind, ParamKey, RedirPolicy, Role, Rule, ToolRule};
 use crate::io::configfs::{self, Env};
 
+/// Canonical, publicly hosted location of the config JSON Schema. `init` and
+/// `install` write it as a `"$schema"` key so editors validate and autocomplete
+/// the file; the loader itself accepts and ignores the key.
+pub const SCHEMA_URL: &str = "https://nickderobertis.github.io/allowlister/allowlister.schema.json";
+
 /// The compiled, merged configuration.
 #[derive(Debug, Default)]
 pub struct LoadedConfig {

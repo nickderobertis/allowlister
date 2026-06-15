@@ -482,9 +482,9 @@ fn execute<W: Write>(plan: &Plan, force: bool, cwd: &Path, env: &Env, out: &mut 
         let source = profile::resolve_source(&plan.source)?;
         profile::validate(&source)?;
         profile::incoming_rules(&source)?;
-        // Write the source text verbatim so a built-in profile lands byte-for-byte
-        // identical to the file the recommended-profile tests pin.
-        profile::write_file(&config_path, &source.text)?;
+        // Write the source text (comments and all), stamped with a leading
+        // "$schema" so the fresh config validates and autocompletes in an editor.
+        profile::write_file(&config_path, &profile::ensure_schema(&source.text))?;
         let _ = writeln!(
             out,
             "Wrote {} config: {}",

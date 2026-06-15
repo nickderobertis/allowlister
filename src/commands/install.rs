@@ -27,10 +27,10 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
     let target = target_path(local, output)?;
     let created = !target.exists();
     let merge = if created {
-        // A fresh target gets the source text verbatim, so a built-in profile's
-        // explanatory comments land in the file (matching what `init` writes).
+        // A fresh target gets the source text (comments and all), stamped with a
+        // leading "$schema" so the new file validates in an editor.
         let total = incoming.len();
-        profile::write_file(&target, &source.text)?;
+        profile::write_file(&target, &profile::ensure_schema(&source.text))?;
         profile::Merge {
             added: total,
             skipped: 0,
@@ -43,6 +43,10 @@ pub fn run(source: &str, _global: bool, local: bool, output: Option<&Path>) -> R
         })?;
         let label = target.display().to_string();
         let (updated, merge) = profile::merge_rules_text(&text, &label, incoming)?;
+        // Backfill the "$schema" key on an existing config that lacks one; a
+        // config that already declares it is left untouched, so this writes only
+        // when rules were merged or the key was newly added.
+        let updated = profile::ensure_schema(&updated);
         if updated != text {
             profile::write_file(&target, &updated)?;
         }
@@ -188,6 +192,12 @@ mod tests {
             text.contains("//"),
             "the profile's explanatory comments must land in the file"
         );
+        // A fresh config is stamped with the canonical "$schema" as its first key.
+        assert!(
+            text.starts_with(&format!("{{\n  \"$schema\": \"{}\",\n", config::SCHEMA_URL)),
+            "the new config must lead with a $schema key: {text}"
+        );
+        assert_eq!(read(&target)["$schema"], config::SCHEMA_URL);
     }
 
     #[test]
@@ -205,17 +215,21 @@ mod tests {
 
         run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
         let text = fs::read_to_string(&target).unwrap();
-        // Everything up to the appended rule is byte-for-byte untouched; the
-        // trailing comment stays attached to its rule, after the new comma.
+        // The hand-written comment survives; a leading "$schema" is backfilled
+        // before the rules, whose trailing comment stays attached after the new
+        // comma. Everything else is byte-for-byte untouched.
+        let expected_prefix = format!(
+            "{{\n  // hand-written notes\n  \"$schema\": \"{url}\",\n  \"rules\": [\n    {{ \"name\": \"keep\", \"match\": \"ls*\", \"action\": \"allow\" }}, // why I allow this\n",
+            url = config::SCHEMA_URL,
+        );
         assert!(
-            text.starts_with(
-                "{\n  // hand-written notes\n  \"rules\": [\n    { \"name\": \"keep\", \"match\": \"ls*\", \"action\": \"allow\" }, // why I allow this\n"
-            ),
+            text.starts_with(&expected_prefix),
             "comments and formatting must survive the merge: {text}"
         );
         assert_eq!(rule_names(&read(&target)), vec!["keep", "x"]);
 
-        // A re-install adds nothing and leaves the file byte-identical.
+        // A re-install adds nothing (rules present, $schema present) and leaves
+        // the file byte-identical.
         run(src.to_str().unwrap(), true, false, Some(target.as_path())).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), text);
     }
