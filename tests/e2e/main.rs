@@ -1557,13 +1557,15 @@ fn install_into_an_existing_json_config_updates_it_in_place_keeping_comments() {
         "the existing .json config is the update target, not a new .jsonc"
     );
     let text = fs::read_to_string(&existing).unwrap();
-    // Everything up to the appended rules is byte-for-byte untouched — the
-    // comments keep their exact positions, and the separating comma attaches
-    // to the rule, before its trailing comment.
+    // The comment keeps its exact position; a leading "$schema" is backfilled
+    // before the rules, and the separating comma attaches to the rule, before
+    // its trailing comment. Everything else is byte-for-byte untouched.
+    let expected_prefix = format!(
+        "{{\n  // hand-written note\n  \"$schema\": \"{url}\",\n  \"rules\": [\n    {{ \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }}, // keep\n",
+        url = allowlister::config::SCHEMA_URL,
+    );
     assert!(
-        text.starts_with(
-            "{\n  // hand-written note\n  \"rules\": [\n    { \"name\": \"mine\", \"match\": \"ls*\", \"action\": \"allow\" }, // keep\n"
-        ),
+        text.starts_with(&expected_prefix),
         "comments must keep their positions: {text}"
     );
     let doc: Value =
@@ -1607,10 +1609,16 @@ fn init_history_keeps_a_commented_profiles_comments_in_place() {
         .success()
         .stdout(predicate::str::contains("history recording is ON"));
     let written = fs::read_to_string(dir.path().join(".allowlister.jsonc")).unwrap();
+    // The profile's comment survives; init backfills a leading "$schema", then
+    // the history member is spliced in at the end — every original byte else
+    // keeps its position.
+    let expected = format!(
+        "{{\n  // team notes\n  \"$schema\": \"{url}\",\n  \"rules\": [\n    {{ \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" }} // why\n  ],\n  \"history\": {{\n    \"enabled\": true\n  }}\n}}\n",
+        url = allowlister::config::SCHEMA_URL,
+    );
     assert_eq!(
-        written,
-        "{\n  // team notes\n  \"rules\": [\n    { \"name\": \"ls\", \"match\": \"ls*\", \"action\": \"allow\" } // why\n  ],\n  \"history\": {\n    \"enabled\": true\n  }\n}\n",
-        "the profile text must survive byte-for-byte around the spliced history member"
+        written, expected,
+        "the profile text must survive byte-for-byte around the spliced $schema and history members"
     );
 }
 
@@ -3312,11 +3320,13 @@ fn init_profile_from_a_file_writes_the_source_and_gates() {
         .current_dir(project.path())
         .assert()
         .success();
-    // The source file lands verbatim as the project config.
-    assert_eq!(
-        fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap(),
-        fs::read_to_string(&source).unwrap()
-    );
+    // The source's rules land as the project config, stamped with a leading
+    // "$schema" so the new file validates in an editor.
+    let written = fs::read_to_string(project.path().join(".allowlister.jsonc")).unwrap();
+    let doc: Value =
+        serde_json::from_str(&allowlister::config::strip_jsonc_comments(&written)).unwrap();
+    assert_eq!(doc["$schema"], allowlister::config::SCHEMA_URL);
+    assert_eq!(doc["rules"][0]["name"], "my tool");
     Command::cargo_bin("allowlister")
         .unwrap()
         .args(["check", "my_company_tool --run", "--cwd"])
