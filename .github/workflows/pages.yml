@@ -1,0 +1,41 @@
+name: Publish JSON schema
+
+# Publishes the config JSON Schema to GitHub Pages, so editors and tools can
+# reference it at its canonical $id:
+#   https://nickderobertis.github.io/allowlister/allowlister.schema.json
+# Requires Pages enabled for the repo with "GitHub Actions" as the source
+# (Settings -> Pages). Informational and outside the gate: it never blocks a PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "schema/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege: read the repo, plus the tokens Pages deployment needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deploy at a time; let a running publish finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: schema
+      - id: deployment
+        uses: actions/deploy-pages@v4
