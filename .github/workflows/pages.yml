@@ -1,10 +1,11 @@
 name: Publish JSON schema
 
-# Publishes the config JSON Schema to GitHub Pages, so editors and tools can
-# reference it at its canonical $id:
+# Keeps the `gh-pages` branch in sync with `schema/`, so GitHub Pages (configured
+# as "Deploy from a branch: gh-pages / root") serves the config JSON Schema at its
+# canonical $id:
 #   https://nickderobertis.github.io/allowlister/allowlister.schema.json
-# Requires Pages enabled for the repo with "GitHub Actions" as the source
-# (Settings -> Pages). Informational and outside the gate: it never blocks a PR.
+# Informational and outside the gate: it never blocks a PR. The branch holds only
+# the published artifact (schema files at its root), rebuilt fresh each run.
 
 on:
   push:
@@ -14,28 +15,37 @@ on:
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
-# Least privilege: read the repo, plus the tokens Pages deployment needs.
+# Least privilege: read the source, write the published branch.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# One in-flight deploy at a time; let a running publish finish.
+# One publish at a time; let a running one finish.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: schema
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish schema/ to gh-pages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          staging="$(mktemp -d)"
+          cp -R schema/. "$staging/"
+          # Serve files verbatim (no Jekyll), including any leading-underscore names.
+          touch "$staging/.nojekyll"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Rebuild gh-pages as a single-commit branch of just the published files.
+          git switch --orphan gh-pages
+          git rm -rf --quiet . 2>/dev/null || true
+          cp -R "$staging/." .
+          git add -A
+          git commit --quiet -m "Publish config JSON Schema from ${GITHUB_SHA}"
+          git push --force origin gh-pages
