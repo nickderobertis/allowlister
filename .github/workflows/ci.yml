@@ -80,3 +80,18 @@ jobs:
           tool: just,cargo-deny,cargo-machete
       - run: just deps-check
       - run: just security
+
+  # Schema drift: the published JSON Schema must accept every config the project
+  # ships (examples, recommended profiles, and the repo's own dogfood config).
+  # Deterministic and Python-based, so it runs as its own Linux job rather than
+  # inside the Rust gate.
+  schema:
+    name: schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install jsonschema
+      - run: python3 scripts/validate-schema.py

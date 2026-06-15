@@ -45,11 +45,19 @@ oneharness-core = { git = "https://github.com/nickderobertis/oneharness", tag = 
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# `VariantArray` gives each config-vocabulary enum a compiler-generated
+# `VARIANTS` list, so the JSON Schema drift test compares against every variant
+# the engine actually has — adding a role/param/action/kind/grant fails that test
+# until the schema is updated too. Derive-only; no runtime weight.
+strum = { version = "0.27", features = ["derive"] }
 thiserror = "2.0"
 
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
+# Drives the schema-drift test: read each config enum's compiler-generated
+# `VARIANTS` and assert the published JSON Schema lists exactly those values.
+strum = { version = "0.27", features = ["derive"] }
 tempfile = "3.10"
 # Statistical micro-benchmarks of the pure engine (see `benches/`). Default
 # features (plotters HTML reports, rayon) are dropped to keep the dependency

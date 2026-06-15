@@ -73,7 +73,7 @@ impl Capability {
 /// A canonical scalar parameter name. Built-in tools across harnesses normalize
 /// their own keys (`file_path`/`path`/`filePath`/…) onto these, so one rule is
 /// portable. MCP addressing fills `McpServer`/`McpTool`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, strum::VariantArray)]
 pub enum ParamKey {
     Path,
     Url,

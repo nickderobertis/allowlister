@@ -282,12 +282,7 @@ enum Compiled {
 
 impl RawRule {
     fn compile(&self, source: &str) -> Result<Compiled, String> {
-        let action = match self.action.as_deref() {
-            None | Some("allow") => Action::Allow,
-            Some("deny") => Action::Deny,
-            Some("ask") => Action::Ask,
-            Some(other) => return Err(format!("unknown action '{other}'")),
-        };
+        let action = Action::parse(self.action.as_deref())?;
         let kind = MatchKind::parse(self.kind.as_deref())?;
         let name = self.display_name();
 
@@ -419,11 +414,7 @@ impl RawRule {
     }
 
     fn compile_grant(&self) -> Result<Grant, String> {
-        match self.grants.as_deref() {
-            None | Some("command") => Ok(Grant::Command),
-            Some("redirections") => Ok(Grant::Redirections),
-            Some(other) => Err(format!("unknown grant '{other}'")),
-        }
+        Grant::parse(self.grants.as_deref())
     }
 
     fn compile_roles(&self) -> Result<Option<Vec<Role>>, String> {

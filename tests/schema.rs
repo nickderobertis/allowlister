@@ -1,14 +1,22 @@
 //! The published JSON Schema (`schema/allowlister.schema.json`) is the contract
 //! editors validate config files against, so it must stay in lockstep with the
-//! values the loader actually accepts. These tests fail the moment the schema's
-//! enumerations drift from the engine's `parse` functions, or the canonical
-//! `$id` changes out from under the documentation and the example configs.
+//! engine. The drift guard is bidirectional: each enum's compiler-generated
+//! `VARIANTS` drives the expected set, so adding a role/param/action/kind/grant
+//! to the engine fails these tests until the schema lists it too (and a schema
+//! that lists a value the engine lacks fails the same `assert_eq`). They also pin
+//! the canonical `$id` to `config::SCHEMA_URL`, so the schema, the docs, the
+//! example configs, and what `init`/`install` stamp can never drift apart.
+//!
+//! Validating that real configs *parse* against the schema is the separate,
+//! Python-based `just schema-check` (CI job), which a Rust JSON-Schema validator
+//! would only provide at the cost of a heavy dependency tree.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use allowlister::domain::{ParamKey, Role};
+use allowlister::domain::{Action, Grant, MatchKind, ParamKey, Role};
 use serde_json::Value;
+use strum::VariantArray;
 
 /// The canonical, publicly hosted location of the schema. Editors and tooling
 /// reference this exact string; the example configs embed it as `"$schema"`, and
@@ -46,60 +54,50 @@ fn schema_declares_canonical_id_and_draft() {
     );
 }
 
+/// The wire strings of every variant of a config-vocabulary enum, built from the
+/// compiler-generated `VARIANTS`. Because `VARIANTS` grows automatically when a
+/// variant is added, an `assert_eq!` against this set fails the moment the engine
+/// gains a value the schema has not yet been taught — exactly the drift we guard.
+fn engine_set<T: VariantArray + Copy>(wire: impl Fn(T) -> &'static str) -> BTreeSet<String> {
+    T::VARIANTS.iter().map(|&v| wire(v).to_string()).collect()
+}
+
 #[test]
-fn role_enum_matches_what_the_engine_parses() {
-    let roles = enum_values(&schema(), "/$defs/role");
-    // Every value the schema offers must be one the engine accepts...
-    for role in &roles {
-        assert!(
-            Role::parse(role).is_some(),
-            "schema lists role {role:?} that the engine rejects"
-        );
+fn role_enum_matches_the_engine_vocabulary() {
+    let schema_roles = enum_values(&schema(), "/$defs/role");
+    let engine_roles = engine_set(Role::as_str);
+    assert_eq!(
+        schema_roles, engine_roles,
+        "the schema's role enum must list exactly the engine's roles"
+    );
+    // Every listed role round-trips through the parser the loader uses.
+    for role in &engine_roles {
+        assert_eq!(Role::parse(role).map(Role::as_str), Some(role.as_str()));
     }
-    // ...and the set must be exactly the engine's vocabulary, so a new role added
-    // to the engine forces a matching schema update here.
-    let expected: BTreeSet<String> = [
-        "standalone",
-        "pipe_source",
-        "pipe_filter",
-        "subshell",
-        "substitution",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
-    assert_eq!(roles, expected);
     assert!(Role::parse("not_a_role").is_none());
 }
 
 #[test]
-fn param_keys_match_what_the_engine_parses() {
+fn param_keys_match_the_engine_vocabulary() {
     // The `params` object's named properties are the canonical parameter keys.
-    let props = schema()["$defs"]["params"]["properties"]
+    let schema_params = schema()["$defs"]["params"]["properties"]
         .as_object()
         .expect("params has a properties object")
         .keys()
         .cloned()
         .collect::<BTreeSet<String>>();
-    for key in &props {
-        assert!(
-            ParamKey::parse(key).is_some(),
-            "schema lists param {key:?} that the engine rejects"
+    let engine_params = engine_set(ParamKey::as_str);
+    assert_eq!(
+        schema_params, engine_params,
+        "the schema's params keys must be exactly the engine's canonical params"
+    );
+    for key in &engine_params {
+        assert_eq!(
+            ParamKey::parse(key).map(ParamKey::as_str),
+            Some(key.as_str())
         );
     }
-    let expected: BTreeSet<String> = [
-        "path",
-        "url",
-        "query",
-        "pattern",
-        "content",
-        "mcp_server",
-        "mcp_tool",
-    ]
-    .iter()
-    .map(ToString::to_string)
-    .collect();
-    assert_eq!(props, expected);
+    assert!(ParamKey::parse("nope").is_none());
     // `params` rejects any other key, mirroring the loader.
     assert_eq!(
         schema()["$defs"]["params"]["additionalProperties"],
@@ -108,29 +106,30 @@ fn param_keys_match_what_the_engine_parses() {
 }
 
 #[test]
-fn action_kind_and_grant_enums_match_the_loader() {
+fn action_kind_and_grant_enums_match_the_engine_vocabulary() {
     let schema = schema();
-    assert_eq!(
-        enum_values(&schema, "/$defs/action"),
-        ["allow", "deny", "ask"]
-            .iter()
-            .map(ToString::to_string)
-            .collect()
-    );
-    assert_eq!(
-        enum_values(&schema, "/$defs/kind"),
-        ["glob", "regex", "literal"]
-            .iter()
-            .map(ToString::to_string)
-            .collect()
-    );
+    let actions = engine_set(Action::as_str);
+    let kinds = engine_set(MatchKind::as_str);
+    let grants = engine_set(Grant::as_str);
+    assert_eq!(enum_values(&schema, "/$defs/action"), actions);
+    assert_eq!(enum_values(&schema, "/$defs/kind"), kinds);
     assert_eq!(
         enum_values(&schema, "/$defs/bashRule/properties/grants"),
-        ["command", "redirections"]
-            .iter()
-            .map(ToString::to_string)
-            .collect()
+        grants
     );
+    // Each wire string round-trips through the loader's own parser.
+    for a in &actions {
+        assert_eq!(Action::parse(Some(a)).map(Action::as_str), Ok(a.as_str()));
+    }
+    for k in &kinds {
+        assert_eq!(
+            MatchKind::parse(Some(k)).map(MatchKind::as_str),
+            Ok(k.as_str())
+        );
+    }
+    for g in &grants {
+        assert_eq!(Grant::parse(Some(g)).map(Grant::as_str), Ok(g.as_str()));
+    }
 }
 
 #[test]

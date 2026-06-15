@@ -21,7 +21,7 @@ const MAX_DEPTH: u32 = 64;
 const PROCESS_WRAPPERS: &[&str] = &["timeout", "time", "nice", "nohup", "stdbuf"];
 
 /// The structural role a command plays within its shell expression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
 pub enum Role {
     /// Top-level command whose output goes to the terminal.
     Standalone,

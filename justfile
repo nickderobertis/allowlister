@@ -200,6 +200,13 @@ deps-check:
     cargo deny --locked check bans licenses sources
     cargo machete
 
+# Validate every shipped config against the published JSON Schema, catching a
+# schema that drifts too strict for the configs the loader accepts. Python-based
+# (needs `jsonschema`: CI installs it, locally `pip install jsonschema`), so it
+# stays out of the Rust `check` gate and runs as its own CI job.
+schema-check:
+    python3 scripts/validate-schema.py
+
 # Check the crate against its declared minimum supported Rust version.
 # Requires the MSRV toolchain (`rustup toolchain install 1.88.0`).
 msrv:
