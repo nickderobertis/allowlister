@@ -4,6 +4,28 @@ Rust CLI that gates AI-agent shell commands: parse bash into role-tagged
 fragments, match each against rules, compose one verdict. Single binary,
 edition 2021, toolchain pinned in `rust-toolchain.toml`.
 
+## Two standing goals on every task
+
+The user drives product features and their request is the priority — but carry
+two goals into *every* task. When either is the lowest-error path to what the
+user asked, fold it into the same task without asking first; surface the rest as
+follow-ups (see "Workflow").
+
+1. **Engineer the context for next time.** Make the next agent (and you) see
+   more for less: realistic end-to-end tests that exercise what the user
+   actually sees — especially when they report a bug existing tests missed (the
+   `tests/e2e` suite drives the compiled binary, see "Tests") — scripts and
+   skills that automate repetitive steps and shrink their output to signal, and
+   terse `AGENTS.md` notes capturing what the code doesn't make obvious.
+2. **Engineer the codebase and environment.** Be the engineer the user isn't:
+   prioritize the technical initiatives that keep the codebase clean,
+   maintainable, and repeatable, and keep environment setup automated and
+   consistent (`just bootstrap` from a clean clone). Strict quality gates plus
+   local/CI parity (same checks, same pinned toolchain in `rust-toolchain.toml`)
+   make results repeatable — not "works on my machine." A clean base and a
+   reproducible environment are usually how the user's feature ships with a low
+   error rate.
+
 ## Stack and composition
 
 - **Product shape:** a command-line tool — a single installable binary users run
