@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.17](https://github.com/nickderobertis/allowlister/compare/v0.4.16...v0.4.17) - 2026-06-16
+
+### Added
+
+- stamp configs with the published "$schema" on init/install ([#89](https://github.com/nickderobertis/allowlister/pull/89))
+- publish a JSON Schema for config files ([#88](https://github.com/nickderobertis/allowlister/pull/88))
+- track usage history by git repository, not folder ([#85](https://github.com/nickderobertis/allowlister/pull/85))
+
+### Changed
+
+- *(io)* adopt oneharness-core as the hook installer ([#83](https://github.com/nickderobertis/allowlister/pull/83))
+
+### Fixed
+
+- *(copilot)* normalize MCP tool names from the preToolUse dash form ([#81](https://github.com/nickderobertis/allowlister/pull/81))
+
 ## [0.4.16](https://github.com/nickderobertis/allowlister/compare/v0.4.15...v0.4.16) - 2026-06-12
 
 ### Added
