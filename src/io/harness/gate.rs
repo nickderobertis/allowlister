@@ -14,6 +14,7 @@
 use crate::config::LoadedConfig;
 use crate::domain::{self, DecisionResult, ToolCall};
 use crate::io::history::{self, Subject};
+use crate::io::plugins;
 
 /// Evaluate a shell command against the loaded rules and record the evaluation.
 /// `harness` names the calling adapter and `project` is the cwd it ran in;
@@ -26,6 +27,7 @@ pub(crate) fn evaluate_shell(
     command: &str,
 ) -> DecisionResult {
     let result = domain::evaluate(command, &config.rules);
+    let result = plugins::evaluate_shell(&config.plugins, harness, project, command, result);
     history::record(
         config.history.enabled,
         harness,

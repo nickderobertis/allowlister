@@ -3,6 +3,7 @@
 
 pub mod check;
 pub mod config;
+pub mod example_plugin;
 pub mod explain;
 pub mod history;
 pub mod hook;

@@ -166,6 +166,10 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Run the bundled sample dynamic approval plugin.
+    #[command(hide = true)]
+    ExamplePlugin,
 }
 
 /// Subcommands for `config`.
@@ -542,6 +546,7 @@ impl Cli {
                     json,
                 }),
             },
+            Command::ExamplePlugin => commands::example_plugin::run(),
         }
     }
 }

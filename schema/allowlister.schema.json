@@ -32,6 +32,11 @@
         }
       },
       "additionalProperties": false
+    },
+    "plugins": {
+      "type": "array",
+      "description": "External dynamic approval plugins evaluated after static shell-command rules. Static deny remains final; plugin deny/ask can tighten a decision, and plugin allow can upgrade an otherwise-deferred command.",
+      "items": { "$ref": "#/$defs/plugin" }
     }
   },
   "additionalProperties": false,
@@ -96,6 +101,30 @@
         "content": { "$ref": "#/$defs/glob" },
         "mcp_server": { "$ref": "#/$defs/glob" },
         "mcp_tool": { "$ref": "#/$defs/glob" }
+      },
+      "additionalProperties": false
+    },
+    "plugin": {
+      "type": "object",
+      "description": "A command that receives a plugin request JSON object on stdin and returns one verdict JSON object on stdout.",
+      "required": ["command"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable identifier shown in plugin decision reasons and warnings."
+        },
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "Executable plus arguments to spawn for each shell-command decision."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2000,
+          "description": "Maximum time to wait for the plugin process before ignoring its decision as a non-fatal warning."
+        }
       },
       "additionalProperties": false
     },

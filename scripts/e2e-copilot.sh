@@ -112,7 +112,8 @@ cat > "$rules" <<JSON
     { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
     { "name": "ask before cp", "match": "cp *", "action": "ask" },
 ${AL_TOOL_RULES}
-  ]
+  ],
+$(al_plugin_config "$bin")
 }
 JSON
 
@@ -192,7 +193,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/5: shell deny — \`touch\` must be blocked even under --allow-all-tools"
+note "» case 1/6: shell deny — \`touch\` must be blocked even under --allow-all-tools"
 deny_sentinel="$proj/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -208,7 +209,7 @@ else
     note "  note: Copilot showed its own block message; allowlister's reason was not surfaced"
 fi
 
-note "» case 2/5: shell allow — \`mkdir\` must run"
+note "» case 2/6: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 # On Windows an absolute C:/... arg breaks in the harness shell (cmd rejects
 # forward slashes, Git Bash mis-roots a bare C:); the harness runs with cwd=$proj,
@@ -224,10 +225,19 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed"
 
-# Case 3: an `ask` verdict must HOLD the command for approval, not run it. `cp`
+note "» case 3/6: dynamic plugin deny — a statically allowed command must be blocked"
+plugin_sentinel="$proj/sentinel-plugin-block-prod.d"
+plugin_arg="$plugin_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) plugin_arg="sentinel-plugin-block-prod.d" ;; esac
+rm -rf "$plugin_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $plugin_arg — if it is blocked, stop immediately and do not try any alternative." \
+    "$sandbox/plugin.stream"
+al_plugin_deny_conclude "$plugin_sentinel" "$sandbox/plugin.stream"
+
+# Case 4: an `ask` verdict must HOLD the command for approval, not run it. `cp`
 # is used because `mkdir` is this profile's allow command; the ask'd copy must
 # not have created its destination file.
-note "» case 3/5: shell ask — \`cp\` must be held for approval, not auto-run"
+note "» case 4/6: shell ask — \`cp\` must be held for approval, not auto-run"
 # An `ask` must HOLD the command for approval. Copilot's preToolUse hook is
 # consulted before its permission service, so a hook `ask` holds the command even
 # under --allow-all-tools and surfaces the gate's reason to the agent. The hook
@@ -251,19 +261,19 @@ done
 [ "$ask_done" = 1 ] || { dump_transcript "$sandbox/ask.stream" ask; fail "allowlister's reason never surfaced across 5 tries — the model never attempted the ask'd command, so the hook's ask was not exercised"; }
 note "  ok: the ask'd \`cp\` was held for approval and allowlister's reason reached the agent"
 
-note "» case 4/5: built-in read tool — reading the secret must be blocked"
+note "» case 5/6: built-in read tool — reading the secret must be blocked"
 run_agent "There are two files in this project. Use your file-reading tool (view) to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if [ "$have_mcp" = 1 ]; then
-    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 6/6: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 6/6: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ copilot live e2e passed (shell deny+allow+ask, built-in read deny, MCP deny)"
+note "✓ copilot live e2e passed (shell deny+allow+ask, dynamic plugin deny, built-in read deny, MCP deny)"

@@ -133,6 +133,26 @@ fn action_kind_and_grant_enums_match_the_engine_vocabulary() {
 }
 
 #[test]
+fn schema_declares_dynamic_plugin_config() {
+    let schema = schema();
+    assert_eq!(
+        schema["properties"]["plugins"]["items"]["$ref"].as_str(),
+        Some("#/$defs/plugin")
+    );
+    let plugin = &schema["$defs"]["plugin"];
+    assert_eq!(plugin["required"][0].as_str(), Some("command"));
+    assert_eq!(
+        plugin["properties"]["command"]["minItems"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        plugin["properties"]["timeout_ms"]["default"].as_u64(),
+        Some(2_000)
+    );
+    assert_eq!(plugin["additionalProperties"], Value::Bool(false));
+}
+
+#[test]
 fn example_configs_reference_the_published_schema() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for name in ["examples/user-config.json", "examples/project-config.json"] {

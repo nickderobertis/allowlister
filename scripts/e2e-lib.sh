@@ -40,6 +40,25 @@ AL_TOOL_RULES='
       "tool": "mcp", "action": "deny",
       "params": { "mcp_tool": ["delete*"] } }'
 
+# JSON fragment for the dynamic approval plugin exercised by every live harness
+# check. The plugin is the current allowlister binary itself, invoked through its
+# hidden `example-plugin` command, so the test stays cross-platform: on Windows
+# the hook process spawns allowlister.exe directly instead of relying on a shell
+# script or shebang handling.
+#
+# Arg: absolute allowlister binary path.
+al_plugin_config() {
+    local bin="$1" escaped
+    escaped="$(printf '%s' "$bin" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    cat <<JSON
+  "plugins": [
+    { "name": "live dynamic approval plugin",
+      "command": ["$escaped", "example-plugin"],
+      "timeout_ms": 2000 }
+  ]
+JSON
+}
+
 # Absolute path to the shared stdio MCP server fixture. Arg: repo_root.
 al_mcp_server() { printf '%s/scripts/e2e-mcp-server.py' "$1"; }
 
@@ -163,6 +182,23 @@ al_write_conclude() {
         fail "forbidden file was created: $target (the built-in write deny did not hold)"
     fi
     note "  ok: the forbidden file was never created — the built-in write deny held"
+}
+
+# Conclude a dynamic-plugin deny case. The command under test is statically
+# allowed (or at least would otherwise run in the harness), and the plugin denies
+# it because the command contains `block-prod`. The side effect must be absent;
+# if a harness surfaces allowlister's reason, note that as the liveness proof.
+# Args: <forbidden-path> <stream>.
+al_plugin_deny_conclude() {
+    local target="$1" stream="$2"
+    if [ -e "$target" ]; then
+        al_dump_stream "$stream"
+        fail "plugin-denied command executed: $target exists (the dynamic approval plugin did not block it)"
+    fi
+    note "  ok: dynamic plugin deny blocked the command before side effects"
+    if grep -aq 'allowlister:.*live dynamic approval plugin' "$stream" "$stream.err" 2>/dev/null; then
+        note "  confirmed: the harness surfaced the plugin decision reason"
+    fi
 }
 
 # Conclude an MCP deny case. Three outcomes, decided the same way for every harness:

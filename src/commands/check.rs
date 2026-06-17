@@ -10,6 +10,7 @@ use crate::config;
 use crate::domain::{self, Capability, NormalizedParams, ParamKey, ToolCall, Verdict};
 use crate::errors::{Error, Result};
 use crate::io::harness::normalize;
+use crate::io::plugins;
 
 use super::resolve_cwd;
 
@@ -42,7 +43,14 @@ pub fn run(args: CheckArgs) -> Result<i32> {
     } else {
         // The CLI argument group guarantees a command when `--tool` is absent.
         let command = args.command.unwrap_or_default();
-        domain::evaluate(command, &loaded.rules)
+        let result = domain::evaluate(command, &loaded.rules);
+        plugins::evaluate_shell(
+            &loaded.plugins,
+            "check",
+            &cwd.to_string_lossy(),
+            command,
+            result,
+        )
     };
 
     if args.json {

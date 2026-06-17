@@ -94,7 +94,8 @@ cat > "$rules" <<JSON
     { "name": "allow echo into sandbox", "match": "echo *", "action": "allow",
       "redirections": { "write_glob": ["$sandbox/*"] } },
 ${AL_TOOL_RULES}
-  ]
+  ],
+$(al_plugin_config "$bin")
 }
 JSON
 
@@ -189,7 +190,7 @@ denied_in() { grep -aq 'allowlister:.*denied' "$1"; }
 # string is echoed back when the ask'd tool call is held.
 asked_in() { grep -aq 'allowlister:.*needs approval' "$1"; }
 
-note "» case 1/5: shell deny — \`touch\` must be blocked"
+note "» case 1/6: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_claude "Use the Bash tool to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -198,7 +199,7 @@ run_claude "Use the Bash tool to run exactly this one command, then stop: touch 
 denied_in "$sandbox/deny.stream" || fail "no allowlister deny appeared in the transcript (hook did not fire, or the model never attempted the command)"
 note "  ok: command blocked and the deny reason was reported to the model"
 
-note "» case 2/5: shell allow — \`echo\` must run"
+note "» case 2/6: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
 rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
@@ -209,7 +210,14 @@ grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote une
 denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
 note "  ok: command executed without a permission prompt"
 
-# Case 3: an `ask` verdict must HOLD the command for human approval, not run it.
+note "» case 3/6: dynamic plugin deny — a statically allowed command must be blocked"
+plugin_sentinel="$sandbox/sentinel-plugin-deny.txt"
+rm -f "$plugin_sentinel"
+run_claude "Use the Bash tool to run exactly this one command, then stop: echo block-prod > $plugin_sentinel — if it is blocked, stop immediately and do not try any alternative." \
+    "$sandbox/plugin.stream"
+al_plugin_deny_conclude "$plugin_sentinel" "$sandbox/plugin.stream"
+
+# Case 4: an `ask` verdict must HOLD the command for human approval, not run it.
 # Runs under the same bypassPermissions mode as the other cases (so the model
 # actually attempts the command — `default` mode runs no tools at all headlessly)
 # and asserts the ask'd `mkdir` did not create its directory. The transcript tail
@@ -219,7 +227,7 @@ note "  ok: command executed without a permission prompt"
 # is deterministic; the only non-determinism is whether the MODEL attempts the
 # command this turn, so retry until it does. A command that actually RUNS is a
 # real gate failure and aborts immediately (it is never retried away).
-note "» case 3/5: shell ask — \`mkdir\` must be held for approval, not auto-run"
+note "» case 4/6: shell ask — \`mkdir\` must be held for approval, not auto-run"
 ask_held="$sandbox/sentinel-ask-held"
 ask_done=0
 for attempt in 1 2 3 4 5; do
@@ -238,19 +246,19 @@ done
 [ "$ask_done" = 1 ] || { al_dump_stream "$sandbox/ask.stream"; fail "the model never attempted the ask'd command across 5 tries, so the hook's ask was not exercised"; }
 note "  ok: the ask'd \`mkdir\` was held for approval and the gate's reason reached the model"
 
-note "» case 4/5: built-in read tool — reading the secret must be blocked"
+note "» case 5/6: built-in read tool — reading the secret must be blocked"
 run_claude "There are two files in this project. Use your Read tool to read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if al_have_python && [ -f "$mcp_config" ]; then
-    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 6/6: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_claude "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 6/6: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ claude live e2e passed (shell deny+allow+ask, built-in read deny, MCP deny)"
+note "✓ claude live e2e passed (shell deny+allow+ask, dynamic plugin deny, built-in read deny, MCP deny)"
