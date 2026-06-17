@@ -146,6 +146,19 @@ al_dump_stream() {
     fi
 }
 
+# Skip a live harness check when the remote AI service refuses to run before the
+# gate can be exercised. These jobs are meant to catch integration regressions,
+# not fail the PR because a vendor account has exhausted quota.
+al_skip_if_service_unavailable() {
+    local stream="$1" harness="$2"
+    if grep -Eaq '(additional_spend_limit_reached|usage limit|rate limit|quota|insufficient_quota|payment required|402 )' \
+        "$stream" "$stream.err" 2>/dev/null; then
+        al_dump_stream "$stream"
+        note "SKIP: $harness service is unavailable or out of quota; live e2e was not exercised."
+        exit 0
+    fi
+}
+
 # True when allowlister's own deny reason reached the transcript — the strongest
 # proof the gate actually fired on an attempted tool call (so a missing side
 # effect is a real block, not the model declining to act). Reliable on harnesses

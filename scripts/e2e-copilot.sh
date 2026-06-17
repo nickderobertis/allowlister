@@ -175,6 +175,7 @@ run_agent() {
         --env "XDG_CONFIG_HOME=$sandbox/xdg" \
         ${win_env[@]+"${win_env[@]}"} \
         ${model_args[@]+"${model_args[@]}"}
+    al_skip_if_service_unavailable "$stream" "Copilot"
 }
 
 # True if allowlister's own reason text reached the agent transcript. Copilot may
@@ -216,12 +217,17 @@ allow_sentinel="$proj/sentinel-allow.d"
 # so pass a bare name it creates there. The assertion still checks the abs path.
 allow_arg="$allow_sentinel"
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) allow_arg="sentinel-allow.d" ;; esac
-rm -rf "$allow_sentinel"
-run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
-    "$sandbox/allow.stream"
-[ -d "$allow_sentinel" ] || {
+allow_done=0
+for attempt in 1 2 3 4 5; do
+    rm -rf "$allow_sentinel"
+    run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_arg" \
+        "$sandbox/allow.stream"
+    if [ -d "$allow_sentinel" ]; then allow_done=1; break; fi
+    note "  (attempt $attempt/5: the model did not execute the command this turn; retrying)"
+done
+[ "$allow_done" = 1 ] || {
     dump_transcript "$sandbox/allow.stream" allow
-    fail "allowed command did not execute: $allow_sentinel was not created"
+    fail "allowed command did not execute across 5 tries: $allow_sentinel was not created"
 }
 note "  ok: command executed"
 

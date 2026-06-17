@@ -180,6 +180,7 @@ run_claude() {
         ${win_env[@]+"${win_env[@]}"} \
         ${bypass[@]+"${bypass[@]}"} \
         -- --max-turns 6 --verbose ${mcp_args[@]+"${mcp_args[@]}"}
+    al_skip_if_service_unavailable "$stream" "Claude Code"
 }
 
 # True if the transcript shows allowlister denying a command (its reason string
@@ -192,22 +193,35 @@ asked_in() { grep -aq 'allowlister:.*needs approval' "$1"; }
 
 note "» case 1/6: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
-rm -f "$deny_sentinel"
-run_claude "Use the Bash tool to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
-    "$sandbox/deny.stream"
-[ -e "$deny_sentinel" ] && fail "denied command executed: $deny_sentinel was created"
-denied_in "$sandbox/deny.stream" || fail "no allowlister deny appeared in the transcript (hook did not fire, or the model never attempted the command)"
+deny_done=0
+for attempt in 1 2 3 4 5; do
+    rm -f "$deny_sentinel"
+    run_claude "Use the Bash tool to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
+        "$sandbox/deny.stream"
+    [ -e "$deny_sentinel" ] && fail "denied command executed: $deny_sentinel was created"
+    if denied_in "$sandbox/deny.stream"; then deny_done=1; break; fi
+    note "  (attempt $attempt/5: the model did not attempt the command this turn; retrying)"
+done
+[ "$deny_done" = 1 ] || { al_dump_stream "$sandbox/deny.stream"; fail "no allowlister deny appeared across 5 tries (hook did not fire, or the model never attempted the command)"; }
 note "  ok: command blocked and the deny reason was reported to the model"
 
 note "» case 2/6: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
-rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
-run_claude "Use the Bash tool to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
-    "$sandbox/allow.stream"
-[ -e "$allow_sentinel" ] || fail "allowed command did not execute: $allow_sentinel was not created"
-grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
-denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
+allow_done=0
+for attempt in 1 2 3 4 5; do
+    rm -f "$allow_sentinel"
+    run_claude "Use the Bash tool to run exactly this one command, then stop: echo $marker > $allow_sentinel" \
+        "$sandbox/allow.stream"
+    denied_in "$sandbox/allow.stream" && fail "allowed command was denied by allowlister"
+    if [ -e "$allow_sentinel" ]; then
+        grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote unexpected contents: $(cat "$allow_sentinel")"
+        allow_done=1
+        break
+    fi
+    note "  (attempt $attempt/5: the model did not execute the command this turn; retrying)"
+done
+[ "$allow_done" = 1 ] || { al_dump_stream "$sandbox/allow.stream"; fail "allowed command did not execute across 5 tries: $allow_sentinel was not created"; }
 note "  ok: command executed without a permission prompt"
 
 note "» case 3/6: dynamic plugin deny — a statically allowed command must be blocked"
