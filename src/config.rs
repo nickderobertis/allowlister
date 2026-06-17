@@ -31,6 +31,10 @@ pub struct LoadedConfig {
     pub tool_rules: Vec<ToolRule>,
     /// Usage-history recording settings (opt-in; see [`HistorySettings`]).
     pub history: HistorySettings,
+    /// External dynamic approval plugins. Plugins are I/O boundary extensions:
+    /// the domain engine still decides from static rules first, then hook/check
+    /// callers may ask these commands for a stricter or more specific verdict.
+    pub plugins: Vec<PluginConfig>,
     /// Config files that were loaded (or skipped, annotated with the reason).
     pub sources: Vec<String>,
     /// Non-fatal problems encountered while loading.
@@ -45,6 +49,14 @@ pub struct LoadedConfig {
 pub struct HistorySettings {
     /// Record each evaluation (verdict plus parsed subcommands) to disk.
     pub enabled: bool,
+}
+
+/// An executable plugin that can return a dynamic verdict for a command.
+#[derive(Debug, Clone)]
+pub struct PluginConfig {
+    pub name: String,
+    pub command: Vec<String>,
+    pub timeout_ms: u64,
 }
 
 /// Blank out `//` line and `/* */` block comments so a config file may carry
@@ -189,6 +201,14 @@ fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
             config.history.enabled = enabled;
         }
     }
+    for (index, raw_plugin) in raw.plugins.into_iter().enumerate() {
+        match raw_plugin.compile() {
+            Ok(plugin) => config.plugins.push(plugin),
+            Err(err) => config
+                .warnings
+                .push(format!("{display}: skipping plugin #{index}: {err}")),
+        }
+    }
     for (index, raw_rule) in raw.rules.into_iter().enumerate() {
         match raw_rule.compile(display) {
             Ok(Compiled::Bash(rule)) => config.rules.push(rule),
@@ -202,18 +222,51 @@ fn append_config(config: &mut LoadedConfig, contents: &str, display: &str) {
     config.sources.push(display.to_string());
 }
 
+impl RawPlugin {
+    fn compile(self) -> Result<PluginConfig, String> {
+        if self.command.is_empty() {
+            return Err("'command' must not be empty".to_string());
+        }
+        Ok(PluginConfig {
+            name: if self.name.is_empty() {
+                self.command.join(" ")
+            } else {
+                self.name
+            },
+            command: self.command,
+            timeout_ms: self.timeout_ms,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
     rules: Vec<RawRule>,
     #[serde(default)]
     history: Option<RawHistory>,
+    #[serde(default)]
+    plugins: Vec<RawPlugin>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawHistory {
     #[serde(default)]
     enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawPlugin {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    command: Vec<String>,
+    #[serde(default = "default_plugin_timeout_ms")]
+    timeout_ms: u64,
+}
+
+const fn default_plugin_timeout_ms() -> u64 {
+    2_000
 }
 
 #[derive(Debug, Deserialize)]

@@ -111,7 +111,8 @@ cat > "$rules" <<JSON
     { "name": "deny touch", "match": "touch *", "action": "deny" },
     { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
 ${AL_TOOL_RULES}
-  ]
+  ],
+$(al_plugin_config "$bin")
 }
 JSON
 
@@ -254,7 +255,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/3: shell deny — \`touch\` must be blocked even running unattended"
+note "» case 1/4: shell deny — \`touch\` must be blocked even running unattended"
 deny_sentinel="$proj/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -270,7 +271,7 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Codex rendered its own block)"
 fi
 
-note "» case 2/3: shell allow — \`mkdir\` must run"
+note "» case 2/4: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 rm -rf "$allow_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: mkdir $allow_sentinel" \
@@ -281,16 +282,23 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed (allow fell through to Codex's normal flow)"
 
+note "» case 3/4: dynamic plugin deny — a statically allowed command must be blocked"
+plugin_sentinel="$proj/sentinel-plugin-block-prod.d"
+rm -rf "$plugin_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $plugin_sentinel — if it is blocked, stop immediately and do not try any alternative." \
+    "$sandbox/plugin.stream"
+al_plugin_deny_conclude "$plugin_sentinel" "$sandbox/plugin.stream"
+
 # Codex exposes no built-in read/write tool to PreToolUse (reads go via the shell,
 # writes via apply_patch patch strings), so MCP is its gateable non-shell surface.
 if [ "$have_mcp" = 1 ]; then
-    note "» case 3/3: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 3/3: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ codex live e2e passed (shell deny+allow, MCP deny)"
+note "✓ codex live e2e passed (shell deny+allow, dynamic plugin deny, MCP deny)"

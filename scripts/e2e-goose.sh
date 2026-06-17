@@ -113,7 +113,8 @@ cat > "$rules" <<JSON
     { "name": "deny touch", "match": "touch *", "action": "deny" },
     { "name": "allow mkdir", "match": "mkdir *", "action": "allow" },
 ${AL_TOOL_RULES}
-  ]
+  ],
+$(al_plugin_config "$bin")
 }
 JSON
 
@@ -182,7 +183,7 @@ dump_transcript() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/4: shell deny — \`touch\` must be blocked even under GOOSE_MODE=auto"
+note "» case 1/5: shell deny — \`touch\` must be blocked even under GOOSE_MODE=auto"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -198,7 +199,7 @@ else
     note "  note: allowlister's reason was not surfaced in the transcript (Goose rendered its own block)"
 fi
 
-note "» case 2/4: shell allow — \`mkdir\` must run"
+note "» case 2/5: shell allow — \`mkdir\` must run"
 allow_sentinel="$proj/sentinel-allow.d"
 # On Windows the harness runs the command via cmd.exe, which rejects an absolute
 # C:/... arg ("The syntax of the command is incorrect"); the run cwd is $proj, so
@@ -214,9 +215,18 @@ run_agent "Use the shell to run exactly this one command, then stop: mkdir $allo
 }
 note "  ok: command executed (allow fell through to Goose's normal flow)"
 
+note "» case 3/5: dynamic plugin deny — a statically allowed command must be blocked"
+plugin_sentinel="$proj/sentinel-plugin-block-prod.d"
+plugin_arg="$plugin_sentinel"
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) plugin_arg="sentinel-plugin-block-prod.d" ;; esac
+rm -rf "$plugin_sentinel"
+run_agent "Use the shell to run exactly this one command, then stop: mkdir $plugin_arg — if it is blocked, stop immediately and do not try any alternative." \
+    "$sandbox/plugin.stream"
+al_plugin_deny_conclude "$plugin_sentinel" "$sandbox/plugin.stream"
+
 # Goose has no built-in read tool, so the built-in case exercises the gateable
 # `developer__write` instead: creating the forbidden path must be blocked.
-note "» case 3/4: built-in write tool — creating the forbidden file must be blocked"
+note "» case 4/5: built-in write tool — creating the forbidden file must be blocked"
 forbidden="$proj/blocked-by-allowlister.txt"
 rm -f "$forbidden"
 run_agent "Use the developer text-editor/write tool (not the shell) to create the file $forbidden containing the word blocked. If the write is blocked, stop and do not use the shell." \
@@ -224,13 +234,13 @@ run_agent "Use the developer text-editor/write tool (not the shell) to create th
 al_write_conclude "$forbidden" "$sandbox/write.stream"
 
 if [ "$have_mcp" = 1 ]; then
-    note "» case 4/4: MCP tool — the destructive \`deletewidget\` call must be blocked"
+    note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 4/4: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 5/5: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ goose live e2e passed (shell deny+allow, built-in write deny, MCP deny)"
+note "✓ goose live e2e passed (shell deny+allow, dynamic plugin deny, built-in write deny, MCP deny)"

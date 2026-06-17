@@ -53,6 +53,10 @@ impl Sandbox {
         cmd
     }
 
+    fn write_project_config(&self, body: &str) {
+        fs::write(self.cwd().join(".allowlister.json"), body).unwrap();
+    }
+
     /// A `PreToolUse` payload whose `cwd` points at the sandbox project dir.
     fn payload(&self, command: &str) -> String {
         format!(
@@ -850,6 +854,122 @@ fn check_allow_returns_exit_code_zero() {
     sandbox
         .command()
         .args(["check", "gh pr list | head -20", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn plugin_can_dynamically_allow_a_deferred_command() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"ticket approver","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "deploy --ticket=APPROVED", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "ALLOW: plugin 'ticket approver': approved ticket tag present",
+        ));
+}
+
+#[test]
+fn plugin_ask_overrides_a_static_allow() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"deploys","match":"deploy*","action":"allow"}}],"plugins":[{{"name":"prod reviewer","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "deploy prod", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "ASK: plugin 'prod reviewer': production needs review",
+        ));
+}
+
+#[test]
+fn plugin_deny_blocks_a_hook_command() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"deploys","match":"deploy*","action":"allow"}}],"plugins":[{{"name":"prod blocker","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.payload("deploy block-prod"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn static_deny_remains_final_even_when_plugin_would_allow() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"ticket approver","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "rm -rf /var --ticket=APPROVED", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("DENY"))
+        .stdout(predicate::str::contains("rm -rf"));
+}
+
+#[test]
+fn plugin_invalid_json_is_non_fatal_and_preserves_static_allow() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"deploys","match":"deploy*","action":"allow"}}],"plugins":[{{"name":"broken plugin","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "deploy plugin-bad-json", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn plugin_timeout_is_non_fatal_and_preserves_static_allow() {
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"deploys","match":"deploy*","action":"allow"}}],"plugins":[{{"name":"slow plugin","command":[{plugin},"example-plugin"],"timeout_ms":10}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "deploy plugin-slow", "--cwd"])
         .arg(sandbox.cwd())
         .assert()
         .success()

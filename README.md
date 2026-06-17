@@ -340,6 +340,62 @@ $ allowlister config show
 ... every active rule annotated with the source file it came from
 ```
 
+## Dynamic approval plugins
+
+Static rules are the fast path and the audit trail, but some teams need a live
+decision source: a web or mobile approval UI, a ticketing system, a policy
+service, or an LLM-based auto-approver. Add a top-level `"plugins"` array to run
+external code after the static shell-rule engine:
+
+```jsonc
+{
+  "$schema": "https://nickderobertis.github.io/allowlister/allowlister.schema.json",
+  "rules": [
+    { "name": "ordinary deploy command", "match": "deploy*", "action": "allow" }
+  ],
+  "plugins": [
+    {
+      "name": "ticket approver",
+      "command": ["/path/to/approval-plugin", "--project", "my-app"],
+      "timeout_ms": 2000
+    }
+  ]
+}
+```
+
+Each plugin process receives one JSON object on stdin and must print one JSON
+object on stdout:
+
+```json
+{
+  "protocol_version": 1,
+  "subject": "shell",
+  "harness": "claude-code",
+  "cwd": "/repo",
+  "command": "deploy --ticket=APPROVED",
+  "current_verdict": "defer",
+  "current_reason": "no rule matched `deploy --ticket=APPROVED` (standalone)"
+}
+```
+
+```json
+{ "verdict": "allow", "reason": "approved ticket tag present" }
+```
+
+Valid plugin verdicts are `allow`, `ask`, `deny`, and `defer`. Composition is
+deliberately conservative:
+
+- a static `deny` is final, so plugins cannot punch through hard guardrails;
+- any plugin `deny` blocks;
+- otherwise any plugin `ask` surfaces the command for approval;
+- otherwise a plugin `allow` may upgrade only a static `defer` to `allow`;
+- plugin `defer`, invalid output, a non-zero exit, or a timeout leaves the static
+  decision unchanged and records only a non-fatal warning.
+
+The plugin hot path is shell-command only today. Non-shell tool calls still use
+the static tool-rule engine described below. A minimal copyable plugin lives at
+[`examples/dynamic-approval-plugin.sh`](examples/dynamic-approval-plugin.sh).
+
 ## Usage history
 
 To refine an allowlist you need to know what is actually happening: which
@@ -719,10 +775,12 @@ The hermetic E2E suite drives the binary through its stdin/stdout hook contract.
 To verify the wiring against a *real* harness, one opt-in script per agent sets a
 sandbox project up with `allowlister init` — exercising the real hook-registration
 path — then drives the actual agent headless and asserts that denied work is
-blocked while allowed work runs. Each script covers all three surfaces: a denied
-**shell** command, a denied **built-in tool** (a `read` of a planted secret, or a
-`write` where the agent has no gateable read), and a denied **MCP** tool (a
-destructive call routed through a bundled stdio MCP server fixture):
+blocked while allowed work runs. Each script covers the shell path, the dynamic
+approval plugin path, and the non-shell surfaces: a denied **shell** command, a
+statically allowed shell command blocked by a **dynamic approval plugin**, a
+denied **built-in tool** (a `read` of a planted secret, or a `write` where the
+agent has no gateable read), and a denied **MCP** tool (a destructive call routed
+through a bundled stdio MCP server fixture):
 
 ```sh
 just test-claude     # drives `claude`;       writes/reads .claude/settings.json
