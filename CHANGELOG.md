@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.18](https://github.com/nickderobertis/allowlister/compare/v0.4.17...v0.4.18) - 2026-06-17
+
+### Other
+
+- Add external dynamic approval plugins (schema, loader, runtime, example) ([#92](https://github.com/nickderobertis/allowlister/pull/92))
+
 ## [0.4.17](https://github.com/nickderobertis/allowlister/compare/v0.4.16...v0.4.17) - 2026-06-16
 
 ### Added
