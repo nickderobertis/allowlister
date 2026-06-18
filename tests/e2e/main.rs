@@ -2318,6 +2318,22 @@ fn copilot_hook_read_tool_denies_secret_with_stringified_args() {
 }
 
 #[test]
+fn cursor_decision_json_includes_continue_true() {
+    let sandbox = Sandbox::new();
+    let output = sandbox
+        .command()
+        .args(["hook", "cursor"])
+        .write_stdin(sandbox.cursor_payload("echo ok"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["continue"], true);
+}
+
+#[test]
 fn cursor_before_read_file_without_matching_rule_allows_instead_of_invalid_ask() {
     let empty = TempDir::new().unwrap();
     let project = tool_project();

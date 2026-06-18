@@ -189,7 +189,7 @@ dump_deny_diagnostic() {
     note "  ────────────────────────────────────────────────────────"
 }
 
-note "» case 1/6: shell deny — \`touch\` must be blocked"
+note "» case 1/7: shell deny — \`touch\` must be blocked"
 deny_sentinel="$sandbox/sentinel-deny.txt"
 rm -f "$deny_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: touch $deny_sentinel — if it is blocked, stop immediately and do not try any alternative." \
@@ -206,7 +206,7 @@ else
     note "  note: Cursor showed its generic hook-block message; allowlister's reason was not surfaced"
 fi
 
-note "» case 2/6: shell allow — \`echo\` must run"
+note "» case 2/7: shell allow — \`echo\` must run"
 allow_sentinel="$sandbox/sentinel-allow.txt"
 rm -f "$allow_sentinel"
 marker="allowed-by-allowlister"
@@ -217,17 +217,31 @@ grep -aqx "$marker" "$allow_sentinel" || fail "allowed command ran but wrote une
 hook_rejected_in "$sandbox/allow.stream" && fail "allowed command was rejected by a hook"
 note "  ok: command executed without a permission prompt"
 
-note "» case 3/6: dynamic plugin deny — a statically allowed command must be blocked"
+note "» case 3/7: terminal output read — AwaitShell polling must not hit an invalid hook response"
+terminal_marker="AWAIT-SHELL-ALLOWLISTER-${RANDOM}${RANDOM}${RANDOM}"
+run_agent "Use the shell to run exactly this one command, wait for it to finish, and then reply with the marker it printed: python3 -c 'import time; print("$terminal_marker", flush=True); time.sleep(3); print("done", flush=True)'" \
+    "$sandbox/await-shell.stream"
+if grep -aiq 'invalid response for this hook step' "$sandbox/await-shell.stream" "$sandbox/await-shell.stream.err" 2>/dev/null; then
+    dump_deny_diagnostic "$sandbox/await-shell.stream"
+    fail "Cursor reported an invalid allowlister hook response while reading terminal/AwaitShell output"
+fi
+grep -aqF "$terminal_marker" "$sandbox/await-shell.stream" "$sandbox/await-shell.stream.err" 2>/dev/null || {
+    dump_deny_diagnostic "$sandbox/await-shell.stream"
+    fail "terminal output marker did not surface; AwaitShell/readback may be blocked"
+}
+note "  ok: terminal output was read back without an invalid hook response"
+
+note "» case 4/7: dynamic plugin deny — a statically allowed command must be blocked"
 plugin_sentinel="$sandbox/sentinel-plugin-deny.txt"
 rm -f "$plugin_sentinel"
 run_agent "Use the shell to run exactly this one command, then stop: echo block-prod > $plugin_sentinel — if it is blocked, stop immediately and do not try any alternative." \
     "$sandbox/plugin.stream"
 al_plugin_deny_conclude "$plugin_sentinel" "$sandbox/plugin.stream"
 
-# Case 4: an `ask` verdict must HOLD the command for approval, not run it. Same
+# Case 5: an `ask` verdict must HOLD the command for approval, not run it. Same
 # --force mode as the other cases (so the model actually attempts the command);
 # the ask'd `mkdir` must not have created its directory.
-note "» case 4/6: shell ask — \`mkdir\` must be held for approval, not auto-run"
+note "» case 5/7: shell ask — \`mkdir\` must be held for approval, not auto-run"
 # An `ask` must HOLD the command for approval. Under --trust the session runs but
 # per-command confirmation is intact, so the hook's `ask` holds the command (a
 # "rejected" tool result); --force would auto-approve it. The hook decision is
@@ -251,19 +265,19 @@ done
 [ "$ask_done" = 1 ] || { dump_deny_diagnostic "$sandbox/ask.stream"; fail "no rejected tool call across 5 tries — the model never attempted the ask'd command, so the hook's ask was not exercised"; }
 note "  ok: the ask'd \`mkdir\` was attempted and rejected — held for approval, not run"
 
-note "» case 5/6: built-in read tool — reading the secret must be blocked (beforeReadFile)"
+note "» case 6/7: built-in read tool — reading the secret must be blocked (beforeReadFile)"
 run_agent "There are two files in this project. Read both and reply with their exact contents. Do not use the shell. Files: $AL_PUBLIC_FILE and $AL_SECRET_FILE — if a read is blocked, say so and move on." \
     "$sandbox/read.stream"
 al_read_conclude "$sandbox/read.stream"
 
 if [ "$have_mcp" = 1 ]; then
-    note "» case 6/6: MCP tool — the destructive \`deletewidget\` call must be blocked (beforeMCPExecution)"
+    note "» case 7/7: MCP tool — the destructive \`deletewidget\` call must be blocked (beforeMCPExecution)"
     rm -f "$mcp_sentinel" "$mcp_log"
     run_agent "Use the altest MCP tools. First call \`echotoken\` and tell me the token it returns. Then call \`deletewidget\` with id \"1\". If deletewidget is blocked, stop and do not retry." \
         "$sandbox/mcp.stream"
     al_mcp_conclude "$mcp_sentinel" "$mcp_log" "$sandbox/mcp.stream" "$mcp_token"
 else
-    note "» case 6/6: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
+    note "» case 7/7: MCP tool — SKIPPED (python3 not available to run the MCP server fixture)"
 fi
 
-note "✓ cursor live e2e passed (shell deny+allow+ask, dynamic plugin deny, built-in read deny, MCP deny)"
+note "✓ cursor live e2e passed (shell deny+allow+ask, terminal output readback, dynamic plugin deny, built-in read deny, MCP deny)"
