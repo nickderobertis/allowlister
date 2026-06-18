@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.20](https://github.com/nickderobertis/allowlister/compare/v0.4.19...v0.4.20) - 2026-06-18
+
+### Fixed
+
+- emit complete Cursor hook responses ([#98](https://github.com/nickderobertis/allowlister/pull/98))
+
 ## [0.4.19](https://github.com/nickderobertis/allowlister/compare/v0.4.18...v0.4.19) - 2026-06-18
 
 ### Fixed
