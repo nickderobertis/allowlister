@@ -166,6 +166,29 @@ al_skip_if_service_unavailable() {
 # Args: <stream>.
 al_reason_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
+# A fail-closed invalid hook response is user-visible blocking, but it is not a
+# successful allowlister deny/ask decision. Treat it as its own hard failure so
+# side-effect/secret absence can never mask a broken hook protocol.
+# Args: <stream> <context>.
+al_assert_no_invalid_hook_response() {
+    local stream="$1" context="$2"
+    if grep -Eaiq 'invalid (hook )?response|invalid response for this hook step|blocked for safety' \
+        "$stream" "$stream.err" 2>/dev/null; then
+        al_dump_stream "$stream"
+        fail "$context hit an invalid hook response instead of an observable allowlister decision"
+    fi
+}
+
+# True when the transcript shows the harness/user-facing layer observed a block
+# or approval hold. This intentionally accepts harness-native wording because
+# many CLIs replace allowlister's raw reason with their own deny/approval text.
+# Args: <stream>.
+al_harness_block_observed() {
+    al_reason_in "$1" || grep -Eaiq \
+        '(blocked|denied|rejected|not allowed|permission_denials|permission denied|requires user approval|needs approval|cannot execute in non-interactive mode)' \
+        "$1" "$1.err" 2>/dev/null
+}
+
 # Conclude a built-in read case that must prove both sides of the gate:
 #   * the denied secret marker is absent, proving the deny held; and
 #   * the ungated public read either produced its marker or reached the harness's
@@ -174,11 +197,16 @@ al_reason_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 # Args: <deny-stream>.
 al_read_conclude() {
     local stream="$1"
+    al_assert_no_invalid_hook_response "$stream" "built-in read deny"
     if grep -aqF "$AL_SECRET_MARKER" "$stream" "$stream.err" 2>/dev/null; then
         al_dump_stream "$stream"
         fail "secret leaked: the marker reached the transcript (the built-in read deny did not hold)"
     fi
-    note "  ok: the secret was never surfaced — the built-in read deny held"
+    if ! al_harness_block_observed "$stream"; then
+        al_dump_stream "$stream"
+        fail "built-in read deny produced no observable harness deny/approval-hold signal"
+    fi
+    note "  ok: the secret was never surfaced and the harness showed a deny/hold"
     if grep -aqF "$AL_PUBLIC_MARKER" "$stream" "$stream.err" 2>/dev/null; then
         note "  ok: the public read marker surfaced — unmatched built-in reads can execute"
     elif grep -aqF "$AL_PUBLIC_FILE" "$stream" "$stream.err" 2>/dev/null \
@@ -200,11 +228,16 @@ al_read_conclude() {
 # forbidden file must be absent (hard). Args: <forbidden-file>.
 al_write_conclude() {
     local target="$1" stream="${2:-}"
+    [ -z "$stream" ] || al_assert_no_invalid_hook_response "$stream" "built-in write deny"
     if [ -e "$target" ]; then
         [ -n "$stream" ] && al_dump_stream "$stream"
         fail "forbidden file was created: $target (the built-in write deny did not hold)"
     fi
-    note "  ok: the forbidden file was never created — the built-in write deny held"
+    if [ -n "$stream" ] && ! al_harness_block_observed "$stream"; then
+        al_dump_stream "$stream"
+        fail "built-in write deny produced no observable harness deny/approval-hold signal"
+    fi
+    note "  ok: the forbidden file was never created and the harness showed a deny/hold"
 }
 
 # Conclude a built-in write fallthrough case. The target must exist with the
@@ -230,11 +263,16 @@ al_write_fallthrough_conclude() {
 # Args: <forbidden-path> <stream>.
 al_plugin_deny_conclude() {
     local target="$1" stream="$2"
+    al_assert_no_invalid_hook_response "$stream" "dynamic plugin deny"
     if [ -e "$target" ]; then
         al_dump_stream "$stream"
         fail "plugin-denied command executed: $target exists (the dynamic approval plugin did not block it)"
     fi
-    note "  ok: dynamic plugin deny blocked the command before side effects"
+    if ! al_harness_block_observed "$stream"; then
+        al_dump_stream "$stream"
+        fail "dynamic plugin deny produced no observable harness deny/approval-hold signal"
+    fi
+    note "  ok: dynamic plugin deny blocked the command and the harness showed a deny/hold"
     if grep -aq 'allowlister:.*live dynamic approval plugin' "$stream" "$stream.err" 2>/dev/null; then
         note "  confirmed: the harness surfaced the plugin decision reason"
     fi
@@ -250,6 +288,7 @@ al_plugin_deny_conclude() {
 # Returns 0 on pass or skip; calls `fail` (which exits) on a real failure.
 al_mcp_conclude() {
     local sentinel="$1" log="$2" stream="$3" token="${4:-}"
+    al_assert_no_invalid_hook_response "$stream" "MCP deny"
     if [ ! -f "$log" ] || ! grep -q 'tools/list' "$log" 2>/dev/null; then
         note "  SKIP: the harness never discovered the MCP server (no tools/list received)."
         note "        The MCP deny path was not exercised — the MCP config wiring needs fixing."
@@ -264,8 +303,8 @@ al_mcp_conclude() {
         fail "destructive MCP \`deletewidget\` executed: $sentinel was created (the MCP deny did not hold)"
     fi
     note "  ok: the MCP server was reachable but the destructive \`deletewidget\` call was blocked"
-    if al_reason_in "$stream"; then
-        note "  confirmed: the harness reported the MCP call was denied (the gate fired on the attempt)"
+    if al_harness_block_observed "$stream"; then
+        note "  confirmed: the harness showed an MCP deny/approval-hold signal"
     elif [ -n "$token" ] && grep -aqF "$token" "$stream" "$stream.err" 2>/dev/null; then
         note "  bonus: the safe \`echotoken\` result surfaced, so the harness does dispatch MCP tools"
     else
