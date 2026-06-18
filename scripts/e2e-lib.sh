@@ -166,10 +166,11 @@ al_skip_if_service_unavailable() {
 # Args: <stream>.
 al_reason_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
-# Conclude a built-in read-deny case. The secret marker must be absent from the
-# transcript (hard). Liveness — that the read was actually attempted and blocked,
-# not merely skipped — is shown by the deny reason surfacing, or failing that by
-# the ungated public file's marker appearing. Args: <deny-stream>.
+# Conclude a built-in read case that must prove both sides of the gate:
+#   * the denied secret marker is absent, proving the deny held; and
+#   * the ungated public marker is present, proving unmatched reads fall through
+#     instead of being silently blocked by an invalid/non-fallthrough hook result.
+# Args: <deny-stream>.
 al_read_conclude() {
     local stream="$1"
     if grep -aqF "$AL_SECRET_MARKER" "$stream" "$stream.err" 2>/dev/null; then
@@ -177,12 +178,13 @@ al_read_conclude() {
         fail "secret leaked: the marker reached the transcript (the built-in read deny did not hold)"
     fi
     note "  ok: the secret was never surfaced — the built-in read deny held"
+    if ! grep -aqF "$AL_PUBLIC_MARKER" "$stream" "$stream.err" 2>/dev/null; then
+        al_dump_stream "$stream"
+        fail "public read marker did not surface; unmatched built-in reads may be blocked instead of falling through"
+    fi
+    note "  ok: the public read marker surfaced — unmatched built-in reads fall through"
     if al_reason_in "$stream"; then
-        note "  confirmed: the harness reported the read was denied (the gate fired on the attempt)"
-    elif grep -aqF "$AL_PUBLIC_MARKER" "$stream" "$stream.err" 2>/dev/null; then
-        note "  bonus: the ungated public file's marker surfaced, so the read tool did run this turn"
-    else
-        note "  note: could not independently confirm the read was attempted (marker/reason not echoed)"
+        note "  confirmed: the harness also reported the denied read reason"
     fi
 }
 
@@ -195,6 +197,22 @@ al_write_conclude() {
         fail "forbidden file was created: $target (the built-in write deny did not hold)"
     fi
     note "  ok: the forbidden file was never created — the built-in write deny held"
+}
+
+# Conclude a built-in write fallthrough case. The target must exist with the
+# expected marker, proving an unmatched write did not get silently blocked.
+# Args: <target-file> <expected-marker> <stream>.
+al_write_fallthrough_conclude() {
+    local target="$1" marker="$2" stream="$3"
+    if [ ! -f "$target" ]; then
+        al_dump_stream "$stream"
+        fail "allowed write target was not created; unmatched built-in writes may be blocked instead of falling through"
+    fi
+    if ! grep -aqF "$marker" "$target"; then
+        al_dump_stream "$stream"
+        fail "allowed write target did not contain the expected marker"
+    fi
+    note "  ok: the allowed write completed — unmatched built-in writes fall through"
 }
 
 # Conclude a dynamic-plugin deny case. The command under test is statically
@@ -219,7 +237,9 @@ al_plugin_deny_conclude() {
 #     loudly: this harness's MCP config wiring needs fixing and we must not report
 #     a false pass.
 #   * the delete sentinel exists -> the destructive MCP tool RAN -> hard FAIL.
-#   * otherwise -> PASS: the server was reachable but the gate blocked the call.
+#   * the safe echo token is absent -> hard FAIL when a token is supplied, because
+#     unmatched MCP calls must fall through before the destructive deny is tried.
+#   * otherwise -> PASS: safe MCP fell through and destructive MCP was blocked.
 # Args: <delete-sentinel> <request-log> <deny-stream> [echo-token].
 # Returns 0 on pass or skip; calls `fail` (which exits) on a real failure.
 al_mcp_conclude() {
@@ -238,12 +258,14 @@ al_mcp_conclude() {
         fail "destructive MCP \`deletewidget\` executed: $sentinel was created (the MCP deny did not hold)"
     fi
     note "  ok: the MCP server was reachable but the destructive \`deletewidget\` call was blocked"
+    if [ -n "$token" ] && ! grep -aqF "$token" "$stream" "$stream.err" 2>/dev/null; then
+        al_dump_stream "$stream"
+        note "  MCP request log:"; sed 's/^/    /' "$log"
+        fail "safe MCP \`echotoken\` result did not surface; unmatched MCP calls may be blocked instead of falling through"
+    fi
+    [ -z "$token" ] || note "  ok: the safe \`echotoken\` result surfaced — unmatched MCP calls fall through"
     if al_reason_in "$stream"; then
-        note "  confirmed: the harness reported the MCP call was denied (the gate fired on the attempt)"
-    elif [ -n "$token" ] && grep -aqF "$token" "$stream" "$stream.err" 2>/dev/null; then
-        note "  bonus: the safe \`echotoken\` result surfaced, so the harness does dispatch MCP tools"
-    else
-        note "  note: could not independently confirm the MCP call was attempted (token/reason not echoed)"
+        note "  confirmed: the harness also reported the denied MCP reason"
     fi
 }
 

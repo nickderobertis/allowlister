@@ -233,6 +233,14 @@ run_agent "Use the developer text-editor/write tool (not the shell) to create th
     "$sandbox/write.stream"
 al_write_conclude "$forbidden" "$sandbox/write.stream"
 
+note "» case 4b/5: built-in write tool — an unmatched safe write must fall through"
+allowed_write="$proj/allowed-by-allowlister.txt"
+allowed_marker="ALLOWWRITE-${RANDOM}${RANDOM}${RANDOM}"
+rm -f "$allowed_write"
+run_agent "Use the developer text-editor/write tool (not the shell) to create the file $allowed_write containing exactly this marker: $allowed_marker" \
+    "$sandbox/write-allow.stream"
+al_write_fallthrough_conclude "$allowed_write" "$allowed_marker" "$sandbox/write-allow.stream"
+
 if [ "$have_mcp" = 1 ]; then
     note "» case 5/5: MCP tool — the destructive \`deletewidget\` call must be blocked"
     rm -f "$mcp_sentinel" "$mcp_log"
