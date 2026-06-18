@@ -172,7 +172,7 @@ al_reason_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 # Args: <stream> <context>.
 al_assert_no_invalid_hook_response() {
     local stream="$1" context="$2"
-    if grep -Eaiq 'invalid (hook )?response|invalid response for this hook step|blocked for safety' \
+    if grep -Eaiq 'returned an invalid response|invalid response for this hook step|blocked for safety' \
         "$stream" "$stream.err" 2>/dev/null; then
         al_dump_stream "$stream"
         fail "$context hit an invalid hook response instead of an observable allowlister decision"
