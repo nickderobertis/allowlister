@@ -2318,6 +2318,27 @@ fn copilot_hook_read_tool_denies_secret_with_stringified_args() {
 }
 
 #[test]
+fn cursor_before_read_file_without_matching_rule_allows_instead_of_invalid_ask() {
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let payload = serde_json::json!({
+        "hook_event_name": "beforeReadFile",
+        "file_path": "/repo/public.txt",
+        "workspace_roots": [project.path().to_string_lossy()],
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "cursor"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(permission_of(&output), "allow");
+}
+
+#[test]
 fn cursor_before_read_file_denies_secret_via_stdin() {
     let empty = TempDir::new().unwrap();
     let project = tool_project();

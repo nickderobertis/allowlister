@@ -10,9 +10,10 @@
 //! the top level (the structural shell path), `beforeReadFile` carries a
 //! `file_path` (gated as a `read` tool call), and `beforeMCPExecution` carries an
 //! `mcp__server__tool` name plus arguments (gated as an MCP tool call). Cursor has
-//! no pre-execution write/edit event, so writes/edits cannot be gated. Cursor has
-//! no "defer" permission either, so a deferred verdict maps to `ask` (its safest
-//! escalation: surface to the user), never to `allow`.
+//! no pre-execution write/edit event, so writes/edits cannot be gated. Cursor
+//! accepts `ask` for shell execution but not for `beforeReadFile`: file-read
+//! defers must therefore emit `allow` so an unmatched read rule does not become
+//! an invalid hook response that Cursor blocks.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -58,7 +59,8 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // `beforeShellExecution` (and any unrecognized event) keeps the structural
     // shell path. Cursor has no pre-execution write/edit event, so writes/edits
     // are not gateable here.
-    let result = match input.hook_event_name.as_str() {
+    let event = input.hook_event_name.as_str();
+    let result = match event {
         "beforeReadFile" => {
             let call = normalize::cursor_read(input.file_path.as_deref().unwrap_or_default());
             gate::evaluate_tool(&loaded, "cursor", dir, &call)
@@ -70,12 +72,7 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
         _ => gate::evaluate_shell(&loaded, "cursor", dir, &input.command),
     };
 
-    let permission = match result.verdict {
-        Verdict::Allow => "allow",
-        Verdict::Deny => "deny",
-        // Cursor has no "defer": escalate an undecided call to the user.
-        Verdict::Ask | Verdict::Defer => "ask",
-    };
+    let permission = cursor_permission(event, result.verdict);
     write_decision(
         &mut stdout,
         permission,
@@ -98,6 +95,23 @@ fn discovery_dir(input: &HookInput) -> &str {
         .map(String::as_str)
         .find(|root| !root.is_empty())
         .unwrap_or(".")
+}
+
+fn cursor_permission(event: &str, verdict: Verdict) -> &'static str {
+    match (event, verdict) {
+        (_, Verdict::Allow) => "allow",
+        (_, Verdict::Deny) => "deny",
+        // Cursor rejects `ask` as an invalid `beforeReadFile` response. For a
+        // deferred read, emit `allow` to preserve the user's pre-hook behavior:
+        // no matching allowlister rule means allowlister makes no decision.
+        ("beforeReadFile", Verdict::Defer) => "allow",
+        // `ask` cannot be represented for reads; deny is the conservative
+        // blocking equivalent for an explicit ask rule.
+        ("beforeReadFile", Verdict::Ask) => "deny",
+        // Shell execution supports `ask`, and Cursor has no true defer token, so
+        // an undecided shell/MCP call escalates to the user.
+        (_, Verdict::Ask | Verdict::Defer) => "ask",
+    }
 }
 
 fn write_decision<W: Write>(stdout: &mut W, permission: &str, message: &str) {
@@ -274,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn before_read_file_event_outside_rule_maps_defer_to_ask() {
+    fn before_read_file_event_outside_rule_maps_defer_to_allow() {
         let dir = sandbox_with_read_deny();
         let payload = format!(
             r#"{{"hook_event_name":"beforeReadFile","file_path":"/repo/a.txt","workspace_roots":[{}]}}"#,
@@ -282,8 +296,9 @@ mod tests {
         );
         let (code, value) = run_payload(&payload);
         assert_eq!(code, 0);
-        // No matching rule defers; Cursor has no defer, so it escalates to ask.
-        assert_eq!(permission(&value), "ask");
+        // Cursor rejects `ask` for beforeReadFile; an unmatched read must fall
+        // through by allowing the read instead of producing an invalid response.
+        assert_eq!(permission(&value), "allow");
     }
 
     #[test]
