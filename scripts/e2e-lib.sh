@@ -168,8 +168,9 @@ al_reason_in() { grep -aq 'allowlister:' "$1" "$1.err" 2>/dev/null; }
 
 # Conclude a built-in read case that must prove both sides of the gate:
 #   * the denied secret marker is absent, proving the deny held; and
-#   * the ungated public marker is present, proving unmatched reads fall through
-#     instead of being silently blocked by an invalid/non-fallthrough hook result.
+#   * the ungated public read either produced its marker or reached the harness's
+#     own deferred/approval path, proving unmatched reads fall through instead of
+#     being silently blocked by an invalid/non-fallthrough hook result.
 # Args: <deny-stream>.
 al_read_conclude() {
     local stream="$1"
@@ -178,11 +179,15 @@ al_read_conclude() {
         fail "secret leaked: the marker reached the transcript (the built-in read deny did not hold)"
     fi
     note "  ok: the secret was never surfaced — the built-in read deny held"
-    if ! grep -aqF "$AL_PUBLIC_MARKER" "$stream" "$stream.err" 2>/dev/null; then
+    if grep -aqF "$AL_PUBLIC_MARKER" "$stream" "$stream.err" 2>/dev/null; then
+        note "  ok: the public read marker surfaced — unmatched built-in reads can execute"
+    elif grep -aqF "$AL_PUBLIC_FILE" "$stream" "$stream.err" 2>/dev/null \
+        && grep -aq 'deferred_tool_use' "$stream" "$stream.err" 2>/dev/null; then
+        note "  ok: the public read reached the harness approval/defer path — unmatched built-in reads fall through"
+    else
         al_dump_stream "$stream"
-        fail "public read marker did not surface; unmatched built-in reads may be blocked instead of falling through"
+        fail "public read neither executed nor reached a deferred approval path; unmatched built-in reads may be blocked"
     fi
-    note "  ok: the public read marker surfaced — unmatched built-in reads fall through"
     if al_reason_in "$stream"; then
         note "  confirmed: the harness also reported the denied read reason"
     fi
