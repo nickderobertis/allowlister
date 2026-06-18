@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.19](https://github.com/nickderobertis/allowlister/compare/v0.4.18...v0.4.19) - 2026-06-18
+
+### Fixed
+
+- let Cursor read defers fall through ([#94](https://github.com/nickderobertis/allowlister/pull/94))
+
 ## [0.4.18](https://github.com/nickderobertis/allowlister/compare/v0.4.17...v0.4.18) - 2026-06-17
 
 ### Other
