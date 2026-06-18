@@ -115,15 +115,18 @@ fn cursor_permission(event: &str, verdict: Verdict) -> &'static str {
 }
 
 fn write_decision<W: Write>(stdout: &mut W, permission: &str, message: &str) {
-    // Carry the reason under both `agentMessage` (Cursor's published hook types,
-    // camelCase) and `agent_message` (Cursor's hooks docs, snake_case): the two
-    // disagree and we cannot tell which a given Cursor build reads, so emit both
-    // (Cursor ignores unknown keys). The message surfaces to the agent on `ask`;
-    // on `deny` Cursor substitutes its own generic "blocked by a hook" text and
-    // drops ours, which a hook cannot override. `permission` is the field that
-    // gates and is unambiguous. If writing fails Cursor treats the missing output
-    // as a fail-open (the command proceeds), which is the safe fallback.
+    // Cursor's hook schema includes `continue` alongside `permission`; newer
+    // Cursor builds can treat a permission-only object as an invalid hook
+    // response for some read-style hook steps (notably terminal/AwaitShell output
+    // reads). Always emit the complete documented envelope. Carry the reason under
+    // both `agentMessage` (older published hook types, camelCase) and
+    // `agent_message` (current docs, snake_case): Cursor ignores unknown keys. The
+    // message surfaces to the agent on `ask`; on `deny` Cursor may substitute its
+    // own generic "blocked by a hook" text. If writing fails Cursor treats the
+    // missing output as a fail-open (the command proceeds), which is the safe
+    // fallback.
     let output = serde_json::json!({
+        "continue": true,
         "permission": permission,
         "agentMessage": message,
         "agent_message": message,
