@@ -23,6 +23,10 @@ use std::path::{Path, PathBuf};
 pub struct Env {
     pub home: Option<PathBuf>,
     pub xdg_config_home: Option<PathBuf>,
+    /// Raw `ALLOWLISTER_HISTORY` value, if set. The recording toggle's semantics
+    /// (which strings mean on) live in `io::history`; this layer only carries the
+    /// raw value so the override is injectable in tests.
+    pub history_override: Option<String>,
 }
 
 impl Env {
@@ -31,6 +35,7 @@ impl Env {
         Env {
             home: std::env::var_os("HOME").map(PathBuf::from),
             xdg_config_home: std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            history_override: std::env::var("ALLOWLISTER_HISTORY").ok(),
         }
     }
 }
@@ -162,6 +167,7 @@ mod tests {
         let env = Env {
             home: Some(dir.path().join("home")),
             xdg_config_home: Some(xdg.clone()),
+            ..Env::default()
         };
         assert_eq!(
             user_config_path(&env),
@@ -179,6 +185,7 @@ mod tests {
         let env = Env {
             home: None,
             xdg_config_home: Some(xdg.clone()),
+            ..Env::default()
         };
         assert_eq!(
             user_config_path(&env),
@@ -195,6 +202,7 @@ mod tests {
         let env = Env {
             home: Some(home.clone()),
             xdg_config_home: None,
+            ..Env::default()
         };
         assert_eq!(
             user_config_path(&env),
@@ -227,6 +235,7 @@ mod tests {
         let env = Env {
             home: None,
             xdg_config_home: Some(xdg.clone()),
+            ..Env::default()
         };
         assert_eq!(
             default_user_config_path(&env),

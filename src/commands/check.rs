@@ -39,7 +39,14 @@ pub fn run(args: CheckArgs) -> Result<i32> {
 
     let result = if let Some(tool) = args.tool {
         let call = build_tool_call(tool, args.params, args.raw)?;
-        domain::evaluate_tool_call(&call, &loaded.tool_rules)
+        let result = domain::evaluate_tool_call(&call, &loaded.tool_rules);
+        plugins::evaluate_tool(
+            &loaded.plugins,
+            "check",
+            &cwd.to_string_lossy(),
+            &call,
+            result,
+        )
     } else {
         // The CLI argument group guarantees a command when `--tool` is absent.
         let command = args.command.unwrap_or_default();

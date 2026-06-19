@@ -363,18 +363,37 @@ external code after the static shell-rule engine:
 }
 ```
 
-Each plugin process receives one JSON object on stdin and must print one JSON
-object on stdout:
+A plugin runs for **both** subjects: a shell command and a non-shell tool call.
+Each plugin process receives one JSON object on stdin — a tagged union keyed on
+`subject` — and must print one JSON object on stdout. A shell request:
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "subject": "shell",
   "harness": "claude-code",
   "cwd": "/repo",
-  "command": "deploy --ticket=APPROVED",
+  "command": "gh pr list | deploy --ticket=APPROVED",
   "current_verdict": "defer",
-  "current_reason": "no rule matched `deploy --ticket=APPROVED` (standalone)"
+  "current_reason": "no rule matched `deploy --ticket=APPROVED` (pipe_filter)",
+  "fragments": [
+    {
+      "display": "gh pr list",
+      "argv": ["gh", "pr", "list"],
+      "role": "pipe_source",
+      "verdict": "allow",
+      "rule": "gh read-only",
+      "reason": "allowed by 'gh read-only'"
+    },
+    {
+      "display": "deploy --ticket=APPROVED",
+      "argv": ["deploy", "--ticket=APPROVED"],
+      "role": "pipe_filter",
+      "verdict": "defer",
+      "rule": null,
+      "reason": "no matching rule"
+    }
+  ]
 }
 ```
 
@@ -382,18 +401,90 @@ object on stdout:
 { "verdict": "allow", "reason": "approved ticket tag present" }
 ```
 
-Valid plugin verdicts are `allow`, `ask`, `deny`, and `defer`. Composition is
-deliberately conservative:
+### Protocol version 2: structured fragments
 
-- a static `deny` is final, so plugins cannot punch through hard guardrails;
+`protocol_version` is `2`. The `command`, `cwd`, `harness`, `current_verdict`,
+and `current_reason` fields are unchanged from v1, so a plugin that reads only
+those keeps working — `fragments` is purely additive.
+
+`fragments` is the structured form of the same per-command decomposition that
+`current_reason` narrates. Each element is one role-tagged fragment from the
+bash AST, **in source order**, with its individual decision:
+
+| field     | type                | notes                                                                                       |
+| --------- | ------------------- | ------------------------------------------------------------------------------------------- |
+| `display` | string              | The fragment as shown — its argv joined by single spaces.                                    |
+| `argv`    | string[]            | Tokenized argv from the AST, so a plugin need not re-tokenize.                               |
+| `role`    | string (enum)       | Structural role (closed set below).                                                          |
+| `verdict` | string (enum)       | Per-fragment decision: `allow`, `ask`, `deny`, or `defer`.                                   |
+| `rule`    | string \| null      | Name of the matching rule; `null` when no rule matched (a defer).                            |
+| `reason`  | string              | Per-fragment explanation — the text `explain` prints after `<-`.                             |
+
+The `role` enum is a closed set of five values:
+
+- `standalone` — a top-level command whose output goes to the terminal.
+- `pipe_source` — the leftmost command in a pipeline.
+- `pipe_filter` — a non-leftmost command in a pipeline.
+- `subshell` — a command inside `( … )`, `{ …; }`, or a `for`/`while`/`until`/`if`/`case` body.
+- `substitution` — a command inside `$(…)`, backticks, or `<(…)`/`>(…)` process substitution.
+
+Unlike `current_reason`, which names only the fragments that trip (the ones that
+ask or defer), `fragments` lists **every** fragment — allowed ones included — so
+a plugin can render the whole script with each fragment's status, the case where
+only one or two fragments in a longer line actually tripped.
+
+`fragments` is keyed to shell commands and is present only for `subject:
+"shell"`. A v1 binary omits `fragments` entirely; a plugin that wants the
+structured view should treat its absence as a signal to fall back to parsing
+`current_reason`. Treat the request as additive and ignore unknown future fields.
+
+### Protocol version 2: tool-call requests
+
+The request is a tagged union on `subject`. A non-shell tool call (a file read,
+a web fetch, an MCP tool, …) sets `subject: "tool"` and, in place of `command`
+and `fragments`, carries a `tool` object — the structured form the tool-rule
+engine matches on:
+
+```json
+{
+  "protocol_version": 2,
+  "subject": "tool",
+  "harness": "claude-code",
+  "cwd": "/repo",
+  "current_verdict": "defer",
+  "current_reason": "no rule matched tool `mcp__github__create_issue`",
+  "tool": {
+    "name": "mcp__github__create_issue",
+    "capability": "mcp",
+    "params": { "mcp_server": "github", "mcp_tool": "create_issue" },
+    "raw": { "owner": "acme", "repo": "app", "title": "bug" }
+  }
+}
+```
+
+| field        | type   | notes                                                                                          |
+| ------------ | ------ | ---------------------------------------------------------------------------------------------- |
+| `name`       | string | The harness's own tool name, e.g. `Read`, `mcp__github__create_issue`.                          |
+| `capability` | string | The portable capability: `read`, `write`, `edit`, `glob`, `grep`, `web_fetch`, `web_search`, `mcp`, or `other`. |
+| `params`     | object | Canonical scalar parameters the adapter mapped (`path`/`url`/`query`/…), keyed by canonical name. |
+| `raw`        | object | The original tool-input object, verbatim, for any server-defined parameter `params` omits.       |
+
+Because the arms are mutually exclusive, key off `subject` first: read
+`command`/`fragments` for `"shell"` and `tool` for `"tool"`. The verdict
+response shape and composition rules below are identical for both subjects.
+
+Valid plugin verdicts are `allow`, `ask`, `deny`, and `defer`. Composition is
+deliberately conservative and the same for shell commands and tool calls:
+
+- a static `deny` is final, so plugins cannot punch through hard guardrails (a
+  plugin is not even invoked once a static rule denies);
 - any plugin `deny` blocks;
-- otherwise any plugin `ask` surfaces the command for approval;
+- otherwise any plugin `ask` surfaces the call for approval;
 - otherwise a plugin `allow` may upgrade only a static `defer` to `allow`;
 - plugin `defer`, invalid output, a non-zero exit, or a timeout leaves the static
   decision unchanged and records only a non-fatal warning.
 
-The plugin hot path is shell-command only today. Non-shell tool calls still use
-the static tool-rule engine described below. A minimal copyable plugin lives at
+A minimal copyable plugin lives at
 [`examples/dynamic-approval-plugin.sh`](examples/dynamic-approval-plugin.sh).
 
 ## Usage history

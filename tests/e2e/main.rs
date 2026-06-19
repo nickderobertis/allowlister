@@ -66,6 +66,16 @@ impl Sandbox {
         )
     }
 
+    /// A `PreToolUse` payload for the `Read` tool (a non-shell tool call) whose
+    /// `cwd` points at the sandbox project dir.
+    fn read_payload(&self, file_path: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":{}}},"cwd":{}}}"#,
+            serde_json::to_string(file_path).unwrap(),
+            serde_json::to_string(&self.cwd().to_string_lossy()).unwrap()
+        )
+    }
+
     /// A Cursor `beforeShellExecution` payload whose `cwd` points at the sandbox
     /// project dir.
     fn cursor_payload(&self, command: &str) -> String {
@@ -974,6 +984,258 @@ fn plugin_timeout_is_non_fatal_and_preserves_static_allow() {
         .assert()
         .success()
         .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn plugin_receives_protocol_v2_structured_fragments() {
+    // Protocol v2 exposes the full per-fragment decomposition to plugins, not
+    // just the prose `current_reason` (which names only the tripping fragments).
+    // A pipeline with an allowed source, an asked filter, and a deferred filter
+    // must arrive as three role-tagged entries in source order, each carrying
+    // its own verdict, matching rule (null on a defer), argv, and reason.
+    //
+    // The inspector plugin echoes what it received and returns `deny`, which
+    // always takes effect when plugins run — so the echo surfaces regardless of
+    // the base verdict, and one test observes every per-fragment verdict a
+    // plugin can see (allow/ask/defer; a denied fragment never reaches a plugin,
+    // since it short-circuits the whole command to deny first).
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"rm-confirm","match":"rm *","action":"ask"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "git log | rm scratch | plugin-inspect", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        // Protocol version and fragment count, in source order.
+        .stdout(predicate::str::contains("v2 [3]:"))
+        // The allowed pipe source: a non-null rule and its argv and reason.
+        .stdout(predicate::str::contains("pipe_source|allow|"))
+        .stdout(predicate::str::contains("|git+log|allowed by"))
+        // The asked filter: its own verdict, the ask rule, argv, and reason.
+        .stdout(predicate::str::contains(
+            "pipe_filter|ask|rm-confirm|rm+scratch|needs approval per rule 'rm-confirm'",
+        ))
+        // The deferred filter: a null rule (rendered `-`) and "no matching rule".
+        .stdout(predicate::str::contains(
+            "pipe_filter|defer|-|plugin-inspect|no matching rule",
+        ));
+}
+
+#[test]
+fn tool_plugin_receives_protocol_v2_tool_object() {
+    // A plugin runs for tool calls too. The request is discriminated on
+    // `subject`: a tool call carries a `tool` object (name, capability, canonical
+    // params) instead of `command`/`fragments`. The inspector echoes that object
+    // and returns `allow`, which upgrades the static `defer` (no tool rule
+    // matched), so the echo confirms protocol-v2 tool data reached the plugin.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/tool-inspect",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "tool v2 cap=read name=read params=[path=/repo/tool-inspect]",
+        ));
+}
+
+#[test]
+fn static_tool_deny_remains_final_even_when_plugin_would_allow() {
+    // The shell guarantee holds on the tool path: a static deny is final, so a
+    // plugin never even runs (the inspector would allow this `tool-inspect` path).
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"no-ssh","tool":"read","params":{{"path":["**/.ssh/**"]}},"action":"deny"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/home/u/.ssh/tool-inspect",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("denied by rule 'no-ssh'"))
+        // The plugin's allow reason must not appear — it never ran.
+        .stdout(predicate::str::contains("tool v2").not());
+}
+
+#[test]
+fn tool_plugin_allows_a_deferred_read_through_the_hook() {
+    // The real harness path: a `Read` tool call arrives via `hook claude-code`,
+    // no static tool rule matches (defer), and the plugin upgrades it to allow.
+    // Exercises the `gate::evaluate_tool` wiring, not just `check --tool`.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.read_payload("/repo/tool-inspect"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "allow");
+}
+
+#[test]
+fn tool_plugin_deny_blocks_a_read_through_the_hook() {
+    // A plugin deny blocks a tool call that no static rule covered.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"blocker","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.read_payload("/repo/tool-deny"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "deny");
+}
+
+#[test]
+fn tool_plugin_ask_surfaces_a_read_through_the_hook() {
+    // A plugin ask surfaces a tool call for the harness's approval prompt.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"reviewer","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    let output = sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(sandbox.read_payload("/repo/tool-ask"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(decision_of(&output), "ask");
+}
+
+#[test]
+fn tool_plugin_invalid_json_is_non_fatal_and_preserves_static_allow() {
+    // A broken plugin response on the tool path is swallowed, leaving the static
+    // allow intact — the same non-fatal contract the shell path guarantees.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"any read","tool":"read","action":"allow","params":{{"path":["**"]}}}}],"plugins":[{{"name":"broken plugin","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/tool-bad-json",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn tool_plugin_timeout_is_non_fatal_and_preserves_static_allow() {
+    // A plugin that exceeds its timeout on the tool path is swallowed, leaving the
+    // static allow intact.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"any read","tool":"read","action":"allow","params":{{"path":["**"]}}}}],"plugins":[{{"name":"slow plugin","command":[{plugin},"example-plugin"],"timeout_ms":10}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/tool-slow",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("ALLOW"));
+}
+
+#[test]
+fn shell_plugin_sees_substitution_role_fragments() {
+    // A command substitution produces a fragment tagged `substitution`. The
+    // inspector confirms that role reaches the plugin structurally, alongside the
+    // allowed standalone outer command — covering a role the pipeline test does
+    // not exercise.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "echo $(plugin-inspect)", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("v2 [2]:"))
+        // The outer `echo …` is a standalone allow (matched by the user config).
+        .stdout(predicate::str::contains("standalone|allow|"))
+        // The inner command substitution arrives tagged `substitution`.
+        .stdout(predicate::str::contains(
+            "substitution|defer|-|plugin-inspect|no matching rule",
+        ));
 }
 
 #[test]
