@@ -497,10 +497,31 @@ pub fn record(
     subject: Subject,
     result: &DecisionResult,
 ) {
-    if !resolve_enabled(enabled_in_config) {
+    record_with(
+        &Env::from_process(),
+        enabled_in_config,
+        harness,
+        project,
+        subject,
+        result,
+    );
+}
+
+/// [`record`] with the environment injected, so tests exercise the real
+/// recording path (toggle resolution, store-dir discovery, append) without
+/// mutating process-global env vars.
+fn record_with(
+    env: &Env,
+    enabled_in_config: bool,
+    harness: &str,
+    project: &str,
+    subject: Subject,
+    result: &DecisionResult,
+) {
+    if !resolve_enabled(env, enabled_in_config) {
         return;
     }
-    let Some(dir) = configfs::default_history_dir(&Env::from_process()) else {
+    let Some(dir) = configfs::default_history_dir(env) else {
         return;
     };
     let project = crate::io::project::identify(project);
@@ -508,16 +529,16 @@ pub fn record(
     let _ = append_event(&dir, &event);
 }
 
-/// The `ALLOWLISTER_HISTORY` env var overrides the config toggle: `1`/`true`/
-/// `on`/`yes` force recording on, anything else (e.g. `0`/`false`) forces it off.
-/// Absent, the config value decides.
-fn resolve_enabled(config_enabled: bool) -> bool {
-    match std::env::var("ALLOWLISTER_HISTORY") {
-        Ok(value) => matches!(
+/// The `ALLOWLISTER_HISTORY` override (carried on [`Env`]) beats the config
+/// toggle: `1`/`true`/`on`/`yes` force recording on, anything else (e.g.
+/// `0`/`false`) forces it off. Absent, the config value decides.
+fn resolve_enabled(env: &Env, config_enabled: bool) -> bool {
+    match &env.history_override {
+        Some(value) => matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "on" | "yes" | "enable" | "enabled"
         ),
-        Err(_) => config_enabled,
+        None => config_enabled,
     }
 }
 
@@ -1235,30 +1256,48 @@ mod tests {
         assert_eq!(deferred[0].key, "ls foo | grep y");
     }
 
+    /// An [`Env`] whose only configured input is the history override, with the
+    /// store rooted under `xdg`. Avoids mutating process-global env vars, so these
+    /// tests are race-free under any test runner.
+    fn env_with(xdg: &Path, history_override: Option<&str>) -> Env {
+        Env {
+            home: None,
+            xdg_config_home: Some(xdg.to_path_buf()),
+            history_override: history_override.map(str::to_string),
+        }
+    }
+
     #[test]
     fn resolve_enabled_env_overrides_config() {
-        // Each nextest test runs in its own process, so mutating the env is safe.
-        std::env::remove_var("ALLOWLISTER_HISTORY");
-        assert!(resolve_enabled(true));
-        assert!(!resolve_enabled(false));
-        std::env::set_var("ALLOWLISTER_HISTORY", "1");
-        assert!(resolve_enabled(false));
-        std::env::set_var("ALLOWLISTER_HISTORY", "0");
-        assert!(!resolve_enabled(true));
-        std::env::remove_var("ALLOWLISTER_HISTORY");
+        let absent = Env::default();
+        assert!(resolve_enabled(&absent, true));
+        assert!(!resolve_enabled(&absent, false));
+
+        let forced_on = Env {
+            history_override: Some("1".to_string()),
+            ..Env::default()
+        };
+        assert!(resolve_enabled(&forced_on, false));
+
+        let forced_off = Env {
+            history_override: Some("0".to_string()),
+            ..Env::default()
+        };
+        assert!(!resolve_enabled(&forced_off, true));
     }
 
     #[test]
     fn record_writes_when_forced_on_via_env() {
         let dir = TempDir::new().unwrap();
-        std::env::set_var("ALLOWLISTER_HISTORY", "1");
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        let env = env_with(dir.path(), Some("1"));
         let cfg = crate::config::compile_str(
             r#"{"rules":[{"name":"ls","match":"ls*","action":"allow"}]}"#,
             "t",
         );
         let result = evaluate("ls -la", &cfg.rules);
-        record(
+        // Config disables recording; the env override forces it on.
+        record_with(
+            &env,
             false,
             "claude-code",
             "/repo",
@@ -1269,17 +1308,16 @@ mod tests {
         let summary = aggregate(&history);
         assert_eq!(summary.events_total, 1);
         assert_eq!(summary.commands["ls -la"].allow, 1);
-        std::env::remove_var("ALLOWLISTER_HISTORY");
-        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]
     fn record_is_a_noop_when_disabled() {
         let dir = TempDir::new().unwrap();
-        std::env::remove_var("ALLOWLISTER_HISTORY");
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        let env = env_with(dir.path(), None);
         let result = evaluate("ls -la", &[]);
-        record(
+        // No override and config disabled: nothing is written.
+        record_with(
+            &env,
             false,
             "claude-code",
             "/repo",
@@ -1287,7 +1325,24 @@ mod tests {
             &result,
         );
         assert!(!dir.path().join("allowlister").join("history").exists());
-        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn record_with_env_override_off_beats_enabled_config() {
+        // The mirror of the forced-on case: config enables recording but the env
+        // override turns it off, so no store is written.
+        let dir = TempDir::new().unwrap();
+        let env = env_with(dir.path(), Some("0"));
+        let result = evaluate("ls -la", &[]);
+        record_with(
+            &env,
+            true,
+            "claude-code",
+            "/repo",
+            Subject::Shell("ls -la"),
+            &result,
+        );
+        assert!(!dir.path().join("allowlister").join("history").exists());
     }
 
     #[test]

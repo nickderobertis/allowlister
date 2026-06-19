@@ -286,6 +286,7 @@ mod tests {
         Env {
             home: None,
             xdg_config_home: None,
+            ..Env::default()
         }
     }
 
@@ -343,6 +344,7 @@ mod tests {
         let env = Env {
             home: Some(home.clone()),
             xdg_config_home: None,
+            ..Env::default()
         };
         let outcome = install_hook(Harness::Cursor, true, dir.path(), &env).unwrap();
         assert_eq!(outcome.path, home.join(".cursor/hooks.json"));

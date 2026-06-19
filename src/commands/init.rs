@@ -974,6 +974,7 @@ mod tests {
         Env {
             home: Some(dir.join("home")),
             xdg_config_home: Some(dir.join("xdg")),
+            ..Env::default()
         }
     }
 
