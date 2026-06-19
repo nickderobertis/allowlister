@@ -120,10 +120,23 @@ pub fn run() -> Result<i32> {
 /// plugin; otherwise it defers.
 fn run_tool(request: &Request) -> Result<i32> {
     let tool = request.tool.clone().unwrap_or_default();
-    let marker = "tool-inspect";
-    let saw_marker =
-        tool.name.contains(marker) || tool.params.values().any(|value| value.contains(marker));
-    let (verdict, reason) = if saw_marker {
+    let saw = |marker: &str| {
+        tool.name.contains(marker) || tool.params.values().any(|value| value.contains(marker))
+    };
+    if saw("tool-bad-json") {
+        println!("not json");
+        return Ok(0);
+    }
+    if saw("tool-slow") {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    let (verdict, reason) = if saw("tool-deny") {
+        ("deny", "tool blocked by example plugin".to_string())
+    } else if saw("tool-ask") {
+        ("ask", "tool needs review".to_string())
+    } else if saw("tool-inspect") {
+        // Echo the structured tool object so an e2e test can confirm protocol-v2
+        // tool data reached the plugin.
         let params = tool
             .params
             .iter()
