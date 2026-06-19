@@ -87,6 +87,11 @@ jobs:
       # this workflow's `release` step above, which tags vX.Y.Z and cuts the
       # GitHub Release. Artifacts thus still publish only after the gate is green —
       # there is no manual merge step, but no gating is skipped.
+      # Squash, not rebase: this repository disallows rebase merges, so
+      # `--rebase` makes `gh pr merge` fail with HTTP 405 and auto-merge is never
+      # enabled — the release PR then sits green-but-open and the release stalls.
+      # Squash is an allowed method and collapses the PR to the single
+      # `chore: release vX.Y.Z` commit release-plz expects on main.
       - name: Auto-merge the release PR when the gate is green
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
@@ -95,7 +100,7 @@ jobs:
                  --jq 'map(select(.headRefName | startswith("release-plz-"))) | .[0].number // empty')
           if [ -n "$pr" ]; then
             echo "Enabling auto-merge on release PR #$pr"
-            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --rebase \
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash \
               || echo "::warning::could not enable auto-merge on #$pr (already enabled, or already merging)"
           else
             echo "No open release PR to auto-merge."
