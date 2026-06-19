@@ -31,6 +31,10 @@ struct RequestFragment {
     verdict: String,
     #[serde(default)]
     rule: Option<String>,
+    #[serde(default)]
+    argv: Vec<String>,
+    #[serde(default)]
+    reason: String,
 }
 
 pub fn run() -> Result<i32> {
@@ -52,25 +56,30 @@ pub fn run() -> Result<i32> {
         ("allow", "approved ticket tag present".to_string())
     } else if request.command.contains("plugin-inspect") {
         // Echo the protocol-v2 structured data so an e2e test can confirm the
-        // per-fragment decomposition reached the plugin, not just the prose
-        // `current_reason`.
+        // full per-fragment decomposition reached the plugin, not just the prose
+        // `current_reason`. Returning `deny` is deliberate: a plugin deny always
+        // takes effect when plugins run, so the echoed summary surfaces whatever
+        // the base verdict was (allow, ask, or defer) — and lets one test observe
+        // every per-fragment verdict that can reach a plugin.
         let summary = request
             .fragments
             .iter()
             .map(|fragment| {
                 format!(
-                    "{}/{}/{}",
+                    "{}|{}|{}|{}|{}",
                     fragment.role,
                     fragment.verdict,
-                    fragment.rule.as_deref().unwrap_or("-")
+                    fragment.rule.as_deref().unwrap_or("-"),
+                    fragment.argv.join("+"),
+                    fragment.reason,
                 )
             })
             .collect::<Vec<_>>()
-            .join(",");
+            .join(" ;; ");
         (
-            "allow",
+            "deny",
             format!(
-                "v{} saw {} fragment(s): [{summary}]",
+                "v{} [{}]: {summary}",
                 request.protocol_version,
                 request.fragments.len()
             ),

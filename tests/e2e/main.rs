@@ -978,28 +978,43 @@ fn plugin_timeout_is_non_fatal_and_preserves_static_allow() {
 
 #[test]
 fn plugin_receives_protocol_v2_structured_fragments() {
-    // Protocol v2 exposes the per-fragment decomposition to plugins. A pipeline
-    // with one allowed fragment and one deferred fragment must arrive as two
-    // role-tagged entries, each carrying its own verdict and matching rule —
-    // not just the prose summary that names only the deferred fragment.
+    // Protocol v2 exposes the full per-fragment decomposition to plugins, not
+    // just the prose `current_reason` (which names only the tripping fragments).
+    // A pipeline with an allowed source, an asked filter, and a deferred filter
+    // must arrive as three role-tagged entries in source order, each carrying
+    // its own verdict, matching rule (null on a defer), argv, and reason.
+    //
+    // The inspector plugin echoes what it received and returns `deny`, which
+    // always takes effect when plugins run — so the echo surfaces regardless of
+    // the base verdict, and one test observes every per-fragment verdict a
+    // plugin can see (allow/ask/defer; a denied fragment never reaches a plugin,
+    // since it short-circuits the whole command to deny first).
     let sandbox = Sandbox::new();
     let plugin = assert_cmd::cargo::cargo_bin("allowlister");
     let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
     sandbox.write_project_config(&format!(
-        r#"{{"rules":[{{"name":"list","match":"gh pr list*","action":"allow"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+        r#"{{"rules":[{{"name":"rm-confirm","match":"rm *","action":"ask"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
     ));
 
     sandbox
         .command()
-        .args(["check", "gh pr list | plugin-inspect now", "--cwd"])
+        .args(["check", "git log | rm scratch | plugin-inspect", "--cwd"])
         .arg(sandbox.cwd())
         .assert()
-        .success()
-        // The plugin echoes what protocol v2 delivered: two fragments, the
-        // allowed pipe source with its rule, and the deferred pipe filter.
-        .stdout(predicate::str::contains("v2 saw 2 fragment(s)"))
-        .stdout(predicate::str::contains("pipe_source/allow/"))
-        .stdout(predicate::str::contains("pipe_filter/defer/-"));
+        .code(2)
+        // Protocol version and fragment count, in source order.
+        .stdout(predicate::str::contains("v2 [3]:"))
+        // The allowed pipe source: a non-null rule and its argv and reason.
+        .stdout(predicate::str::contains("pipe_source|allow|"))
+        .stdout(predicate::str::contains("|git+log|allowed by"))
+        // The asked filter: its own verdict, the ask rule, argv, and reason.
+        .stdout(predicate::str::contains(
+            "pipe_filter|ask|rm-confirm|rm+scratch|needs approval per rule 'rm-confirm'",
+        ))
+        // The deferred filter: a null rule (rendered `-`) and "no matching rule".
+        .stdout(predicate::str::contains(
+            "pipe_filter|defer|-|plugin-inspect|no matching rule",
+        ));
 }
 
 #[test]
