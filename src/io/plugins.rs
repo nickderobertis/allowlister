@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::PluginConfig;
 use crate::domain::{DecisionResult, Verdict};
 
+/// Protocol v2 adds `fragments`; v1 fields are unchanged so older plugins that
+/// ignore the new array keep working.
+const PROTOCOL_VERSION: u8 = 2;
+
 #[derive(Debug, Serialize)]
 struct PluginRequest<'a> {
     protocol_version: u8,
@@ -19,6 +23,29 @@ struct PluginRequest<'a> {
     command: &'a str,
     current_verdict: &'a str,
     current_reason: &'a str,
+    /// Every parsed fragment in source order, each with its own verdict — the
+    /// structured form of the decomposition that `current_reason` only narrates
+    /// for the tripping fragments. Empty for subjects without shell fragments.
+    fragments: Vec<PluginFragment<'a>>,
+}
+
+/// One role-tagged fragment with its individual decision, mirroring a row of
+/// `explain`'s decision table.
+#[derive(Debug, Serialize)]
+struct PluginFragment<'a> {
+    /// The fragment as shown — argv joined by single spaces.
+    display: String,
+    /// Tokenized argv from the AST, so a plugin need not re-tokenize.
+    argv: &'a [String],
+    /// Structural role: one of `standalone`, `pipe_source`, `pipe_filter`,
+    /// `subshell`, `substitution`.
+    role: &'a str,
+    /// Per-fragment verdict: `allow`, `ask`, `deny`, or `defer`.
+    verdict: &'a str,
+    /// Name of the matching rule, or null when no rule matched (a defer).
+    rule: Option<&'a str>,
+    /// Per-fragment explanation, the text `explain` prints after `<-`.
+    reason: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,14 +111,27 @@ fn run_plugin(
     command: &str,
     current: &DecisionResult,
 ) -> Result<Option<(Verdict, String)>, String> {
+    let fragments: Vec<PluginFragment> = current
+        .fragments
+        .iter()
+        .map(|decision| PluginFragment {
+            display: decision.fragment.cmd_string(),
+            argv: &decision.fragment.argv,
+            role: decision.fragment.role.as_str(),
+            verdict: decision.verdict.as_str(),
+            rule: decision.rule_name.as_deref(),
+            reason: &decision.reason,
+        })
+        .collect();
     let request = PluginRequest {
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         subject: "shell",
         harness,
         cwd,
         command,
         current_verdict: current.verdict.as_str(),
         current_reason: &current.reason,
+        fragments,
     };
     let body = serde_json::to_vec(&request).map_err(|err| err.to_string())?;
     let mut child = Command::new(&plugin.command[0])

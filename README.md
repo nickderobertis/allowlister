@@ -368,19 +368,76 @@ object on stdout:
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "subject": "shell",
   "harness": "claude-code",
   "cwd": "/repo",
-  "command": "deploy --ticket=APPROVED",
+  "command": "gh pr list | deploy --ticket=APPROVED",
   "current_verdict": "defer",
-  "current_reason": "no rule matched `deploy --ticket=APPROVED` (standalone)"
+  "current_reason": "no rule matched `deploy --ticket=APPROVED` (pipe_filter)",
+  "fragments": [
+    {
+      "display": "gh pr list",
+      "argv": ["gh", "pr", "list"],
+      "role": "pipe_source",
+      "verdict": "allow",
+      "rule": "gh read-only",
+      "reason": "allowed by 'gh read-only'"
+    },
+    {
+      "display": "deploy --ticket=APPROVED",
+      "argv": ["deploy", "--ticket=APPROVED"],
+      "role": "pipe_filter",
+      "verdict": "defer",
+      "rule": null,
+      "reason": "no matching rule"
+    }
+  ]
 }
 ```
 
 ```json
 { "verdict": "allow", "reason": "approved ticket tag present" }
 ```
+
+### Protocol version 2: structured fragments
+
+`protocol_version` is `2`. The `command`, `cwd`, `harness`, `current_verdict`,
+and `current_reason` fields are unchanged from v1, so a plugin that reads only
+those keeps working — `fragments` is purely additive.
+
+`fragments` is the structured form of the same per-command decomposition that
+`current_reason` narrates. Each element is one role-tagged fragment from the
+bash AST, **in source order**, with its individual decision:
+
+| field     | type                | notes                                                                                       |
+| --------- | ------------------- | ------------------------------------------------------------------------------------------- |
+| `display` | string              | The fragment as shown — its argv joined by single spaces.                                    |
+| `argv`    | string[]            | Tokenized argv from the AST, so a plugin need not re-tokenize.                               |
+| `role`    | string (enum)       | Structural role (closed set below).                                                          |
+| `verdict` | string (enum)       | Per-fragment decision: `allow`, `ask`, `deny`, or `defer`.                                   |
+| `rule`    | string \| null      | Name of the matching rule; `null` when no rule matched (a defer).                            |
+| `reason`  | string              | Per-fragment explanation — the text `explain` prints after `<-`.                             |
+
+The `role` enum is a closed set of five values:
+
+- `standalone` — a top-level command whose output goes to the terminal.
+- `pipe_source` — the leftmost command in a pipeline.
+- `pipe_filter` — a non-leftmost command in a pipeline.
+- `subshell` — a command inside `( … )`, `{ …; }`, or a `for`/`while`/`until`/`if`/`case` body.
+- `substitution` — a command inside `$(…)`, backticks, or `<(…)`/`>(…)` process substitution.
+
+Unlike `current_reason`, which names only the fragments that trip (the ones that
+ask or defer), `fragments` lists **every** fragment — allowed ones included — so
+a plugin can render the whole script with each fragment's status, the case where
+only one or two fragments in a longer line actually tripped.
+
+`fragments` is keyed to shell commands. A non-shell `subject` (e.g. a `--tool`
+call) has no shell fragments, so the array is empty (`[]`). Treat the array as
+additive and ignore unknown future fields.
+
+A v1 binary omits `fragments` entirely; a plugin that wants the structured view
+should treat its absence as a signal to fall back to parsing `current_reason`.
 
 Valid plugin verdicts are `allow`, `ask`, `deny`, and `defer`. Composition is
 deliberately conservative:

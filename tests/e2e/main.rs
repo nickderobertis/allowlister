@@ -977,6 +977,32 @@ fn plugin_timeout_is_non_fatal_and_preserves_static_allow() {
 }
 
 #[test]
+fn plugin_receives_protocol_v2_structured_fragments() {
+    // Protocol v2 exposes the per-fragment decomposition to plugins. A pipeline
+    // with one allowed fragment and one deferred fragment must arrive as two
+    // role-tagged entries, each carrying its own verdict and matching rule —
+    // not just the prose summary that names only the deferred fragment.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"list","match":"gh pr list*","action":"allow"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "gh pr list | plugin-inspect now", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        // The plugin echoes what protocol v2 delivered: two fragments, the
+        // allowed pipe source with its rule, and the deferred pipe filter.
+        .stdout(predicate::str::contains("v2 saw 2 fragment(s)"))
+        .stdout(predicate::str::contains("pipe_source/allow/"))
+        .stdout(predicate::str::contains("pipe_filter/defer/-"));
+}
+
+#[test]
 fn check_json_emits_machine_readable_object() {
     let sandbox = Sandbox::new();
     let output = sandbox
