@@ -1018,6 +1018,67 @@ fn plugin_receives_protocol_v2_structured_fragments() {
 }
 
 #[test]
+fn tool_plugin_receives_protocol_v2_tool_object() {
+    // A plugin runs for tool calls too. The request is discriminated on
+    // `subject`: a tool call carries a `tool` object (name, capability, canonical
+    // params) instead of `command`/`fragments`. The inspector echoes that object
+    // and returns `allow`, which upgrades the static `defer` (no tool rule
+    // matched), so the echo confirms protocol-v2 tool data reached the plugin.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/tool-inspect",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "tool v2 cap=read name=read params=[path=/repo/tool-inspect]",
+        ));
+}
+
+#[test]
+fn static_tool_deny_remains_final_even_when_plugin_would_allow() {
+    // The shell guarantee holds on the tool path: a static deny is final, so a
+    // plugin never even runs (the inspector would allow this `tool-inspect` path).
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[{{"name":"no-ssh","tool":"read","params":{{"path":["**/.ssh/**"]}},"action":"deny"}}],"plugins":[{{"name":"inspector","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/home/u/.ssh/tool-inspect",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("denied by rule 'no-ssh'"))
+        // The plugin's allow reason must not appear — it never ran.
+        .stdout(predicate::str::contains("tool v2").not());
+}
+
+#[test]
 fn check_json_emits_machine_readable_object() {
     let sandbox = Sandbox::new();
     let output = sandbox

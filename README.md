@@ -363,8 +363,9 @@ external code after the static shell-rule engine:
 }
 ```
 
-Each plugin process receives one JSON object on stdin and must print one JSON
-object on stdout:
+A plugin runs for **both** subjects: a shell command and a non-shell tool call.
+Each plugin process receives one JSON object on stdin — a tagged union keyed on
+`subject` — and must print one JSON object on stdout. A shell request:
 
 ```json
 {
@@ -432,25 +433,58 @@ ask or defer), `fragments` lists **every** fragment — allowed ones included �
 a plugin can render the whole script with each fragment's status, the case where
 only one or two fragments in a longer line actually tripped.
 
-`fragments` is keyed to shell commands. A non-shell `subject` (e.g. a `--tool`
-call) has no shell fragments, so the array is empty (`[]`). Treat the array as
-additive and ignore unknown future fields.
+`fragments` is keyed to shell commands and is present only for `subject:
+"shell"`. A v1 binary omits `fragments` entirely; a plugin that wants the
+structured view should treat its absence as a signal to fall back to parsing
+`current_reason`. Treat the request as additive and ignore unknown future fields.
 
-A v1 binary omits `fragments` entirely; a plugin that wants the structured view
-should treat its absence as a signal to fall back to parsing `current_reason`.
+### Protocol version 2: tool-call requests
+
+The request is a tagged union on `subject`. A non-shell tool call (a file read,
+a web fetch, an MCP tool, …) sets `subject: "tool"` and, in place of `command`
+and `fragments`, carries a `tool` object — the structured form the tool-rule
+engine matches on:
+
+```json
+{
+  "protocol_version": 2,
+  "subject": "tool",
+  "harness": "claude-code",
+  "cwd": "/repo",
+  "current_verdict": "defer",
+  "current_reason": "no rule matched tool `mcp__github__create_issue`",
+  "tool": {
+    "name": "mcp__github__create_issue",
+    "capability": "mcp",
+    "params": { "mcp_server": "github", "mcp_tool": "create_issue" },
+    "raw": { "owner": "acme", "repo": "app", "title": "bug" }
+  }
+}
+```
+
+| field        | type   | notes                                                                                          |
+| ------------ | ------ | ---------------------------------------------------------------------------------------------- |
+| `name`       | string | The harness's own tool name, e.g. `Read`, `mcp__github__create_issue`.                          |
+| `capability` | string | The portable capability: `read`, `write`, `edit`, `glob`, `grep`, `web_fetch`, `web_search`, `mcp`, or `other`. |
+| `params`     | object | Canonical scalar parameters the adapter mapped (`path`/`url`/`query`/…), keyed by canonical name. |
+| `raw`        | object | The original tool-input object, verbatim, for any server-defined parameter `params` omits.       |
+
+Because the arms are mutually exclusive, key off `subject` first: read
+`command`/`fragments` for `"shell"` and `tool` for `"tool"`. The verdict
+response shape and composition rules below are identical for both subjects.
 
 Valid plugin verdicts are `allow`, `ask`, `deny`, and `defer`. Composition is
-deliberately conservative:
+deliberately conservative and the same for shell commands and tool calls:
 
-- a static `deny` is final, so plugins cannot punch through hard guardrails;
+- a static `deny` is final, so plugins cannot punch through hard guardrails (a
+  plugin is not even invoked once a static rule denies);
 - any plugin `deny` blocks;
-- otherwise any plugin `ask` surfaces the command for approval;
+- otherwise any plugin `ask` surfaces the call for approval;
 - otherwise a plugin `allow` may upgrade only a static `defer` to `allow`;
 - plugin `defer`, invalid output, a non-zero exit, or a timeout leaves the static
   decision unchanged and records only a non-fatal warning.
 
-The plugin hot path is shell-command only today. Non-shell tool calls still use
-the static tool-rule engine described below. A minimal copyable plugin lives at
+A minimal copyable plugin lives at
 [`examples/dynamic-approval-plugin.sh`](examples/dynamic-approval-plugin.sh).
 
 ## Usage history

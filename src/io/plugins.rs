@@ -1,32 +1,55 @@
 //! External dynamic approval plugins.
+//!
+//! A plugin runs for both subjects: a shell command (carrying its role-tagged
+//! `fragments`) and a non-shell tool call (carrying a `tool` object). The request
+//! body is a tagged union discriminated by `subject` — `command`/`fragments` are
+//! present only for shell, `tool` only for a tool call — so a plugin keys off
+//! `subject` and reads only the fields its subject defines. Composition is
+//! identical for both: a static deny is final (plugins are skipped), then any
+//! plugin deny blocks, any plugin ask surfaces, and a plugin allow may upgrade
+//! only a static defer.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use strum::VariantArray;
 
 use crate::config::PluginConfig;
-use crate::domain::{DecisionResult, Verdict};
+use crate::domain::{DecisionResult, ParamKey, ToolCall, Verdict};
 
-/// Protocol v2 adds `fragments`; v1 fields are unchanged so older plugins that
-/// ignore the new array keep working.
+/// Protocol v2 adds `fragments` (shell) and the `tool` object (tool calls); the
+/// v1 fields are unchanged so older plugins that ignore the additions keep
+/// working.
 const PROTOCOL_VERSION: u8 = 2;
 
+/// The request handed to a plugin on stdin. A tagged union on `subject`: shell
+/// requests carry `command` + `fragments`; tool requests carry `tool`. The
+/// irrelevant arm is omitted rather than nulled, so the shape matches the
+/// subject.
 #[derive(Debug, Serialize)]
 struct PluginRequest<'a> {
     protocol_version: u8,
     subject: &'a str,
     harness: &'a str,
     cwd: &'a str,
-    command: &'a str,
     current_verdict: &'a str,
     current_reason: &'a str,
+    /// The shell command line. Present only for `subject: "shell"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<&'a str>,
     /// Every parsed fragment in source order, each with its own verdict — the
     /// structured form of the decomposition that `current_reason` only narrates
-    /// for the tripping fragments. Empty for subjects without shell fragments.
-    fragments: Vec<PluginFragment<'a>>,
+    /// for the tripping fragments. Present only for `subject: "shell"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fragments: Option<Vec<PluginFragment<'a>>>,
+    /// The normalized tool call. Present only for `subject: "tool"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<PluginTool<'a>>,
 }
 
 /// One role-tagged fragment with its individual decision, mirroring a row of
@@ -48,6 +71,22 @@ struct PluginFragment<'a> {
     reason: &'a str,
 }
 
+/// A normalized non-shell tool call, the tool-subject counterpart of
+/// `fragments`. Mirrors what the tool-rule engine matches on.
+#[derive(Debug, Serialize)]
+struct PluginTool<'a> {
+    /// The harness's own tool name, e.g. `Read`, `mcp__github__create_issue`.
+    name: &'a str,
+    /// The portable capability the call maps to (`read`, `write`, `mcp`, …).
+    capability: &'a str,
+    /// Canonical scalar parameters the adapter mapped (path/url/query/…), keyed
+    /// by canonical name. Server-defined parameters live in `raw`.
+    params: BTreeMap<&'a str, &'a str>,
+    /// The original tool-input object, verbatim, so a plugin can inspect any
+    /// server-defined parameter the canonical set does not cover.
+    raw: &'a Value,
+}
+
 #[derive(Debug, Deserialize)]
 struct PluginResponse {
     verdict: String,
@@ -55,21 +94,106 @@ struct PluginResponse {
     reason: String,
 }
 
+/// Run every plugin against a shell command and compose the result with the
+/// static decision.
 pub(crate) fn evaluate_shell(
     plugins: &[PluginConfig],
     harness: &str,
     cwd: &str,
     command: &str,
-    mut base: DecisionResult,
+    base: DecisionResult,
 ) -> DecisionResult {
     if plugins.is_empty() || base.verdict == Verdict::Deny {
         return base;
     }
+    // Serialize the request once, before `base` is moved into `compose`: the body
+    // is identical for every plugin and borrowing `base` here keeps `compose`
+    // free to mutate it.
+    let body = {
+        let fragments: Vec<PluginFragment> = base
+            .fragments
+            .iter()
+            .map(|decision| PluginFragment {
+                display: decision.fragment.cmd_string(),
+                argv: &decision.fragment.argv,
+                role: decision.fragment.role.as_str(),
+                verdict: decision.verdict.as_str(),
+                rule: decision.rule_name.as_deref(),
+                reason: &decision.reason,
+            })
+            .collect();
+        let request = PluginRequest {
+            protocol_version: PROTOCOL_VERSION,
+            subject: "shell",
+            harness,
+            cwd,
+            current_verdict: base.verdict.as_str(),
+            current_reason: &base.reason,
+            command: Some(command),
+            fragments: Some(fragments),
+            tool: None,
+        };
+        match serde_json::to_vec(&request) {
+            Ok(body) => body,
+            // Our own request shape always serializes; treat the impossible error
+            // as "no plugin input" and leave the static decision untouched.
+            Err(_) => return base,
+        }
+    };
+    compose(plugins, &body, base)
+}
 
+/// Run every plugin against a non-shell tool call and compose the result with the
+/// static decision, exactly as [`evaluate_shell`] does for shell commands.
+pub(crate) fn evaluate_tool(
+    plugins: &[PluginConfig],
+    harness: &str,
+    cwd: &str,
+    call: &ToolCall,
+    base: DecisionResult,
+) -> DecisionResult {
+    if plugins.is_empty() || base.verdict == Verdict::Deny {
+        return base;
+    }
+    let body = {
+        let mut params: BTreeMap<&str, &str> = BTreeMap::new();
+        for key in ParamKey::VARIANTS {
+            if let Some(value) = call.params.get(*key) {
+                params.insert(key.as_str(), value);
+            }
+        }
+        let request = PluginRequest {
+            protocol_version: PROTOCOL_VERSION,
+            subject: "tool",
+            harness,
+            cwd,
+            current_verdict: base.verdict.as_str(),
+            current_reason: &base.reason,
+            command: None,
+            fragments: None,
+            tool: Some(PluginTool {
+                name: &call.tool_name,
+                capability: call.capability.as_str(),
+                params,
+                raw: &call.raw,
+            }),
+        };
+        match serde_json::to_vec(&request) {
+            Ok(body) => body,
+            Err(_) => return base,
+        }
+    };
+    compose(plugins, &body, base)
+}
+
+/// Send the same request body to each plugin and fold the verdicts into `base`.
+/// The composition is conservative and subject-independent: deny is final, ask
+/// outranks a plugin allow, and a plugin allow lifts only a static defer.
+fn compose(plugins: &[PluginConfig], body: &[u8], mut base: DecisionResult) -> DecisionResult {
     let mut saw_allow: Option<String> = None;
     let mut saw_ask: Option<String> = None;
     for plugin in plugins {
-        match run_plugin(plugin, harness, cwd, command, &base) {
+        match dispatch(plugin, body) {
             Ok(Some((Verdict::Deny, reason))) => {
                 base.verdict = Verdict::Deny;
                 base.reason = format!("plugin '{}': {reason}", plugin.name);
@@ -104,36 +228,10 @@ pub(crate) fn evaluate_shell(
     base
 }
 
-fn run_plugin(
-    plugin: &PluginConfig,
-    harness: &str,
-    cwd: &str,
-    command: &str,
-    current: &DecisionResult,
-) -> Result<Option<(Verdict, String)>, String> {
-    let fragments: Vec<PluginFragment> = current
-        .fragments
-        .iter()
-        .map(|decision| PluginFragment {
-            display: decision.fragment.cmd_string(),
-            argv: &decision.fragment.argv,
-            role: decision.fragment.role.as_str(),
-            verdict: decision.verdict.as_str(),
-            rule: decision.rule_name.as_deref(),
-            reason: &decision.reason,
-        })
-        .collect();
-    let request = PluginRequest {
-        protocol_version: PROTOCOL_VERSION,
-        subject: "shell",
-        harness,
-        cwd,
-        command,
-        current_verdict: current.verdict.as_str(),
-        current_reason: &current.reason,
-        fragments,
-    };
-    let body = serde_json::to_vec(&request).map_err(|err| err.to_string())?;
+/// Spawn one plugin, write the request body to its stdin, and read back a single
+/// verdict — enforcing the configured timeout. Returns the parsed verdict, or an
+/// error describing why this plugin produced no usable decision.
+fn dispatch(plugin: &PluginConfig, body: &[u8]) -> Result<Option<(Verdict, String)>, String> {
     let mut child = Command::new(&plugin.command[0])
         .args(&plugin.command[1..])
         .stdin(Stdio::piped())
@@ -143,7 +241,7 @@ fn run_plugin(
         .map_err(|err| format!("failed to start: {err}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(&body)
+            .write_all(body)
             .map_err(|err| format!("failed to write request: {err}"))?;
     }
     let deadline = Instant::now() + Duration::from_millis(plugin.timeout_ms);

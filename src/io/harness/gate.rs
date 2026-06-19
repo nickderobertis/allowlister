@@ -47,6 +47,7 @@ pub(crate) fn evaluate_tool(
     call: &ToolCall,
 ) -> DecisionResult {
     let result = domain::evaluate_tool_call(call, &config.tool_rules);
+    let result = plugins::evaluate_tool(&config.plugins, harness, project, call, result);
     history::record(
         config.history.enabled,
         harness,
