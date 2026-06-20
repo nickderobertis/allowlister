@@ -1,0 +1,31 @@
+# Per-target release tuning for the shipped binary. These triples are the ones
+# the release workflow publishes; building for the host target (plain `cargo
+# build`, the gate, dev) is unaffected because Cargo only applies a
+# `[target.<triple>]` section when that triple is selected as the build target —
+# and Linux dev/CI runs the `-gnu` host, not these `-musl` triples.
+#
+# allowlister spawns once per agent tool call, so cold-start latency is the cost
+# that matters. Two ELF/PE levers cut it (and harden portability) with no source
+# changes:
+
+# Linux: link a classic non-PIE executable. The `-musl` targets already link
+# fully static (crt-static is their default), but static *PIE*, so the dynamic
+# loader still self-relocates every launch. `relocation-model=static` makes rustc
+# emit a non-PIE `ET_EXEC` with the fastest cold start — and it must be this knob,
+# not a raw `-C link-arg=-no-pie`: that flag flips the ELF type without switching
+# musl's PIE-aware startup object (`rcrt1.o`), so the binary builds but segfaults.
+# Self-contained musl needs no system C toolchain because the crate has zero C deps.
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "relocation-model=static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "relocation-model=static"]
+
+# Windows: statically link the MSVC C runtime so the binary runs on a clean
+# machine with no VC++ redistributable installed (the portability analogue of
+# the musl swap on Linux). PE relocation cost is already small, so this is a
+# compatibility win, not a measurable startup one. macOS has no equivalent
+# lever: PIE is mandatory (arm64 cannot be non-PIE) and libSystem cannot be
+# statically linked, and its dyld shared cache already makes launch cheap.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

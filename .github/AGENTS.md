@@ -5,6 +5,11 @@
   `permissions`.
 - Release artifacts publish only after the gate passes; never publish untested
   binaries.
+- Release Linux targets are static, non-PIE `-musl` (per-target tuning lives in
+  `.cargo/config.toml`; Windows there links the CRT static). The published asset
+  names embed the triple, so the release matrix, `scripts/install.sh`,
+  `scripts/dist.sh`, and `rust-toolchain.toml` must list the same triples — and
+  the external `asdf-allowlister` plugin downloads them by name too.
 - Informational jobs (the live harness check, performance) run outside the gate:
   they report results and must never be required to merge. A step that needs
   write scope (e.g. posting PR comments) runs only for same-repo, non-fork

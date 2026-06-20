@@ -52,7 +52,7 @@ detect_target() {
     arch="$(uname -m)"
 
     case "$os" in
-        Linux) os_part="unknown-linux-gnu"; ext="tar.gz" ;;
+        Linux) os_part="unknown-linux-musl"; ext="tar.gz" ;;
         Darwin) os_part="apple-darwin"; ext="tar.gz" ;;
         MINGW* | MSYS* | CYGWIN* | Windows_NT)
             os_part="pc-windows-msvc"; ext="zip"; BIN_FILE="${BIN}.exe" ;;

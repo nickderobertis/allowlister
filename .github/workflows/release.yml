@@ -51,9 +51,14 @@ jobs:
           # Native runners per target so no target needs cross-compilation:
           # arm64 Linux builds on a hosted arm64 runner; macOS cross-builds
           # x86_64<->arm64 within the Apple toolchain (no emulation/Docker).
-          - target: x86_64-unknown-linux-gnu
+          #
+          # Linux ships `-musl`, not `-gnu`: the crate has zero C deps, so musl
+          # links a fully static binary (no glibc version floor — runs on any
+          # distro) that `.cargo/config.toml` also builds non-PIE for the fastest
+          # cold start. Self-contained musl needs no musl-tools on either arch.
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
