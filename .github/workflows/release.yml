@@ -74,6 +74,12 @@ jobs:
         with:
           bin: allowlister
           target: ${{ matrix.target }}
+          # Build natively, never via `cross`. Each target has its own native
+          # runner and the crate has zero C deps, so cargo links every target
+          # (musl included) self-contained. Left to auto-detect, the action runs
+          # `cross` for the `-musl` targets — and on the arm64 runner `cross`
+          # tries to install the x86_64 toolchain on an aarch64 host and fails.
+          build-tool: cargo
           archive: $bin-$tag-$target
           checksum: sha256
           include: README.md,LICENSE,CHANGELOG.md
