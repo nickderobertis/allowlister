@@ -190,6 +190,9 @@ Download the archive for your platform from the
 [latest release](https://github.com/nickderobertis/allowlister/releases/latest),
 verify its `.sha256`, extract, and put `allowlister` on your `PATH`. Binaries are
 published for Linux (x86_64, arm64), macOS (x86_64, arm64), and Windows (x86_64).
+The Linux binaries are statically linked (musl), so they run on any distribution
+regardless of its glibc version; the Windows binary links the C runtime statically
+and needs no Visual C++ redistributable.
 
 ### From crates.io
 
