@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/nickderobertis/allowlister/compare/v0.5.1...v0.5.2) - 2026-06-20
+
+### Performance
+
+- ship static, non-PIE Linux and static-CRT Windows release binaries ([#106](https://github.com/nickderobertis/allowlister/pull/106))
+
 ## [0.5.1](https://github.com/nickderobertis/allowlister/compare/v0.5.0...v0.5.1) - 2026-06-20
 
 ### Added
