@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.4](https://github.com/nickderobertis/allowlister/compare/v0.5.3...v0.5.4) - 2026-06-20
+
+### Added
+
+- forward harness session id to approval plugins (protocol v3) ([#111](https://github.com/nickderobertis/allowlister/pull/111))
+
 ## [0.5.3](https://github.com/nickderobertis/allowlister/compare/v0.5.2...v0.5.3) - 2026-06-20
 
 ### Fixed
