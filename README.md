@@ -373,10 +373,11 @@ Each plugin process receives one JSON object on stdin — a tagged union keyed o
 
 ```json
 {
-  "protocol_version": 2,
+  "protocol_version": 3,
   "subject": "shell",
   "harness": "claude-code",
   "cwd": "/repo",
+  "session_id": "9f3c1a2b",
   "command": "gh pr list | deploy --ticket=APPROVED",
   "current_verdict": "defer",
   "current_reason": "no rule matched `deploy --ticket=APPROVED` (pipe_filter)",
@@ -405,11 +406,26 @@ Each plugin process receives one JSON object on stdin — a tagged union keyed o
 { "verdict": "allow", "reason": "approved ticket tag present" }
 ```
 
+### Protocol version 3: harness session id
+
+`protocol_version` is `3`. Every addition across versions is purely additive, so
+a plugin that reads only the v1 fields (`command`, `cwd`, `harness`,
+`current_verdict`, `current_reason`) keeps working unchanged.
+
+`session_id` is the coding harness's own session identifier — stable for the
+lifetime of one harness session — so a plugin can scope state or approvals to a
+session (for example, "ask once per session, then remember"). allowlister
+normalizes it from each harness's native field: `session_id` (Claude Code,
+Codex, Goose, Qwen, Crush), `conversation_id` (Cursor), `sessionId` (Copilot),
+and `sessionID` (OpenCode). It is present for both subjects and **omitted
+entirely** when the harness provides none (e.g. a manual `check`, or `codex exec`
+runs that do not load hooks), so treat it as optional.
+
 ### Protocol version 2: structured fragments
 
-`protocol_version` is `2`. The `command`, `cwd`, `harness`, `current_verdict`,
-and `current_reason` fields are unchanged from v1, so a plugin that reads only
-those keeps working — `fragments` is purely additive.
+The `command`, `cwd`, `harness`, `current_verdict`, and `current_reason` fields
+are unchanged from v1, so a plugin that reads only those keeps working —
+`fragments` is purely additive.
 
 `fragments` is the structured form of the same per-command decomposition that
 `current_reason` narrates. Each element is one role-tagged fragment from the
@@ -451,10 +467,11 @@ engine matches on:
 
 ```json
 {
-  "protocol_version": 2,
+  "protocol_version": 3,
   "subject": "tool",
   "harness": "claude-code",
   "cwd": "/repo",
+  "session_id": "9f3c1a2b",
   "current_verdict": "defer",
   "current_reason": "no rule matched tool `mcp__github__create_issue`",
   "tool": {

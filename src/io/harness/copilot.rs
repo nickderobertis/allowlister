@@ -76,10 +76,16 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // matching rule defers, emitting nothing — exactly the prior non-shell flow.
     let result = if input.tool_name == SHELL_TOOL {
         let command = command_from(&input.tool_args);
-        gate::evaluate_shell(&loaded, "copilot", dir, &command)
+        gate::evaluate_shell(
+            &loaded,
+            "copilot",
+            dir,
+            input.session_id.as_deref(),
+            &command,
+        )
     } else {
         let call = normalize::copilot(&input.tool_name, &input.tool_args);
-        gate::evaluate_tool(&loaded, "copilot", dir, &call)
+        gate::evaluate_tool(&loaded, "copilot", dir, input.session_id.as_deref(), &call)
     };
 
     if matches!(result.verdict, Verdict::Defer) {
@@ -147,6 +153,11 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// Copilot's session-stable id. The default "Copilot" output format names it
+    /// `sessionId` (matched by `rename_all`); the alias also accepts the "VS Code"
+    /// format's `session_id`. Threaded to plugins.
+    #[serde(default, alias = "session_id")]
+    session_id: Option<String>,
     #[serde(default)]
     tool_args: Value,
 }

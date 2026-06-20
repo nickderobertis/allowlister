@@ -60,10 +60,22 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        gate::evaluate_shell(&loaded, "claude-code", cwd, command)
+        gate::evaluate_shell(
+            &loaded,
+            "claude-code",
+            cwd,
+            input.session_id.as_deref(),
+            command,
+        )
     } else {
         let call = normalize::claude(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "claude-code", cwd, &call)
+        gate::evaluate_tool(
+            &loaded,
+            "claude-code",
+            cwd,
+            input.session_id.as_deref(),
+            &call,
+        )
     };
 
     let decision = match result.verdict {
@@ -102,6 +114,10 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// The current session identifier, present on every Claude Code hook event
+    /// and stable for the session. Threaded to plugins; absent in older payloads.
+    #[serde(default)]
+    session_id: Option<String>,
     /// The tool's input object, kept as raw JSON: the shell path reads
     /// `command`, while the tool path normalizes per-tool keys and matches any
     /// server-defined parameter by JSON path.

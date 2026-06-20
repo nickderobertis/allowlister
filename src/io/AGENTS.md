@@ -7,6 +7,12 @@
   never fails the caller.
 - Harness adapters translate one product's request/response envelope into the
   shared decision pipeline; only the I/O shape differs between them.
+- Each adapter normalizes its harness's native session field to one `session_id`
+  threaded through `gate` to plugins (Cursor's is `conversation_id`, not the
+  per-message `generation_id`; Copilot's is `sessionId`; OpenCode's arrives from
+  the shim's `input.sessionID`). It is passed to plugins but deliberately **not**
+  recorded in usage history — a per-session key would make the store grow with
+  session count instead of distinct commands.
 - Hook *installation* is delegated to the shared cross-harness installer
   (`oneharness-core`): `hooks` only maps each harness to its gate policy (the
   matcher dialect and timeout) and aggregates the result. Do not re-add

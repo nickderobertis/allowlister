@@ -76,10 +76,10 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // emitting nothing — exactly the prior non-shell behavior.
     let result = if input.tool_name == SHELL_TOOL {
         let command = command_from(&input.tool_input);
-        gate::evaluate_shell(&loaded, "codex", dir, &command)
+        gate::evaluate_shell(&loaded, "codex", dir, input.session_id.as_deref(), &command)
     } else {
         let call = normalize::codex(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "codex", dir, &call)
+        gate::evaluate_tool(&loaded, "codex", dir, input.session_id.as_deref(), &call)
     };
 
     // Codex honors only `deny` on `PreToolUse`. An allow or defer verdict emits
@@ -136,6 +136,11 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// Codex's per-session id, present on the `PreToolUse` hook payload (the TUI
+    /// loads hooks; `codex exec` does not, so it is absent there). Threaded to
+    /// plugins.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     tool_input: Value,
 }

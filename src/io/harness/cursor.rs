@@ -60,16 +60,19 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // shell path. Cursor has no pre-execution write/edit event, so writes/edits
     // are not gateable here.
     let event = input.hook_event_name.as_str();
+    // Cursor's session-stable id is `conversation_id` (its `generation_id` changes
+    // every message, so it is deliberately not the session key).
+    let session_id = input.conversation_id.as_deref();
     let result = match event {
         "beforeReadFile" => {
             let call = normalize::cursor_read(input.file_path.as_deref().unwrap_or_default());
-            gate::evaluate_tool(&loaded, "cursor", dir, &call)
+            gate::evaluate_tool(&loaded, "cursor", dir, session_id, &call)
         }
         "beforeMCPExecution" => {
             let call = normalize::cursor_mcp(&input.tool_name, &input.tool_input);
-            gate::evaluate_tool(&loaded, "cursor", dir, &call)
+            gate::evaluate_tool(&loaded, "cursor", dir, session_id, &call)
         }
-        _ => gate::evaluate_shell(&loaded, "cursor", dir, &input.command),
+        _ => gate::evaluate_shell(&loaded, "cursor", dir, session_id, &input.command),
     };
 
     let permission = cursor_permission(event, result.verdict);
@@ -155,6 +158,11 @@ struct HookInput {
     cwd: Option<String>,
     #[serde(default)]
     workspace_roots: Vec<String>,
+    /// Cursor's stable per-conversation id, sent on every hook event. It is the
+    /// session identifier threaded to plugins (`generation_id`, which changes per
+    /// message, is intentionally not used).
+    #[serde(default)]
+    conversation_id: Option<String>,
 }
 
 #[cfg(test)]

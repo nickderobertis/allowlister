@@ -78,10 +78,10 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // rule defers, emitting nothing — exactly the prior non-shell behavior.
     let result = if input.tool_name == SHELL_TOOL {
         let command = command_from(&input.tool_input);
-        gate::evaluate_shell(&loaded, "qwen", dir, &command)
+        gate::evaluate_shell(&loaded, "qwen", dir, input.session_id.as_deref(), &command)
     } else {
         let call = normalize::qwen(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "qwen", dir, &call)
+        gate::evaluate_tool(&loaded, "qwen", dir, input.session_id.as_deref(), &call)
     };
 
     // Only `deny` is asserted. An allow or defer verdict emits nothing — a true
@@ -140,6 +140,10 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// Qwen's per-session id, a common field on every hook payload (Claude-style
+    /// schema). Threaded to plugins.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     tool_input: Value,
 }
