@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.3](https://github.com/nickderobertis/allowlister/compare/v0.5.2...v0.5.3) - 2026-06-20
+
+### Fixed
+
+- note container support for the static Linux binaries ([#109](https://github.com/nickderobertis/allowlister/pull/109))
+
 ## [0.5.2](https://github.com/nickderobertis/allowlister/compare/v0.5.1...v0.5.2) - 2026-06-20
 
 ### Performance
