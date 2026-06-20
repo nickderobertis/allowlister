@@ -76,10 +76,10 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // rule defers, emitting nothing — exactly the prior non-shell behavior.
     let result = if input.tool_name == SHELL_TOOL {
         let command = command_from(&input.tool_input);
-        gate::evaluate_shell(&loaded, "crush", dir, &command)
+        gate::evaluate_shell(&loaded, "crush", dir, input.session_id.as_deref(), &command)
     } else {
         let call = normalize::crush(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "crush", dir, &call)
+        gate::evaluate_tool(&loaded, "crush", dir, input.session_id.as_deref(), &call)
     };
 
     // Crush honors only `deny`. An allow or defer verdict emits nothing — a true
@@ -133,6 +133,10 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// Crush's per-session id (a UUID it also uses as its own permission key),
+    /// carried on the hook payload. Threaded to plugins.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     tool_input: Value,
 }

@@ -19,15 +19,25 @@ use crate::io::plugins;
 /// Evaluate a shell command against the loaded rules and record the evaluation.
 /// `harness` names the calling adapter and `project` is the cwd it ran in;
 /// recording resolves that to a repository identity so clones aggregate (see
-/// [`crate::io::project`]).
+/// [`crate::io::project`]). `session_id` is the harness's own session identifier
+/// (when it sends one); it is passed to plugins but not recorded, so the usage
+/// store stays bounded by distinct commands rather than by session count.
 pub(crate) fn evaluate_shell(
     config: &LoadedConfig,
     harness: &str,
     project: &str,
+    session_id: Option<&str>,
     command: &str,
 ) -> DecisionResult {
     let result = domain::evaluate(command, &config.rules);
-    let result = plugins::evaluate_shell(&config.plugins, harness, project, command, result);
+    let result = plugins::evaluate_shell(
+        &config.plugins,
+        harness,
+        project,
+        session_id,
+        command,
+        result,
+    );
     history::record(
         config.history.enabled,
         harness,
@@ -44,10 +54,12 @@ pub(crate) fn evaluate_tool(
     config: &LoadedConfig,
     harness: &str,
     project: &str,
+    session_id: Option<&str>,
     call: &ToolCall,
 ) -> DecisionResult {
     let result = domain::evaluate_tool_call(call, &config.tool_rules);
-    let result = plugins::evaluate_tool(&config.plugins, harness, project, call, result);
+    let result =
+        plugins::evaluate_tool(&config.plugins, harness, project, session_id, call, result);
     history::record(
         config.history.enabled,
         harness,

@@ -83,10 +83,10 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // rule defers, emitting nothing — exactly the prior non-shell behavior.
     let result = if is_shell_tool(&input.tool_name) {
         let command = command_from(&input.tool_input);
-        gate::evaluate_shell(&loaded, "goose", dir, &command)
+        gate::evaluate_shell(&loaded, "goose", dir, input.session_id.as_deref(), &command)
     } else {
         let call = normalize::goose(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "goose", dir, &call)
+        gate::evaluate_tool(&loaded, "goose", dir, input.session_id.as_deref(), &call)
     };
 
     // Goose honors only a `block`. An allow or defer verdict emits nothing — a
@@ -139,6 +139,10 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     working_dir: Option<String>,
+    /// Goose's per-session id (its sessions are first-class and resumable),
+    /// carried on the hook payload. Threaded to plugins.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     tool_input: Value,
 }

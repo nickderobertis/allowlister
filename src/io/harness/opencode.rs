@@ -10,8 +10,9 @@
 //! adapters:
 //!
 //! - **Input** (sent by the shim): `{"tool_name":"<tool>","tool_input":{…},
-//!   "cwd":"…"}` — the real tool id (`read`/`write`/`bash`/`server_tool`…) and its
-//!   arguments.
+//!   "cwd":"…","session_id":"…"}` — the real tool id
+//!   (`read`/`write`/`bash`/`server_tool`…), its arguments, and (once the shim
+//!   forwards it from `input.sessionID`) the session id.
 //! - **Output**: a flat `{"decision":"deny","reason":"…"}` only on a deny; an
 //!   allow or defer verdict emits *nothing*, which the shim treats as "no
 //!   objection" and lets the call proceed.
@@ -84,10 +85,16 @@ pub fn evaluate<R: Read, W: Write, E: Write>(mut stdin: R, mut stdout: W, mut st
     // unrecognized tool with no matching rule emits nothing — the prior behavior.
     let result = if is_shell_call(&input) {
         let command = command_from(&input.tool_input);
-        gate::evaluate_shell(&loaded, "opencode", dir, &command)
+        gate::evaluate_shell(
+            &loaded,
+            "opencode",
+            dir,
+            input.session_id.as_deref(),
+            &command,
+        )
     } else {
         let call = normalize::opencode(&input.tool_name, &input.tool_input);
-        gate::evaluate_tool(&loaded, "opencode", dir, &call)
+        gate::evaluate_tool(&loaded, "opencode", dir, input.session_id.as_deref(), &call)
     };
 
     // Only `deny` is asserted. An allow or defer verdict emits nothing — the shim
@@ -139,6 +146,12 @@ struct HookInput {
     tool_name: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// OpenCode's per-session id. The plugin shim sources it from the callback's
+    /// `input.sessionID` and forwards it here as `session_id`. Inert (always
+    /// absent) until the shim that oneharness installs is updated to send it;
+    /// pre-wired so that becomes a pure shim change with no adapter edit.
+    #[serde(default)]
+    session_id: Option<String>,
     #[serde(default)]
     tool_input: Value,
 }

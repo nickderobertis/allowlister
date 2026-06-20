@@ -24,6 +24,10 @@ struct Request {
     cwd: String,
     #[serde(default)]
     project: String,
+    /// The protocol-v3 harness session id, deserialized so the plugin can prove it
+    /// received the session identifier the harness reported.
+    #[serde(default)]
+    session_id: String,
     #[serde(default)]
     fragments: Vec<RequestFragment>,
     #[serde(default)]
@@ -89,6 +93,13 @@ pub fn run() -> Result<i32> {
                 "project echo: cwd={} project={}",
                 request.cwd, request.project
             ),
+        )
+    } else if request.command.contains("plugin-session") {
+        // Echo the harness session id so an e2e test can confirm protocol-v3's
+        // `session_id` reached the plugin. Deny so the echo surfaces.
+        (
+            "deny",
+            format!("session echo: session_id={}", request.session_id),
         )
     } else if request.command.contains("plugin-inspect") {
         // Echo the protocol-v2 structured data so an e2e test can confirm the
@@ -158,6 +169,13 @@ fn run_tool(request: &Request) -> Result<i32> {
                 "project echo: cwd={} project={}",
                 request.cwd, request.project
             ),
+        )
+    } else if saw("tool-session") {
+        // The tool-subject counterpart of `plugin-session`: echo the session id so
+        // an e2e test can confirm protocol-v3's `session_id` reached the plugin.
+        (
+            "deny",
+            format!("session echo: session_id={}", request.session_id),
         )
     } else if saw("tool-ask") {
         ("ask", "tool needs review".to_string())

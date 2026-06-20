@@ -22,10 +22,12 @@ use strum::VariantArray;
 use crate::config::PluginConfig;
 use crate::domain::{DecisionResult, ParamKey, ToolCall, Verdict};
 
-/// Protocol v2 adds `fragments` (shell) and the `tool` object (tool calls); the
-/// v1 fields are unchanged so older plugins that ignore the additions keep
-/// working.
-const PROTOCOL_VERSION: u8 = 2;
+/// Protocol v3 adds the optional `session_id` (the harness's own session
+/// identifier, when it provides one). v2 added `fragments` (shell) and the `tool`
+/// object (tool calls). Every addition is purely additive — older plugins that
+/// ignore the new fields keep working, and `session_id` is omitted entirely when
+/// the harness sends none.
+const PROTOCOL_VERSION: u8 = 3;
 
 /// The request handed to a plugin on stdin. A tagged union on `subject`: shell
 /// requests carry `command` + `fragments`; tool requests carry `tool`. The
@@ -45,6 +47,13 @@ struct PluginRequest<'a> {
     project: &'a str,
     current_verdict: &'a str,
     current_reason: &'a str,
+    /// The harness's own session identifier — stable for one harness session, so
+    /// a plugin can scope state or approvals to a session. Normalized from each
+    /// harness's native field (Claude/Codex/Goose/Qwen/Crush `session_id`, Cursor
+    /// `conversation_id`, Copilot `sessionId`, OpenCode `sessionID`). Omitted when
+    /// the harness provides none (e.g. `check`, or `codex exec` without hooks).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
     /// The shell command line. Present only for `subject: "shell"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     command: Option<&'a str>,
@@ -106,6 +115,7 @@ pub(crate) fn evaluate_shell(
     plugins: &[PluginConfig],
     harness: &str,
     cwd: &str,
+    session_id: Option<&str>,
     command: &str,
     base: DecisionResult,
 ) -> DecisionResult {
@@ -137,6 +147,7 @@ pub(crate) fn evaluate_shell(
             project: &project,
             current_verdict: base.verdict.as_str(),
             current_reason: &base.reason,
+            session_id,
             command: Some(command),
             fragments: Some(fragments),
             tool: None,
@@ -157,6 +168,7 @@ pub(crate) fn evaluate_tool(
     plugins: &[PluginConfig],
     harness: &str,
     cwd: &str,
+    session_id: Option<&str>,
     call: &ToolCall,
     base: DecisionResult,
 ) -> DecisionResult {
@@ -179,6 +191,7 @@ pub(crate) fn evaluate_tool(
             project: &project,
             current_verdict: base.verdict.as_str(),
             current_reason: &base.reason,
+            session_id,
             command: None,
             fragments: None,
             tool: Some(PluginTool {

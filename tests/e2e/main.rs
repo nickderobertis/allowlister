@@ -1013,7 +1013,7 @@ fn plugin_receives_protocol_v2_structured_fragments() {
         .assert()
         .code(2)
         // Protocol version and fragment count, in source order.
-        .stdout(predicate::str::contains("v2 [3]:"))
+        .stdout(predicate::str::contains("v3 [3]:"))
         // The allowed pipe source: a non-null rule and its argv and reason.
         .stdout(predicate::str::contains("pipe_source|allow|"))
         .stdout(predicate::str::contains("|git+log|allowed by"))
@@ -1055,8 +1055,105 @@ fn tool_plugin_receives_protocol_v2_tool_object() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "tool v2 cap=read name=read params=[path=/repo/tool-inspect]",
+            "tool v3 cap=read name=read params=[path=/repo/tool-inspect]",
         ));
+}
+
+#[test]
+fn plugin_receives_session_id_across_every_harness() {
+    // Protocol v3 forwards each harness's own session identifier to plugins,
+    // normalized from that harness's native field. This drives the real adapter
+    // for every supported harness (the `hook <id>` path each one installs) and
+    // asserts the session id the harness sent reaches the plugin verbatim — the
+    // cross-harness contract, exercised end to end through the compiled binary.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"session echo","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    const SID: &str = "sess-cross-harness-42";
+    let dir = serde_json::to_string(&sandbox.cwd().to_string_lossy()).unwrap();
+    let sid = serde_json::to_string(SID).unwrap();
+    // `plugin-session` is the command the example plugin echoes the session id for;
+    // each payload carries it under the harness's own shell-tool shape plus that
+    // harness's native session field.
+    let cases: [(&str, String); 8] = [
+        (
+            "claude-code",
+            format!(
+                r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"plugin-session"}},"cwd":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+        (
+            "codex",
+            format!(
+                r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"plugin-session"}},"cwd":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+        (
+            "cursor",
+            format!(
+                r#"{{"hook_event_name":"beforeShellExecution","command":"plugin-session","cwd":{dir},"workspace_roots":[{dir}],"conversation_id":{sid}}}"#
+            ),
+        ),
+        (
+            "copilot",
+            format!(
+                r#"{{"toolName":"bash","toolArgs":{{"command":"plugin-session"}},"cwd":{dir},"sessionId":{sid}}}"#
+            ),
+        ),
+        (
+            "crush",
+            format!(
+                r#"{{"event":"PreToolUse","tool_name":"bash","tool_input":{{"command":"plugin-session"}},"cwd":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+        (
+            "qwen",
+            format!(
+                r#"{{"hook_event_name":"PreToolUse","tool_name":"run_shell_command","tool_input":{{"command":"plugin-session"}},"cwd":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+        (
+            "goose",
+            format!(
+                r#"{{"event":"PreToolUse","tool_name":"developer__shell","tool_input":{{"command":"plugin-session"}},"working_dir":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+        // OpenCode drives the same adapter the shim feeds; the shim forwarding
+        // `input.sessionID` as `session_id` is the only out-of-tree piece left.
+        (
+            "opencode",
+            format!(
+                r#"{{"tool_name":"bash","tool_input":{{"command":"plugin-session"}},"cwd":{dir},"session_id":{sid}}}"#
+            ),
+        ),
+    ];
+
+    for (harness, payload) in cases {
+        // Every harness expresses the plugin's deny, so the echoed reason — and the
+        // session id within it — always reaches stdout regardless of wire shape.
+        sandbox
+            .command()
+            .args(["hook", harness])
+            .write_stdin(payload)
+            .assert()
+            .stdout(predicate::str::contains(format!("session_id={SID}")));
+    }
+
+    // The tool subject carries the session id too: a `Read` tool call whose path
+    // trips the plugin's `tool-session` echo, driven through the real adapter.
+    let tool_payload = format!(
+        r#"{{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{{"file_path":"/repo/tool-session"}},"cwd":{dir},"session_id":{sid}}}"#
+    );
+    sandbox
+        .command()
+        .args(["hook", "claude-code"])
+        .write_stdin(tool_payload)
+        .assert()
+        .stdout(predicate::str::contains(format!("session_id={SID}")));
 }
 
 #[test]
@@ -1344,7 +1441,7 @@ fn shell_plugin_sees_substitution_role_fragments() {
         .arg(sandbox.cwd())
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("v2 [2]:"))
+        .stdout(predicate::str::contains("v3 [2]:"))
         // The outer `echo …` is a standalone allow (matched by the user config).
         .stdout(predicate::str::contains("standalone|allow|"))
         // The inner command substitution arrives tagged `substitution`.

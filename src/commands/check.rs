@@ -44,6 +44,8 @@ pub fn run(args: CheckArgs) -> Result<i32> {
             &loaded.plugins,
             "check",
             &cwd.to_string_lossy(),
+            // A manual `check` is not inside a harness session.
+            None,
             &call,
             result,
         )
@@ -55,6 +57,8 @@ pub fn run(args: CheckArgs) -> Result<i32> {
             &loaded.plugins,
             "check",
             &cwd.to_string_lossy(),
+            // A manual `check` is not inside a harness session.
+            None,
             command,
             result,
         )
