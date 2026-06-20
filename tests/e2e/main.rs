@@ -1060,6 +1060,121 @@ fn tool_plugin_receives_protocol_v2_tool_object() {
 }
 
 #[test]
+fn plugin_request_resolves_a_git_remote_to_repository_identity() {
+    // The request carries a resolved `project` tag beside the raw `cwd`, computed
+    // the same way usage history tags an event: a cwd inside a git repo with a
+    // remote resolves to the normalized remote identity, so a plugin can key
+    // cross-clone policy off it regardless of the literal checkout path.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    // The sandbox cwd already has a `.git` directory; give it a remote.
+    fs::write(
+        sandbox.cwd().join(".git").join("config"),
+        "[remote \"origin\"]\n\turl = https://github.com/octocat/Hello-World.git\n",
+    )
+    .unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"locator","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args(["check", "plugin-project", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        // `cwd` stays the literal directory; `project` is the remote identity.
+        .stdout(predicate::str::contains(format!(
+            "cwd={} project=github.com/octocat/Hello-World",
+            sandbox.cwd().to_string_lossy()
+        )));
+}
+
+#[test]
+fn plugin_request_falls_back_to_repo_root_without_a_remote() {
+    // A git repo with no remote to key on resolves `project` to the repository
+    // root path — here the same directory as `cwd`, but still the repo-root tag,
+    // not the cwd fallback (the sandbox `.git` has no config).
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"locator","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    let dir = sandbox.cwd().to_string_lossy();
+    sandbox
+        .command()
+        .args(["check", "plugin-project", "--cwd"])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!("cwd={dir} project={dir}")));
+}
+
+#[test]
+fn plugin_request_falls_back_to_cwd_outside_a_git_repo() {
+    // A working directory with no `.git` anywhere above it falls back to the
+    // literal cwd — the original folder tag, identical to history's non-git case.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    let nongit = TempDir::new().unwrap();
+    fs::write(
+        nongit.path().join(".allowlister.json"),
+        format!(
+            r#"{{"rules":[],"plugins":[{{"name":"locator","command":[{plugin},"example-plugin"]}}]}}"#
+        ),
+    )
+    .unwrap();
+
+    let dir = nongit.path().to_string_lossy();
+    sandbox
+        .command()
+        .args(["check", "plugin-project", "--cwd"])
+        .arg(nongit.path())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!("cwd={dir} project={dir}")));
+}
+
+#[test]
+fn tool_plugin_request_carries_resolved_project_identity() {
+    // The resolved `project` tag reaches the tool subject too, not just shell: a
+    // tool call from a remote-backed repo carries the repository identity.
+    let sandbox = Sandbox::new();
+    let plugin = assert_cmd::cargo::cargo_bin("allowlister");
+    let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
+    fs::write(
+        sandbox.cwd().join(".git").join("config"),
+        "[remote \"origin\"]\n\turl = git@github.com:octocat/Hello-World.git\n",
+    )
+    .unwrap();
+    sandbox.write_project_config(&format!(
+        r#"{{"rules":[],"plugins":[{{"name":"locator","command":[{plugin},"example-plugin"]}}]}}"#
+    ));
+
+    sandbox
+        .command()
+        .args([
+            "check",
+            "--tool",
+            "read",
+            "--param",
+            "path=/repo/tool-project",
+            "--cwd",
+        ])
+        .arg(sandbox.cwd())
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(format!(
+            "cwd={} project=github.com/octocat/Hello-World",
+            sandbox.cwd().to_string_lossy()
+        )));
+}
+
+#[test]
 fn static_tool_deny_remains_final_even_when_plugin_would_allow() {
     // The shell guarantee holds on the tool path: a static deny is final, so a
     // plugin never even runs (the inspector would allow this `tool-inspect` path).

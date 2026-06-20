@@ -37,6 +37,12 @@ struct PluginRequest<'a> {
     subject: &'a str,
     harness: &'a str,
     cwd: &'a str,
+    /// The durable repository identity of `cwd`, resolved the same way usage
+    /// history tags an event ([`crate::io::project::identify`]): a normalized
+    /// remote URL, else the repo root, else the raw `cwd` when it is not in a git
+    /// repo. A plugin keys cross-clone policy off this; `cwd` is the literal
+    /// directory it can still read for path-relative checks.
+    project: &'a str,
     current_verdict: &'a str,
     current_reason: &'a str,
     /// The shell command line. Present only for `subject: "shell"`.
@@ -109,6 +115,7 @@ pub(crate) fn evaluate_shell(
     // Serialize the request once, before `base` is moved into `compose`: the body
     // is identical for every plugin and borrowing `base` here keeps `compose`
     // free to mutate it.
+    let project = crate::io::project::identify(cwd);
     let body = {
         let fragments: Vec<PluginFragment> = base
             .fragments
@@ -127,6 +134,7 @@ pub(crate) fn evaluate_shell(
             subject: "shell",
             harness,
             cwd,
+            project: &project,
             current_verdict: base.verdict.as_str(),
             current_reason: &base.reason,
             command: Some(command),
@@ -155,6 +163,7 @@ pub(crate) fn evaluate_tool(
     if plugins.is_empty() || base.verdict == Verdict::Deny {
         return base;
     }
+    let project = crate::io::project::identify(cwd);
     let body = {
         let mut params: BTreeMap<&str, &str> = BTreeMap::new();
         for key in ParamKey::VARIANTS {
@@ -167,6 +176,7 @@ pub(crate) fn evaluate_tool(
             subject: "tool",
             harness,
             cwd,
+            project: &project,
             current_verdict: base.verdict.as_str(),
             current_reason: &base.reason,
             command: None,
