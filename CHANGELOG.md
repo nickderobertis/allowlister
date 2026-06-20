@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1](https://github.com/nickderobertis/allowlister/compare/v0.5.0...v0.5.1) - 2026-06-20
+
+### Added
+
+- deliver resolved project identity to approval plugins ([#104](https://github.com/nickderobertis/allowlister/pull/104))
+
 ## [0.5.0](https://github.com/nickderobertis/allowlister/compare/v0.4.20...v0.5.0) - 2026-06-19
 
 ### Added
