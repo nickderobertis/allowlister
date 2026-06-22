@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Allowlister" width="640" />
+</p>
+
 # allowlister
 
 A small, fast Rust CLI that gates the shell commands your AI coding agents run —
