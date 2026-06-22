@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.5](https://github.com/nickderobertis/allowlister/compare/v0.5.4...v0.5.5) - 2026-06-22
+
+### Documentation
+
+- add allowlister logo banner to README ([#113](https://github.com/nickderobertis/allowlister/pull/113))
+
 ## [0.5.4](https://github.com/nickderobertis/allowlister/compare/v0.5.3...v0.5.4) - 2026-06-20
 
 ### Added
