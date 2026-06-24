@@ -31,5 +31,13 @@ binary and pinned by `tests/recommended.rs`; a tier change must update those pin
   allow — that reintroduces the silent-allow gap the ask exists to close.
 - Adding a deny is a decision made for every user with no opt-out; give it the
   same scrutiny as removing a safety guard.
+- General-purpose code execution defers, it is not allowed: language interpreters
+  (node/python/ruby/tsx/ts-node), recipe runners (make/just), remote package
+  runners (npx/bunx), the `run`/`exec`/`eval`/`generate`/`shell`/`task`
+  subcommands of language package managers, and awk/sed (interpreters via
+  `system()`/sed `e`) all run arbitrary code not declared in a package manifest.
+  Auto-allow dependency management and the project's own build/test/lint instead
+  (those still run project code — a recommended profile is a guardrail, not a
+  sandbox). Do not re-add a broad `node *`/`make *`-style allow.
 - Comments (`//` and `/* */`) are accepted in config files. Use them to record
   why a rule is an ask versus a deny, not to log how the file changed.
