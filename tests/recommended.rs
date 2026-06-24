@@ -378,11 +378,7 @@ fn repo_write_allows_discard_redirection_to_null_and_std_devices() {
     check(&r, "echo x > /dev/null", Verdict::Allow);
     check(&r, "cargo test 2> /dev/null", Verdict::Allow);
     check(&r, "npm test > /dev/null 2>&1", Verdict::Allow);
-    check(
-        &r,
-        "pytest -q > /dev/stdout 2> /dev/stderr",
-        Verdict::Allow,
-    );
+    check(&r, "pytest -q > /dev/stdout 2> /dev/stderr", Verdict::Allow);
     check(&r, "git status 2> /dev/null", Verdict::Allow);
     check(&r, "jq . a > /dev/fd/1", Verdict::Allow);
     // Redirection-only grant: an unauthorized command still defers — general code
