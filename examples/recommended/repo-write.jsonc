@@ -512,8 +512,15 @@
       "action": "allow"
     },
     {
-      "name": "write: node package managers (install/run/test/build/exec)",
-      "match": "@(npm|pnpm|yarn|bun) @(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|prune|dedupe|rebuild|run|run-script|test|start|build|exec|x|dlx|create|init|import|fetch|patch|patch-commit|deploy|link|unlink|store|pkg|config|set|why|node|workspace|workspaces)?( *)",
+      "name": "write: node package managers (install/test/build; not config/exec)",
+      "description": "Dependency management and the built-in project tasks for npm/pnpm/yarn/bun: install/update/remove, the bundled test/build/start tasks, scaffold, link. Deliberately omits the subcommands that are not package management, so they carry no rule and DEFER to the harness instead of auto-allowing: `config`/`set` mutate the registry URL or write an auth token (`npm config set //registry/:_authToken=...`) -- a supply-chain and credential vector, not a build step; `exec`/`x`/`dlx`/`create` fetch and run an arbitrary remote package. `run`/`run-script` are a separate allow below, scoped to npm/pnpm/yarn -- bun is excluded there because `bun run FILE` executes an arbitrary file, not just a package.json script. (`init` stays here for the common scaffold; note `npm init <pkg>` is a `create` alias that still runs a remote package.)",
+      "match": "@(npm|pnpm|yarn|bun) @(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|prune|dedupe|rebuild|test|start|build|init|import|fetch|patch|patch-commit|deploy|link|unlink|store|pkg|why|node|workspace|workspaces)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: npm/pnpm/yarn run a package.json script",
+      "description": "`run`/`run-script` execute a script declared in package.json -- project-authored code, the profile's stated build/test/lint purpose. bun is intentionally absent: `bun run` also accepts a file path and runs it directly, so it is left unclassified (defer) rather than lumped in with the bounded package.json-script runners.",
+      "match": "@(npm|pnpm|yarn) @(run|run-script)?( *)",
       "action": "allow"
     },
     {
@@ -528,7 +535,8 @@
     },
     {
       "name": "write: pip install/uninstall/etc",
-      "match": "@(pip|pip3) @(install|uninstall|download|wheel|freeze|hash|config|cache)?( *)",
+      "description": "`pip config` (set/unset/edit) is excluded: it rewrites the index URL and stored credentials -- a supply-chain vector, not an install -- so it defers. The read forms `pip config list/get/debug` stay allowed above.",
+      "match": "@(pip|pip3) @(install|uninstall|download|wheel|freeze|hash|cache)?( *)",
       "action": "allow"
     },
     {
@@ -538,7 +546,8 @@
     },
     {
       "name": "write: poetry project ops (publish asks below)",
-      "match": "poetry @(install|add|remove|update|lock|run|build|shell|env|version|source|cache|export|init|check|show)?( *)",
+      "description": "`source` is excluded: `poetry source add` registers an alternate package repository -- a supply-chain vector, not a project op -- so it defers to the harness.",
+      "match": "poetry @(install|add|remove|update|lock|run|build|shell|env|version|cache|export|init|check|show)?( *)",
       "action": "allow"
     },
     {

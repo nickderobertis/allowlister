@@ -295,6 +295,12 @@ fn repo_write_allows_repo_management() {
         "git reset --soft HEAD~1",
         "npm install",
         "npm run build",
+        "npm run-script lint",
+        "npm test",
+        "pnpm run lint",
+        "yarn run test",
+        "bun install",
+        "bun test",
         "pnpm add react",
         "yarn",
         "pip install requests",
@@ -478,6 +484,39 @@ fn repo_write_defers_impactful_but_undecided() {
         "git checkout main",   // ambiguous with file discard: ask a human
         "rm file.txt",         // non-recursive delete: ask a human
         "sudo apt-get update", // privilege escalation: not auto-allowed
+    ] {
+        check(&r, cmd, Verdict::Defer);
+    }
+}
+
+#[test]
+fn repo_write_defers_package_manager_config_and_remote_exec() {
+    // The package-manager allows cover dependency management and the bundled
+    // build/test tasks, but not the subcommands that step outside that: registry
+    // and credential mutation, and fetch-and-run-an-arbitrary-package. Those are
+    // left unclassified so the harness decides — never auto-allowed, but not a
+    // hard ask either (a user overlay can still pin them).
+    let r = load("repo-write");
+    for cmd in [
+        // Registry / credential / index mutation across ecosystems.
+        "npm config set registry http://evil.test",
+        "npm config set //registry.npmjs.org/:_authToken=secret",
+        "npm set registry http://evil.test",
+        "pnpm config set registry http://evil.test",
+        "yarn config set npmRegistryServer http://evil.test",
+        "pip config set global.index-url http://evil.test/simple",
+        "pip3 config set global.index-url http://evil.test/simple",
+        "poetry source add evil https://evil.test/simple",
+        // Fetch-and-run an arbitrary remote package (npx-equivalents).
+        "npm exec cowsay moo",
+        "npm x cowsay",
+        "pnpm dlx cowsay",
+        "yarn dlx cowsay",
+        "npm create vite my-app",
+        "bun create vite my-app",
+        // `bun run` executes an arbitrary file, unlike npm/pnpm/yarn `run`.
+        "bun run ./scripts/whatever.ts",
+        "bun run start",
     ] {
         check(&r, cmd, Verdict::Defer);
     }
