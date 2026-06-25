@@ -151,7 +151,8 @@
       "action": "ask" },
 
     { "name": "yarn read-only",
-      "match": "yarn @(list|info|why|outdated|licenses|versions|node|config @(get|list)|--version|-v|help)?( *)",
+      "description": "`yarn node` is excluded: it runs node (arbitrary code), not a read.",
+      "match": "yarn @(list|info|why|outdated|licenses|versions|config @(get|list)|--version|-v|help)?( *)",
       "action": "allow" },
 
     { "name": "bun read-only",

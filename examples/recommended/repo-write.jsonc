@@ -1,6 +1,6 @@
 {
   "name": "repo-write",
-  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is permissive by design and is NOT a sandbox: build/test/run tools and interpreters can execute arbitrary project code the gate never sees; the tiers are guardrails against obvious mistakes, not a containment boundary.",
+  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness -- including, deliberately, general-purpose code execution (language interpreters, make/just recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of the package managers), which runs arbitrary code not declared in a package manifest. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is a guardrail, not a containment boundary: it auto-allows dependency management and the project's own build/test/lint, and those build/test tools still execute the project's own code the gate never sees.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -63,8 +63,8 @@
     },
     {
       "name": "read: stream filters in pipes and substitutions",
-      "description": "Stream editors that are safe reading stdin in a pipe but can write files when run standalone (sed -i, sort -o, awk print>file); scope them to pipe/substitution roles.",
-      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|less|more|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr)?( *)",
+      "description": "Stream filters that are safe reading stdin in a pipe. Excludes awk and sed even here: both are interpreters that can run arbitrary shell (awk system()/print|cmd, GNU sed e/w), so a pipe role does not contain them -- they defer.",
+      "match": "@(head|tail|wc|grep|egrep|fgrep|rg|sort|uniq|cut|tr|jq|less|more|cat|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr)?( *)",
       "action": "allow",
       "roles": [
         "pipe_filter",
@@ -220,7 +220,8 @@
     },
     {
       "name": "yarn read-only",
-      "match": "yarn @(list|info|why|outdated|licenses|versions|node|config @(get|list)|--version|-v|help)?( *)",
+      "description": "`yarn node` is excluded: it runs node (arbitrary code), not a read, so it defers like the bare interpreter.",
+      "match": "yarn @(list|info|why|outdated|licenses|versions|config @(get|list)|--version|-v|help)?( *)",
       "action": "allow"
     },
     {
@@ -304,9 +305,9 @@
       "action": "allow"
     },
     {
-      "name": "write: stream editors in any role (sed -i, sort -o, etc.)",
-      "description": "In repo-write these may edit files (recoverable via git); they are not restricted to pipe roles.",
-      "match": "@(sed|awk|sort|uniq|tr) *",
+      "name": "write: stream editors in any role (sort -o, etc.)",
+      "description": "These may edit files (recoverable via git) in any role. awk and sed are excluded: they are interpreters that run arbitrary shell (awk system(), GNU sed e/w), so they are general code execution and defer.",
+      "match": "@(sort|uniq|tr) *",
       "action": "allow"
     },
     {
@@ -317,7 +318,7 @@
     {
       "name": "write: text filters redirect to scratch and build outputs",
       "description": "Text read/transform filters may redirect stdout only to scratch and build locations (/tmp, build/dist/target, logs, caches); any other target stays denied, so an allowed reader cannot leak into source or system paths. Source edits go through the harness's file tools, not shell redirection. The redirect policy gates only >/>>, so tools that write via an argument (tee, sort -o, sed -i) are not granted by this rule.",
-      "match": "@(echo|printf|cat|head|tail|wc|grep|egrep|fgrep|rg|awk|sed|sort|uniq|cut|tr|jq|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr) *",
+      "match": "@(echo|printf|cat|head|tail|wc|grep|egrep|fgrep|rg|sort|uniq|cut|tr|jq|nl|tac|rev|column|fold|fmt|paste|comm|expand|unexpand|base32|base64|od|xxd|hexdump|strings|pr) *",
       "action": "allow",
       "redirections": {
         "write_glob": [
@@ -512,8 +513,15 @@
       "action": "allow"
     },
     {
-      "name": "write: node package managers (install/run/test/build/exec)",
-      "match": "@(npm|pnpm|yarn|bun) @(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|prune|dedupe|rebuild|run|run-script|test|start|build|exec|x|dlx|create|init|import|fetch|patch|patch-commit|deploy|link|unlink|store|pkg|config|set|why|node|workspace|workspaces)?( *)",
+      "name": "write: node package managers (install/test/build; not config/exec)",
+      "description": "Dependency management and the built-in project tasks for npm/pnpm/yarn/bun: install/update/remove, the bundled test/build/start tasks, scaffold, link. Deliberately omits the subcommands that are not package management, so they carry no rule and DEFER to the harness instead of auto-allowing: `config`/`set` mutate the registry URL or write an auth token (`npm config set //registry/:_authToken=...`) -- a supply-chain and credential vector, not a build step; `exec`/`x`/`dlx`/`create` fetch and run an arbitrary remote package. `run`/`run-script` are a separate allow below, scoped to npm/pnpm/yarn -- bun is excluded there because `bun run FILE` executes an arbitrary file, not just a package.json script. (`init` stays here for the common scaffold; note `npm init <pkg>` is a `create` alias that still runs a remote package.)",
+      "match": "@(npm|pnpm|yarn|bun) @(install|i|ci|add|update|up|upgrade|remove|rm|uninstall|prune|dedupe|rebuild|test|start|build|init|import|fetch|patch|patch-commit|deploy|link|unlink|store|pkg|why|workspace|workspaces)?( *)",
+      "action": "allow"
+    },
+    {
+      "name": "write: npm/pnpm/yarn run a package.json script",
+      "description": "`run`/`run-script` execute a script declared in package.json -- project-authored code, the profile's stated build/test/lint purpose. bun is intentionally absent: `bun run` also accepts a file path and runs it directly, so it is left unclassified (defer) rather than lumped in with the bounded package.json-script runners.",
+      "match": "@(npm|pnpm|yarn) @(run|run-script)?( *)",
       "action": "allow"
     },
     {
@@ -522,28 +530,27 @@
       "action": "allow"
     },
     {
-      "name": "write: npx/bunx run packages (arbitrary code; trusts the agent)",
-      "match": "@(npx|bunx) *",
-      "action": "allow"
-    },
-    {
       "name": "write: pip install/uninstall/etc",
-      "match": "@(pip|pip3) @(install|uninstall|download|wheel|freeze|hash|config|cache)?( *)",
+      "description": "`pip config` (set/unset/edit) is excluded: it rewrites the index URL and stored credentials -- a supply-chain vector, not an install -- so it defers. The read forms `pip config list/get/debug` stay allowed above.",
+      "match": "@(pip|pip3) @(install|uninstall|download|wheel|freeze|hash|cache)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: uv project ops (publish/self-uninstall asks below)",
-      "match": "uv @(pip|add|remove|sync|lock|run|build|venv|init|tool|python|export|tree|cache|version)?( *)",
+      "name": "write: uv project ops (run/tool defer; publish/self-uninstall ask below)",
+      "description": "`run` (executes an arbitrary command in the project env) and `tool` (uv tool run / uvx fetches and runs an arbitrary tool) are omitted: general code execution defers in this profile. Dependency and environment management stay allowed.",
+      "match": "uv @(pip|add|remove|sync|lock|build|venv|init|python|export|tree|cache|version)?( *)",
       "action": "allow"
     },
     {
       "name": "write: poetry project ops (publish asks below)",
-      "match": "poetry @(install|add|remove|update|lock|run|build|shell|env|version|source|cache|export|init|check|show)?( *)",
+      "description": "Excluded, so they defer: `run` and `shell` execute an arbitrary command / spawn a subshell in the project env (general code execution), and `source` (`poetry source add`) registers an alternate package repository (a supply-chain vector). Dependency and environment management stay allowed.",
+      "match": "poetry @(install|add|remove|update|lock|build|env|version|cache|export|init|check|show)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: cargo build/test/etc (publish/yank/login asks below)",
-      "match": "cargo @(build|b|check|c|test|t|run|r|clippy|fmt|bench|doc|d|add|remove|update|fetch|fix|clean|vendor|generate-lockfile|install|uninstall|expand|nextest|tree|metadata|init|new)?( *)",
+      "name": "write: cargo build/test/etc (run defers; publish/yank/login ask below)",
+      "description": "`run`/`r` execute the project's compiled binary (arbitrary code), so they are omitted and defer. build/test/clippy/etc still compile and run the project's own code -- this profile is a guardrail, not a sandbox.",
+      "match": "cargo @(build|b|check|c|test|t|clippy|fmt|bench|doc|d|add|remove|update|fetch|fix|clean|vendor|generate-lockfile|install|uninstall|expand|nextest|tree|metadata|init|new)?( *)",
       "action": "allow"
     },
     {
@@ -552,30 +559,36 @@
       "action": "allow"
     },
     {
-      "name": "write: go build/test/run/mod/etc",
-      "match": "go @(build|test|run|vet|fmt|get|install|mod|generate|work|clean|tool|fix|env|version|doc|list)?( *)",
+      "name": "write: go build/test/mod/etc (run/generate/tool defer)",
+      "description": "Omitted, so they defer: `run` (executes the program), `generate` (runs the arbitrary commands in `//go:generate` directives), and `tool` (runs an arbitrary go tool). build/test/vet still compile and run the project's own code.",
+      "match": "go @(build|test|vet|fmt|get|install|mod|work|clean|fix|env|version|doc|list)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: deno tasks",
-      "match": "deno @(run|task|test|bench|compile|install|cache|add|remove|fmt|lint|check|doc|eval)?( *)",
+      "name": "write: deno project ops (run/eval/task defer)",
+      "description": "Omitted, so they defer: `run` and `eval` execute arbitrary code, and `task` runs the arbitrary commands declared in deno.json tasks. test/bench/compile/lint/fmt and dependency management stay allowed.",
+      "match": "deno @(test|bench|compile|install|cache|add|remove|fmt|lint|check|doc)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: bundler/gem (push asks below)",
-      "match": "@(bundle|gem) *",
+      "name": "write: bundler dependency ops (bundle exec defers)",
+      "description": "`bundle exec <cmd>` runs an arbitrary command in the bundle context (general code execution), so it is omitted and defers. Dependency management stays allowed.",
+      "match": "bundle @(install|update|lock|add|remove|check|outdated|show|list|info|clean|cache|package|pristine|platform|version|init|binstubs|open|viz|doctor|help)?( *)",
       "action": "allow"
     },
     {
-      "name": "write: run interpreters and project code (trusts the agent; not a sandbox)",
-      "match": "@(python|python3|node|ruby|tsx|ts-node) *",
+      "name": "write: gem install/build (sources mutation and push defer/ask)",
+      "description": "`gem sources -a` registers a new gem source (a supply-chain vector) and is omitted; `gem push` is an ask below. Install/build and read subcommands stay allowed.",
+      "match": "gem @(install|i|uninstall|build|update|cleanup|pristine|list|search|info|which|env|contents|dependency|outdated|check|unpack|fetch|rdoc|help|--version|-v)?( *)",
       "action": "allow"
     },
-    {
-      "name": "write: make/just run targets (arbitrary code; trusts the agent)",
-      "match": "@(make|just)?( *)",
-      "action": "allow"
-    },
+    // General-purpose code execution DEFERS in this profile (no rule -> harness
+    // decides): language interpreters (python/node/ruby/tsx/ts-node), make/just
+    // recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of
+    // the package managers all run arbitrary code that is not declared in a
+    // package manifest. Dependency management and the project's own
+    // build/test/lint stay allowed -- those still execute project code, so this
+    // profile is a guardrail against open-ended execution, not a true sandbox.
     {
       "name": "write: formatters and linters (rewrite files; recoverable via git)",
       "match": "@(prettier|eslint|biome|stylelint|black|ruff|isort|autopep8|yapf|flake8|pylint|mypy|pyright|gofmt|goimports|golangci-lint|rustfmt|clang-format|clang-tidy|stylua|shfmt|dprint|taplo|yamllint|markdownlint|cspell) *",

@@ -295,6 +295,12 @@ fn repo_write_allows_repo_management() {
         "git reset --soft HEAD~1",
         "npm install",
         "npm run build",
+        "npm run-script lint",
+        "npm test",
+        "pnpm run lint",
+        "yarn run test",
+        "bun install",
+        "bun test",
         "pnpm add react",
         "yarn",
         "pip install requests",
@@ -304,11 +310,9 @@ fn repo_write_allows_repo_management() {
         "go test ./...",
         "pytest -q",
         "prettier --write .",
-        "sed -i s/a/b/ file.txt",
         "mkdir -p src/new",
         "gh pr create --fill",
         "gh issue comment 12 -b hi",
-        "python manage.py migrate",
     ] {
         check(&r, cmd, Verdict::Allow);
     }
@@ -326,7 +330,6 @@ fn repo_write_allows_scratch_and_build_redirection() {
     // redirect is a hard deny, which blocked routine `jq ... > /tmp/x` work.
     check(&r, "jq -S . input.json > /tmp/out.json", Verdict::Allow);
     check(&r, "git show HEAD:f | jq . > /tmp/b.json", Verdict::Allow);
-    check(&r, "sed s/a/b/ f > /tmp/out", Verdict::Allow);
     check(&r, "grep TODO src > build/todos.txt", Verdict::Allow);
     check(&r, "sort f > ./dist/sorted", Verdict::Allow);
     // System paths and in-tree source are still blocked.
@@ -343,21 +346,16 @@ fn repo_write_allows_scratch_and_build_redirection() {
 #[test]
 fn repo_write_lets_any_allowed_command_redirect_to_tmp() {
     let r = load("repo-write");
-    // The motivating case: a backgrounded dev server logging to /tmp.
-    check(&r, "just dev > /tmp/dev-server.log 2>&1", Verdict::Allow);
-    // Interpreters and other non-text-filter commands get the same scratch grant,
-    // including macOS's real /private/tmp.
-    check(&r, "node server.js > /tmp/out.log", Verdict::Allow);
-    check(
-        &r,
-        "python app.py > /private/tmp/app.log 2>&1",
-        Verdict::Allow,
-    );
+    // Any command the profile authorizes may also log to /tmp scratch, including
+    // macOS's real /private/tmp.
+    check(&r, "cargo test > /tmp/test.log 2>&1", Verdict::Allow);
+    check(&r, "npm test > /tmp/out.log", Verdict::Allow);
+    check(&r, "pytest -q > /private/tmp/app.log 2>&1", Verdict::Allow);
     // The grant only widens /tmp scratch: non-scratch targets, in-tree source, and
     // `..` escapes stay denied.
-    check(&r, "just dev > ./out.log", Verdict::Deny);
-    check(&r, "node server.js > src/main.rs", Verdict::Deny);
-    check(&r, "just dev > /tmp/../etc/x", Verdict::Deny);
+    check(&r, "cargo test > ./out.log", Verdict::Deny);
+    check(&r, "cargo build > src/main.rs", Verdict::Deny);
+    check(&r, "cargo test > /tmp/../etc/x", Verdict::Deny);
     // Deny is still supreme over the scratch grant; a core deny with a scratch
     // redirect stays denied.
     check(&r, "dd if=/dev/zero of=/dev/sda > /tmp/x", Verdict::Deny);
@@ -365,8 +363,11 @@ fn repo_write_lets_any_allowed_command_redirect_to_tmp() {
     // output is redirected to an allowed scratch target.
     check(&r, "rm -rf / > /tmp/x", Verdict::Ask);
     // A command the profile does not authorize still defers, redirect or not — the
-    // redirection-only rule never authorizes a command on its own.
+    // redirection-only rule never authorizes a command on its own. General code
+    // execution (an interpreter, a `just` recipe) now lands here.
     check(&r, "frobnicate > /tmp/x", Verdict::Defer);
+    check(&r, "node server.js > /tmp/out.log", Verdict::Defer);
+    check(&r, "just dev > /tmp/dev-server.log 2>&1", Verdict::Defer);
 }
 
 #[test]
@@ -376,19 +377,17 @@ fn repo_write_allows_discard_redirection_to_null_and_std_devices() {
     let r = load("repo-write");
     check(&r, "echo x > /dev/null", Verdict::Allow);
     check(&r, "cargo test 2> /dev/null", Verdict::Allow);
-    check(&r, "node server.js > /dev/null 2>&1", Verdict::Allow);
-    check(
-        &r,
-        "python app.py > /dev/stdout 2> /dev/stderr",
-        Verdict::Allow,
-    );
+    check(&r, "npm test > /dev/null 2>&1", Verdict::Allow);
+    check(&r, "pytest -q > /dev/stdout 2> /dev/stderr", Verdict::Allow);
     check(&r, "git status 2> /dev/null", Verdict::Allow);
     check(&r, "jq . a > /dev/fd/1", Verdict::Allow);
-    // Redirection-only grant: an unauthorized command still defers.
+    // Redirection-only grant: an unauthorized command still defers — general code
+    // execution is unauthorized in this profile.
     check(&r, "frobnicate > /dev/null", Verdict::Defer);
+    check(&r, "node server.js > /dev/null 2>&1", Verdict::Defer);
     // The grant does not open real device files, look-alikes, or `..` escapes.
     check(&r, "echo x > /dev/sda", Verdict::Deny);
-    check(&r, "node server.js > /dev/null/../etc/x", Verdict::Deny);
+    check(&r, "cargo test > /dev/null/../etc/x", Verdict::Deny);
     // Deny and ask still outrank the discard grant.
     check(&r, "dd if=/dev/zero of=/dev/sda > /dev/null", Verdict::Deny);
     check(&r, "rm -rf / 2> /dev/null", Verdict::Ask);
@@ -478,6 +477,84 @@ fn repo_write_defers_impactful_but_undecided() {
         "git checkout main",   // ambiguous with file discard: ask a human
         "rm file.txt",         // non-recursive delete: ask a human
         "sudo apt-get update", // privilege escalation: not auto-allowed
+    ] {
+        check(&r, cmd, Verdict::Defer);
+    }
+}
+
+#[test]
+fn repo_write_defers_package_manager_config_and_remote_exec() {
+    // The package-manager allows cover dependency management and the bundled
+    // build/test tasks, but not the subcommands that step outside that: registry
+    // and credential mutation, and fetch-and-run-an-arbitrary-package. Those are
+    // left unclassified so the harness decides — never auto-allowed, but not a
+    // hard ask either (a user overlay can still pin them).
+    let r = load("repo-write");
+    for cmd in [
+        // Registry / credential / index mutation across ecosystems.
+        "npm config set registry http://evil.test",
+        "npm config set //registry.npmjs.org/:_authToken=secret",
+        "npm set registry http://evil.test",
+        "pnpm config set registry http://evil.test",
+        "yarn config set npmRegistryServer http://evil.test",
+        "pip config set global.index-url http://evil.test/simple",
+        "pip3 config set global.index-url http://evil.test/simple",
+        "poetry source add evil https://evil.test/simple",
+        // Fetch-and-run an arbitrary remote package (npx-equivalents).
+        "npm exec cowsay moo",
+        "npm x cowsay",
+        "pnpm dlx cowsay",
+        "yarn dlx cowsay",
+        "npm create vite my-app",
+        "bun create vite my-app",
+        // `bun run` executes an arbitrary file, unlike npm/pnpm/yarn `run`.
+        "bun run ./scripts/whatever.ts",
+        "bun run start",
+    ] {
+        check(&r, cmd, Verdict::Defer);
+    }
+}
+
+#[test]
+fn repo_write_defers_general_code_execution() {
+    // The profile auto-allows dependency management and the project's own
+    // build/test/lint, but draws the line at open-ended code execution: running
+    // an interpreter, a recipe runner, or a `run`/`exec`/`eval` subcommand can run
+    // anything, so those defer to the harness rather than auto-allowing.
+    let r = load("repo-write");
+    for cmd in [
+        // Language interpreters with arbitrary args.
+        "node server.js",
+        "node -e console.log(1)",
+        "python app.py",
+        "python manage.py migrate",
+        "python3 -c import_os",
+        "ruby script.rb",
+        "tsx watch src/index.ts",
+        "ts-node script.ts",
+        // Recipe runners (arbitrary shell from a Makefile/Justfile recipe).
+        "make build",
+        "just dev",
+        // Remote package runners.
+        "npx cowsay",
+        "bunx vite",
+        // Per-ecosystem run/exec/eval/generate/shell wrappers.
+        "uv run python app.py",
+        "uv tool run ruff",
+        "poetry run pytest",
+        "poetry shell",
+        "cargo run --release",
+        "go run main.go",
+        "go generate ./...",
+        "deno run app.ts",
+        "deno eval console.log(1)",
+        "deno task start",
+        "bundle exec rspec",
+        "gem sources -a http://evil.test",
+        // awk/sed are interpreters (system(), GNU sed e/w), so they defer like
+        // read-only treats them — even the common in-place edit form.
+        "sed -i s/a/b/ file.txt",
+        "awk BEGIN{system(\"id\")}",
     ] {
         check(&r, cmd, Verdict::Defer);
     }
