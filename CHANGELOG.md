@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.6](https://github.com/nickderobertis/allowlister/compare/v0.5.5...v0.5.6) - 2026-06-25
+
+### Fixed
+
+- *(profiles)* tighten repo-write — defer general code execution, config & remote-exec ([#115](https://github.com/nickderobertis/allowlister/pull/115))
+
 ## [0.5.5](https://github.com/nickderobertis/allowlister/compare/v0.5.4...v0.5.5) - 2026-06-22
 
 ### Documentation
