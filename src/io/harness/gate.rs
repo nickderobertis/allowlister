@@ -11,10 +11,13 @@
 //! repeated. `check`/`explain` call the engine directly and intentionally do not
 //! record: only real harness traffic is usage history.
 
+use std::path::Path;
+
 use crate::config::LoadedConfig;
 use crate::domain::{self, DecisionResult, ToolCall};
 use crate::io::history::{self, Subject};
 use crate::io::plugins;
+use crate::io::toolpath;
 
 /// Evaluate a shell command against the loaded rules and record the evaluation.
 /// `harness` names the calling adapter and `project` is the cwd it ran in;
@@ -57,7 +60,14 @@ pub(crate) fn evaluate_tool(
     session_id: Option<&str>,
     call: &ToolCall,
 ) -> DecisionResult {
-    let result = domain::evaluate_tool_call(call, &config.tool_rules);
+    // Scope the call's file path to the working directory *for engine matching
+    // only*, so a portable `./**` profile rule matches the same whether the
+    // harness sent an absolute or a relative path (see [`toolpath`]). Plugins and
+    // history keep the original call — the path exactly as the harness sent it —
+    // so scoping is purely an internal matching detail, not a rewrite the rest of
+    // the boundary observes.
+    let scoped = toolpath::scope_to_base(call, Path::new(project));
+    let result = domain::evaluate_tool_call(&scoped, &config.tool_rules);
     let result =
         plugins::evaluate_tool(&config.plugins, harness, project, session_id, call, result);
     history::record(

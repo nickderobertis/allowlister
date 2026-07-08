@@ -9,3 +9,4 @@ pub mod history;
 pub mod hooks;
 pub mod plugins;
 pub mod project;
+pub mod toolpath;

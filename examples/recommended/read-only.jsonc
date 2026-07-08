@@ -1,6 +1,6 @@
 {
   "name": "read-only",
-  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp and discards to /dev/null and the standard-stream devices.",
+  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp and discards to /dev/null and the standard-stream devices. Non-shell built-in file tools are gated too: the read tool is auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness) and denied for secret files anywhere; a read outside the project defers.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -272,6 +272,26 @@
     { "name": "ask: shell as a pipe target (curl | sh)",
       "argv": ["@(sh|bash|zsh|fish|dash|ksh|ash|csh|tcsh)", "**"],
       "action": "ask",
-      "roles": ["pipe_filter"] }
+      "roles": ["pipe_filter"] },
+
+    // ---- Tool-call rules (non-shell built-in file tools) ----
+    // The agent's own file tools (Claude's Read, Qwen's read_file, Crush/Copilot
+    // view, OpenCode read, Goose text_editor, Cursor's read event) are gated here
+    // the way the coreutils above gate the shell. Each `path` is first normalized
+    // to the config's directory, so `./**` means "inside the project" whether the
+    // harness sends an absolute or a relative path; a path that resolves outside
+    // the project matches no rule and defers to the harness's own prompt.
+
+    { "name": "read tool: never read private keys or credentials",
+      "description": "The tool-call parallel of the shell secret-read deny above: block the built-in read tool from opening well-known secret material, inside the project or out (an absolute or ~ path is matched as written).",
+      "tool": "read",
+      "action": "deny",
+      "params": { "path": ["**/id_rsa", "**/id_dsa", "**/id_ecdsa", "**/id_ed25519", "**/*.pem", "**/*.ppk", "**/.ssh/**", "**/.aws/credentials", "**/.netrc", "**/.pgpass", "**/.git-credentials", "**/.config/gh/hosts.yml"] } },
+
+    { "name": "read tool: files inside the config directory",
+      "description": "Auto-allow the built-in read tool for any file inside the config's directory (paths normalize to `./…`). A read outside the project defers to the harness's own prompt rather than being auto-allowed.",
+      "tool": "read",
+      "action": "allow",
+      "params": { "path": ["./**"] } }
   ]
 }

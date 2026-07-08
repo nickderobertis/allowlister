@@ -11,6 +11,7 @@ use crate::domain::{self, Capability, NormalizedParams, ParamKey, ToolCall, Verd
 use crate::errors::{Error, Result};
 use crate::io::harness::normalize;
 use crate::io::plugins;
+use crate::io::toolpath;
 
 use super::resolve_cwd;
 
@@ -39,7 +40,11 @@ pub fn run(args: CheckArgs) -> Result<i32> {
 
     let result = if let Some(tool) = args.tool {
         let call = build_tool_call(tool, args.params, args.raw)?;
-        let result = domain::evaluate_tool_call(&call, &loaded.tool_rules);
+        // Scope the path to `cwd` for engine matching exactly as the hook does, so
+        // `check --tool` reproduces a harness's verdict for the same call. Plugins
+        // still see the original call (the path as given).
+        let scoped = toolpath::scope_to_base(&call, &cwd);
+        let result = domain::evaluate_tool_call(&scoped, &loaded.tool_rules);
         plugins::evaluate_tool(
             &loaded.plugins,
             "check",

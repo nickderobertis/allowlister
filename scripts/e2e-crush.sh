@@ -75,6 +75,11 @@ bindir="$repo_root/target/release"
 export PATH="$bindir:$PATH"
 
 sandbox="$(mktemp -d)"
+# Resolve symlinks up front (macOS mktemp lives under /var, a symlink to
+# /private/var): the config-relative tool-deny rules only fire when a harness's
+# absolute in-project path normalizes back under this cwd, so cwd and the
+# planted fixtures must share one physical prefix. No-op where already canonical.
+sandbox="$(cd "$sandbox" && pwd -P)"
 # On Windows the harness, oneharness and allowlister binaries are native, so the
 # bash sandbox path must be one they understand: cygpath -m yields a C:/... path
 # (forward slashes still work for bash builtins and in JSON config). No-op

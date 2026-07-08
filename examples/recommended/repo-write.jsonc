@@ -1,6 +1,6 @@
 {
   "name": "repo-write",
-  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness -- including, deliberately, general-purpose code execution (language interpreters, make/just recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of the package managers), which runs arbitrary code not declared in a package manifest. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is a guardrail, not a containment boundary: it auto-allows dependency management and the project's own build/test/lint, and those build/test tools still execute the project's own code the gate never sees.",
+  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness -- including, deliberately, general-purpose code execution (language interpreters, make/just recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of the package managers), which runs arbitrary code not declared in a package manifest. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is a guardrail, not a containment boundary: it auto-allows dependency management and the project's own build/test/lint, and those build/test tools still execute the project's own code the gate never sees. Non-shell built-in file tools are gated too: the read/write/edit tools are auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness), the read tool is denied for secret files anywhere, and any file tool targeting a path outside the project defers.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -787,6 +787,69 @@
         "**"
       ],
       "action": "ask"
+    },
+    // ---- Tool-call rules (non-shell built-in file tools) ----
+    // The agent's own file tools (Claude's Read/Write/Edit, Qwen's read_file/
+    // write_file/edit, Crush/Copilot/OpenCode view/write/edit, Goose text_editor,
+    // Cursor's read event) are gated here the way the shell rules above gate
+    // coreutils and git. Each `path` is first normalized to the config's
+    // directory, so `./**` means "inside the project" whether the harness sends
+    // an absolute or a relative path; a path that resolves outside the project
+    // matches no rule and defers to the harness's own prompt.
+    {
+      "name": "read tool: never read private keys or credentials",
+      "description": "The tool-call parallel of the shell secret-read deny above: block the built-in read tool from opening well-known secret material, inside the project or out (an absolute or ~ path is matched as written).",
+      "tool": "read",
+      "action": "deny",
+      "params": {
+        "path": [
+          "**/id_rsa",
+          "**/id_dsa",
+          "**/id_ecdsa",
+          "**/id_ed25519",
+          "**/*.pem",
+          "**/*.ppk",
+          "**/.ssh/**",
+          "**/.aws/credentials",
+          "**/.netrc",
+          "**/.pgpass",
+          "**/.git-credentials",
+          "**/.config/gh/hosts.yml"
+        ]
+      }
+    },
+    {
+      "name": "read tool: files inside the config directory",
+      "description": "Auto-allow the built-in read tool for any file inside the config's directory (paths normalize to `./…`). A read outside the project defers to the harness's own prompt.",
+      "tool": "read",
+      "action": "allow",
+      "params": {
+        "path": [
+          "./**"
+        ]
+      }
+    },
+    {
+      "name": "write tool: files inside the config directory",
+      "description": "Auto-allow the built-in write tool (create/overwrite a file) inside the config's directory; recoverable via git like the shell write allows above. A write outside the project defers.",
+      "tool": "write",
+      "action": "allow",
+      "params": {
+        "path": [
+          "./**"
+        ]
+      }
+    },
+    {
+      "name": "edit tool: files inside the config directory",
+      "description": "Auto-allow the built-in edit tool inside the config's directory; edits outside defer. A patch-style edit that carries no path (e.g. Codex apply_patch) has nothing to scope, so it matches no rule and defers.",
+      "tool": "edit",
+      "action": "allow",
+      "params": {
+        "path": [
+          "./**"
+        ]
+      }
     }
   ]
 }
