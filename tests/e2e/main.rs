@@ -2129,6 +2129,52 @@ fn install_local_writes_a_project_config() {
 }
 
 #[test]
+fn bundled_profiles_allow_read_only_glob_and_grep_tools() {
+    // Regression for #119: a headless agent's Glob/Grep must not defer under the
+    // bundled read-only / repo-write profiles. A one-shot `claude -p` has no
+    // approval channel, so a deferred tool call halts the whole run. Drive the
+    // compiled binary the way that agent does — install the profile, then check
+    // the tool calls — so the fix is verified end to end, not just in the rules.
+    for profile in ["read-only", "repo-write"] {
+        let dir = TempDir::new().unwrap();
+        let xdg = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+        Command::cargo_bin("allowlister")
+            .unwrap()
+            .args(["install", profile, "--local"])
+            .current_dir(dir.path())
+            .assert()
+            .success();
+
+        let check = |extra: &[&str], expect: &'static str| {
+            let mut args = vec!["check", "--tool"];
+            args.extend_from_slice(extra);
+            args.push("--cwd");
+            Command::cargo_bin("allowlister")
+                .unwrap()
+                .args(args)
+                .arg(dir.path())
+                .env("XDG_CONFIG_HOME", xdg.path())
+                .env("HOME", home.path())
+                .assert()
+                .stdout(predicate::str::starts_with(expect));
+        };
+
+        for tool in ["glob", "grep"] {
+            // An explicit in-project path allows...
+            check(&[tool, "--param", "path=src/main.rs"], "ALLOW");
+            // ...and so does a bare call with no path (it defaults to the project
+            // root, which is exactly the halt the issue reported).
+            check(&[tool], "ALLOW");
+        }
+        // grep reads contents, so it still inherits the secret-read deny; glob only
+        // lists names, so the same secret path is a plain in-project allow.
+        check(&["grep", "--param", "path=deploy/id_rsa"], "DENY");
+        check(&["glob", "--param", "path=deploy/id_rsa"], "ALLOW");
+    }
+}
+
+#[test]
 fn install_into_an_existing_json_config_updates_it_in_place_keeping_comments() {
     let dir = TempDir::new().unwrap();
     // A legacy-named, hand-commented project config: `--local` must keep

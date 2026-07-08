@@ -1,6 +1,6 @@
 {
   "name": "repo-write",
-  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness -- including, deliberately, general-purpose code execution (language interpreters, make/just recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of the package managers), which runs arbitrary code not declared in a package manifest. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is a guardrail, not a containment boundary: it auto-allows dependency management and the project's own build/test/lint, and those build/test tools still execute the project's own code the gate never sees. Non-shell built-in file tools are gated too: the read/write/edit tools are auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness), the read tool is denied for secret files anywhere, and any file tool targeting a path outside the project defers.",
+  "description": "Recommended profile: everything in read-only PLUS the writes an agent needs to manage a repository -- git add/commit/branch/switch/merge/rebase/pull/push, gh pr/issue collaboration, and install/build/test/format/run across the common language ecosystems. Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt the human can approve, and outranks the broad allows so a single risky variant is held without narrowing them): force-push, reset --hard, clean -f, history rewrite, branch/tag deletion, recursive rm, registry publish/auth, curl|sh installs, gh api writes, repo/release delete, self-uninstall. DEFER: anything unclassified falls through to the harness -- including, deliberately, general-purpose code execution (language interpreters, make/just recipes, npx/bunx, and the run/exec/eval/generate/shell/task subcommands of the package managers), which runs arbitrary code not declared in a package manifest. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. This profile is a guardrail, not a containment boundary: it auto-allows dependency management and the project's own build/test/lint, and those build/test tools still execute the project's own code the gate never sees. Non-shell built-in file tools are gated too: the read/write/edit tools plus the read-only glob/grep are auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness; a glob/grep with no path targets that directory), the read and grep tools are denied for secret files anywhere, and any file tool targeting a path outside the project defers.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -819,9 +819,53 @@
       }
     },
     {
+      "name": "grep tool: never read private keys or credentials",
+      "description": "grep reads file *contents* just like the read tool, so it carries the same secret-read deny: block searching a well-known secret file, inside the project or out. glob only enumerates path names (never contents), so it is not denied here.",
+      "tool": "grep",
+      "action": "deny",
+      "params": {
+        "path": [
+          "**/id_rsa",
+          "**/id_dsa",
+          "**/id_ecdsa",
+          "**/id_ed25519",
+          "**/*.pem",
+          "**/*.ppk",
+          "**/.ssh/**",
+          "**/.aws/credentials",
+          "**/.netrc",
+          "**/.pgpass",
+          "**/.git-credentials",
+          "**/.config/gh/hosts.yml"
+        ]
+      }
+    },
+    {
       "name": "read tool: files inside the config directory",
       "description": "Auto-allow the built-in read tool for any file inside the config's directory (paths normalize to `./…`). A read outside the project defers to the harness's own prompt.",
       "tool": "read",
+      "action": "allow",
+      "params": {
+        "path": [
+          "./**"
+        ]
+      }
+    },
+    {
+      "name": "glob tool: files inside the config directory",
+      "description": "glob and grep are pure read-only inspection -- no more sensitive than the read tool -- so they auto-allow inside the config's directory too. Without this a headless agent's Glob/Grep would defer with no approval channel and halt. A path outside the project defers. glob with no path targets the config dir, so a bare Glob (pattern only) is in-scope and allowed.",
+      "tool": "glob",
+      "action": "allow",
+      "params": {
+        "path": [
+          "./**"
+        ]
+      }
+    },
+    {
+      "name": "grep tool: files inside the config directory",
+      "description": "The grep parallel of the glob allow above: auto-allow searching inside the config's directory. The secret-read deny above still outranks this for a grep aimed at a secret file. A grep outside the project defers.",
+      "tool": "grep",
       "action": "allow",
       "params": {
         "path": [

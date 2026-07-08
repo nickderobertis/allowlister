@@ -15,7 +15,10 @@
   harness/path style and is why the domain still matches raw strings. Decide
   inside-vs-outside from the *normalized* path so traversal can't disguise an
   external file as in-project; keep it purely lexical (no fs, no symlink
-  resolution).
+  resolution). A `glob`/`grep` call with *no* path defaults to searching the
+  working directory, so scope its absent path to the project root (`.`), letting a
+  `./**` rule allow it instead of deferring — a bare deferred tool call halts a
+  headless agent. Other pathless tools (a patch-style `edit`) stay unscoped.
 - Each adapter normalizes its harness's native session field to one `session_id`
   threaded through `gate` to plugins (Cursor's is `conversation_id`, not the
   per-message `generation_id`; Copilot's is `sessionId`; OpenCode's arrives from

@@ -1,6 +1,6 @@
 {
   "name": "read-only",
-  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp and discards to /dev/null and the standard-stream devices. Non-shell built-in file tools are gated too: the read tool is auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness) and denied for secret files anywhere; a read outside the project defers.",
+  "description": "Recommended profile: auto-allow read-only inspection across the shell, git, gh, and common language ecosystems (pip/uv/python, npm/pnpm/yarn/bun/node, cargo/rustup, go, poetry, make, just). Three verdict tiers guard the rest. DENY (never legitimate, no prompt): reading private keys/credentials, disk/partition wipes, dd to a block device, recursive chmod/chown on absolute/home paths. ASK (dangerous but sometimes legitimate -- surfaces a prompt; outranks the broad allows so one risky variant is held without narrowing them): curl|sh installs, recursive rm, in-place edits, branch/tag deletion, gh api writes, audit fix. DEFER: anything else that is not a pure read falls through to the harness, which prompts the human. Denies are kept minimal on purpose -- a deny cannot be overridden in a user or project overlay, so anything a legitimate workflow might need is an ask, not a deny. Output redirections are not permitted on allowed commands except scratch writes under /tmp and discards to /dev/null and the standard-stream devices. Non-shell built-in file tools are gated too: the read, glob, and grep tools are auto-allowed inside the config's directory (paths normalized so an absolute path and a relative one to the same file agree, regardless of harness; a glob/grep with no path targets that directory), and read/grep are denied for secret files anywhere; a read/glob/grep outside the project defers.",
   "rules": [
     // Verdict tiers (see examples/AGENTS.md for the full rationale):
     //   allow  -- auto-approved.
@@ -288,9 +288,27 @@
       "action": "deny",
       "params": { "path": ["**/id_rsa", "**/id_dsa", "**/id_ecdsa", "**/id_ed25519", "**/*.pem", "**/*.ppk", "**/.ssh/**", "**/.aws/credentials", "**/.netrc", "**/.pgpass", "**/.git-credentials", "**/.config/gh/hosts.yml"] } },
 
+    { "name": "grep tool: never read private keys or credentials",
+      "description": "grep reads file *contents* just like the read tool, so it carries the same secret-read deny: block searching a well-known secret file, inside the project or out. glob only enumerates path names (never contents), so it is not denied here.",
+      "tool": "grep",
+      "action": "deny",
+      "params": { "path": ["**/id_rsa", "**/id_dsa", "**/id_ecdsa", "**/id_ed25519", "**/*.pem", "**/*.ppk", "**/.ssh/**", "**/.aws/credentials", "**/.netrc", "**/.pgpass", "**/.git-credentials", "**/.config/gh/hosts.yml"] } },
+
     { "name": "read tool: files inside the config directory",
       "description": "Auto-allow the built-in read tool for any file inside the config's directory (paths normalize to `./…`). A read outside the project defers to the harness's own prompt rather than being auto-allowed.",
       "tool": "read",
+      "action": "allow",
+      "params": { "path": ["./**"] } },
+
+    { "name": "glob tool: files inside the config directory",
+      "description": "glob and grep are pure read-only inspection -- no more sensitive than the read tool above -- so they auto-allow inside the config's directory too. Without this a headless agent's Glob/Grep would defer with no approval channel and halt. A path outside the project defers. glob with no path targets the config dir, so a bare Glob (pattern only) is in-scope and allowed.",
+      "tool": "glob",
+      "action": "allow",
+      "params": { "path": ["./**"] } },
+
+    { "name": "grep tool: files inside the config directory",
+      "description": "The grep parallel of the glob allow above: auto-allow searching inside the config's directory. The secret-read deny above still outranks this for a grep aimed at a secret file. A grep outside the project defers.",
+      "tool": "grep",
       "action": "allow",
       "params": { "path": ["./**"] } }
   ]

@@ -618,6 +618,39 @@ fn read_only_read_tool_allows_inside_denies_secrets_defers_outside() {
 }
 
 #[test]
+fn read_only_glob_and_grep_tools_allow_inside_defer_outside_deny_secret_grep() {
+    // glob/grep are read-only inspection in the same tier as read: allowed inside
+    // the project, deferred outside. A bare glob/grep (no path) scopes to `./` at
+    // the io boundary, so the in-project `./**` allow fires (see the toolpath test)
+    // — the fix for the headless-agent halt in #119.
+    let r = load("read-only");
+    for capability in [Capability::Glob, Capability::Grep] {
+        check_tool(&r, capability, "./", Verdict::Allow); // bare call, scoped to root
+        check_tool(&r, capability, "./src", Verdict::Allow);
+        check_tool(&r, capability, "./a/b/c.txt", Verdict::Allow);
+        // Outside the project defers to the harness's own prompt.
+        check_tool(&r, capability, "/etc", Verdict::Defer);
+        check_tool(&r, capability, "/var/log", Verdict::Defer);
+    }
+    // grep reads file contents, so it inherits the secret-read deny wherever the
+    // file lives (deny outranks the in-project allow). glob only lists names, so a
+    // secret path is not denied — it is allowed inside and defers outside.
+    for path in [
+        "/home/u/.ssh/id_rsa",
+        "~/.ssh/id_rsa",
+        "/home/u/.aws/credentials",
+        "./.aws/credentials",
+        "./certs/server.pem",
+    ] {
+        check_tool(&r, Capability::Grep, path, Verdict::Deny);
+    }
+    // The same secret path under glob is not a content read: in-project allows,
+    // outside defers.
+    check_tool(&r, Capability::Glob, "./.aws/credentials", Verdict::Allow);
+    check_tool(&r, Capability::Glob, "~/.ssh/id_rsa", Verdict::Defer);
+}
+
+#[test]
 fn repo_write_allows_file_ops_inside_the_project() {
     let r = load("repo-write");
     // read/write/edit inside the config directory auto-allow.
@@ -638,4 +671,14 @@ fn repo_write_allows_file_ops_inside_the_project() {
     ] {
         check_tool(&r, Capability::Read, path, Verdict::Deny);
     }
+    // Read-only glob/grep get the same in-project allow / outside defer as read,
+    // and grep inherits the secret-read deny (glob, names-only, does not).
+    for capability in [Capability::Glob, Capability::Grep] {
+        check_tool(&r, capability, "./", Verdict::Allow); // bare call, scoped to root
+        check_tool(&r, capability, "./src", Verdict::Allow);
+        check_tool(&r, capability, "/etc", Verdict::Defer);
+    }
+    check_tool(&r, Capability::Grep, "~/.ssh/id_rsa", Verdict::Deny);
+    check_tool(&r, Capability::Grep, "./deploy/id_ed25519", Verdict::Deny);
+    check_tool(&r, Capability::Glob, "./deploy/id_ed25519", Verdict::Allow);
 }
