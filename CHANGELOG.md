@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.8](https://github.com/nickderobertis/allowlister/compare/v0.5.7...v0.5.8) - 2026-07-08
+
+### Fixed
+
+- *(profiles)* allow read-only glob & grep tools in bundled profiles ([#120](https://github.com/nickderobertis/allowlister/pull/120))
+
 ## [0.5.7](https://github.com/nickderobertis/allowlister/compare/v0.5.6...v0.5.7) - 2026-07-08
 
 ### Added
