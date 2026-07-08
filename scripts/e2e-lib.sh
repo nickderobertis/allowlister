@@ -23,19 +23,31 @@
 # the harness's built-in read tool — which the `read` rule gates. A leak of the
 # secret marker therefore proves the built-in read deny failed, not that the model
 # took a shell shortcut.
+#
+# Path scoping is proven live at the same time: the read/write/edit denies are
+# written against a CONFIG-RELATIVE path (`./secret-allowlister.txt`), not an
+# absolute or `**/`-anywhere one. A real harness sends the fixture's ABSOLUTE
+# in-project path, so the deny can only fire if allowlister first normalized that
+# path to the config directory — exactly the cross-OS/cross-harness behavior these
+# live checks exist to pin. If scoping regresses, the absolute path stops matching
+# `./…`, the read is no longer denied, and the secret leaks (a hard failure). The
+# `./**/…` twin covers a harness that reads the fixture from a subdirectory; both
+# require the leading `./` that only the normalizer produces. (Each script
+# canonicalizes its sandbox with `pwd -P` first, so a macOS /var→/private/var
+# symlink can't make an in-project path look external.)
 AL_TOOL_RULES='
     { "name": "fence the read test: deny shell reads so only the read tool can surface the secret",
       "match": "@(cat|head|tail|less|more|nl|od|xxd|strings|base64|cut|grep|rg|sed|awk|tac|tr) *",
       "action": "deny" },
-    { "name": "deny secret reads via the built-in read tool",
+    { "name": "deny secret reads via the built-in read tool (config-relative path: also proves scoping)",
       "tool": "read", "action": "deny",
-      "params": { "path": ["**/secret-allowlister.txt"] } },
-    { "name": "deny forbidden writes via the built-in write tool",
+      "params": { "path": ["./secret-allowlister.txt", "./**/secret-allowlister.txt"] } },
+    { "name": "deny forbidden writes via the built-in write tool (config-relative path: also proves scoping)",
       "tool": "write", "action": "deny",
-      "params": { "path": ["**/blocked-by-allowlister.txt"] } },
-    { "name": "deny forbidden edits via the built-in edit tool",
+      "params": { "path": ["./blocked-by-allowlister.txt", "./**/blocked-by-allowlister.txt"] } },
+    { "name": "deny forbidden edits via the built-in edit tool (config-relative path: also proves scoping)",
       "tool": "edit", "action": "deny",
-      "params": { "path": ["**/blocked-by-allowlister.txt"] } },
+      "params": { "path": ["./blocked-by-allowlister.txt", "./**/blocked-by-allowlister.txt"] } },
     { "name": "deny destructive MCP tools by canonical tool name",
       "tool": "mcp", "action": "deny",
       "params": { "mcp_tool": ["delete*"] } }'
