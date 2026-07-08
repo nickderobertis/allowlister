@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.7](https://github.com/nickderobertis/allowlister/compare/v0.5.6...v0.5.7) - 2026-07-08
+
+### Added
+
+- gate built-in file tools in bundled profiles, scoped to the config directory ([#117](https://github.com/nickderobertis/allowlister/pull/117))
+
 ## [0.5.6](https://github.com/nickderobertis/allowlister/compare/v0.5.5...v0.5.6) - 2026-06-25
 
 ### Fixed
