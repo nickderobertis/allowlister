@@ -71,12 +71,27 @@ fn scope_path(path: &str, base: &Path) -> String {
                 format!("./{relative}")
             }
         }
-        // Outside the project: return the path verbatim. Inside-vs-outside was
-        // decided from the *normalized* `abs`, so traversal cannot disguise an
-        // external file as in-project; but the emitted string stays the original
-        // so an absolute secret-path deny matches it exactly as written and no
-        // platform-specific separator rewrite alters it.
-        Err(_) => path.to_string(),
+        // Outside the project: emit the resolved absolute path with forward
+        // slashes. Inside-vs-outside was decided from the normalized `abs`, so
+        // traversal cannot disguise an external file as in-project; forward slashes
+        // (rather than the platform separator) let a config's secret-path deny —
+        // written with `/`, e.g. `**/.ssh/**` — match on Windows too.
+        Err(_) => os_path_to_slash(&abs),
+    }
+}
+
+/// The path's string form with `/` separators. On Windows the backslash is the
+/// path separator, so normalize it to `/` for matching against forward-slash
+/// config globs; on Unix a backslash is a legal filename byte, so leave it be.
+fn os_path_to_slash(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        text.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        text
     }
 }
 
@@ -125,6 +140,10 @@ mod tests {
     use crate::domain::{Capability, NormalizedParams};
     use serde_json::json;
 
+    // Used only by the `#[cfg(unix)]` cases below (they assert on Unix absolute
+    // paths), so it is Unix-gated too — otherwise it is dead code on Windows and
+    // trips the `-D warnings` lint.
+    #[cfg(unix)]
     fn scoped(path: &str, base: &str) -> String {
         scope_path(path, Path::new(base))
     }
@@ -146,29 +165,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn paths_outside_the_project_are_left_verbatim() {
-        // An outside path keeps its original spelling (a secret deny matches it
-        // as written), but is never rewritten to a `./` in-project form.
-        for (path, base) in [
-            ("/etc/hosts", "/repo"),
-            ("../other/x", "/repo"),
+    fn paths_outside_the_project_resolve_to_an_absolute_form() {
+        // An outside path resolves to an absolute (never `./`) form, so an
+        // in-project `./**` allow can't match it, while an absolute secret-path
+        // deny still can.
+        for (path, base, expected) in [
+            ("/etc/hosts", "/repo", "/etc/hosts"),
+            // A relative path escaping the base resolves to the outside absolute.
+            ("../other/x", "/repo", "/other/x"),
             // Traversal that escapes the base is judged outside from the resolved
             // path, so it can never masquerade as in-project.
-            ("/repo/../etc/passwd", "/repo"),
-            ("subdir/../../etc/x", "/repo"),
-            ("/repo-evil/x", "/repo"),
-            ("/repo/../repo-evil/x", "/repo"),
+            ("/repo/../etc/passwd", "/repo", "/etc/passwd"),
+            ("subdir/../../etc/x", "/repo", "/etc/x"),
+            ("/repo-evil/x", "/repo", "/repo-evil/x"),
+            ("/repo/../repo-evil/x", "/repo", "/repo-evil/x"),
             // More `..` than depth: the surplus cannot pop past root, so it never
             // resolves back inside the base.
-            ("/a/../../etc/x", "/repo"),
+            ("/a/../../etc/x", "/repo", "/../etc/x"),
         ] {
             let out = scoped(path, base);
-            assert_eq!(out, path, "outside path should be verbatim");
+            assert_eq!(out, expected, "input {path:?}");
             assert!(
                 !out.starts_with("./"),
                 "outside path must not look in-project"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_normalize_separators_for_forward_slash_globs() {
+        // A real Windows harness sends backslash paths, but matching is done
+        // against config globs written with `/`, so the scoped form must use `/` —
+        // inside the project and out. Only exercised on Windows.
+        let base = Path::new(r"C:\repo");
+        assert_eq!(scope_path(r"C:\repo\src\main.rs", base), "./src/main.rs");
+        assert_eq!(
+            scope_path(r"C:\Users\me\.ssh\id_rsa", base),
+            "C:/Users/me/.ssh/id_rsa"
+        );
     }
 
     #[cfg(unix)]

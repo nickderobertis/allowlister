@@ -60,19 +60,21 @@ pub(crate) fn evaluate_tool(
     session_id: Option<&str>,
     call: &ToolCall,
 ) -> DecisionResult {
-    // Scope the call's file path to the working directory first, so a portable
-    // `./**` profile rule matches the same whether the harness sent an absolute
-    // or a relative path (see [`toolpath`]). Plugins and history see the scoped
-    // call too, keeping the canonical form consistent across the boundary.
-    let call = toolpath::scope_to_base(call, Path::new(project));
-    let result = domain::evaluate_tool_call(&call, &config.tool_rules);
+    // Scope the call's file path to the working directory *for engine matching
+    // only*, so a portable `./**` profile rule matches the same whether the
+    // harness sent an absolute or a relative path (see [`toolpath`]). Plugins and
+    // history keep the original call — the path exactly as the harness sent it —
+    // so scoping is purely an internal matching detail, not a rewrite the rest of
+    // the boundary observes.
+    let scoped = toolpath::scope_to_base(call, Path::new(project));
+    let result = domain::evaluate_tool_call(&scoped, &config.tool_rules);
     let result =
-        plugins::evaluate_tool(&config.plugins, harness, project, session_id, &call, result);
+        plugins::evaluate_tool(&config.plugins, harness, project, session_id, call, result);
     history::record(
         config.history.enabled,
         harness,
         project,
-        Subject::Tool(&call),
+        Subject::Tool(call),
         &result,
     );
     result

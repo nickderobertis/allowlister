@@ -2711,8 +2711,18 @@ fn repo_write_profile_scopes_file_tools_to_the_config_directory() {
         .assert()
         .success();
 
+    // A sibling temp dir gives a genuinely-outside ABSOLUTE path on every OS
+    // (unix-literal paths like `/etc/hosts` are not absolute on Windows, so they
+    // would wrongly resolve inside the project there).
+    let outside = TempDir::new().unwrap();
     let inside_abs = project.path().join("src/main.rs");
     let inside_abs = inside_abs.to_string_lossy().into_owned();
+    let outside_abs = outside.path().join("notes.txt");
+    let outside_abs = outside_abs.to_string_lossy().into_owned();
+    let outside_secret = outside.path().join(".ssh").join("id_rsa");
+    let outside_secret = outside_secret.to_string_lossy().into_owned();
+    let inside_secret = project.path().join(".aws").join("credentials");
+    let inside_secret = inside_secret.to_string_lossy().into_owned();
     let check_tool = |tool: &str, path: &str| {
         let mut cmd = hermetic_cmd(&empty);
         cmd.args(["check", "--tool", tool, "--param"])
@@ -2735,17 +2745,16 @@ fn repo_write_profile_scopes_file_tools_to_the_config_directory() {
 
     // A path outside the project defers to the harness (exit 0, no rule matched).
     for tool in ["read", "write", "edit"] {
-        check_tool(tool, "/etc/hosts")
+        check_tool(tool, &outside_abs)
             .success()
             .stdout(predicate::str::starts_with("DEFER"));
     }
 
     // Secret reads are denied wherever the file lives — outside or committed in.
-    check_tool("read", "/home/user/.ssh/id_rsa")
+    check_tool("read", &outside_secret)
         .code(2)
         .stdout(predicate::str::starts_with("DENY"));
-    let inside_secret = project.path().join(".aws/credentials");
-    check_tool("read", &inside_secret.to_string_lossy())
+    check_tool("read", &inside_secret)
         .code(2)
         .stdout(predicate::str::starts_with("DENY"));
 }
