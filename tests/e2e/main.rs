@@ -2590,11 +2590,12 @@ fn init_global_reports_a_write_failure() {
 fn tool_project() -> TempDir {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
-    let allow_glob = format!("{}/**", dir.path().to_string_lossy());
     let cfg = serde_json::json!({
         "rules": [
+            // Tool paths normalize to the config directory, so `./**` is the
+            // portable "inside the project" glob regardless of how the path came in.
             { "name": "reads in repo", "tool": "read", "action": "allow",
-              "params": { "path": [allow_glob] } },
+              "params": { "path": ["./**"] } },
             { "name": "no secrets", "tool": "read", "action": "deny",
               "params": { "path": ["**/.ssh/**", "**/*.pem"] } },
             { "name": "web github only", "tool": "web_fetch", "action": "allow",
@@ -2694,6 +2695,59 @@ fn check_tool_bad_param_is_a_usage_error() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("must be key=value"));
+}
+
+#[test]
+fn repo_write_profile_scopes_file_tools_to_the_config_directory() {
+    // The bundled repo-write profile's tool-call rules, end to end through the
+    // compiled binary: a built-in file tool is gated by whether its path resolves
+    // inside the config's directory, consistently for absolute and relative inputs.
+    let empty = TempDir::new().unwrap();
+    let project = TempDir::new().unwrap();
+    fs::create_dir_all(project.path().join(".git")).unwrap();
+    hermetic_cmd(&empty)
+        .args(["init", "--local", "--profile", "repo-write", "--no-hooks"])
+        .current_dir(project.path())
+        .assert()
+        .success();
+
+    let inside_abs = project.path().join("src/main.rs");
+    let inside_abs = inside_abs.to_string_lossy().into_owned();
+    let check_tool = |tool: &str, path: &str| {
+        let mut cmd = hermetic_cmd(&empty);
+        cmd.args(["check", "--tool", tool, "--param"])
+            .arg(format!("path={path}"))
+            .arg("--cwd")
+            .arg(project.path());
+        cmd.assert()
+    };
+
+    // An absolute path inside the project allows; a relative path to the same file
+    // normalizes identically and also allows — for read, write, and edit.
+    for tool in ["read", "write", "edit"] {
+        check_tool(tool, &inside_abs)
+            .success()
+            .stdout(predicate::str::starts_with("ALLOW"));
+        check_tool(tool, "src/main.rs")
+            .success()
+            .stdout(predicate::str::starts_with("ALLOW"));
+    }
+
+    // A path outside the project defers to the harness (exit 0, no rule matched).
+    for tool in ["read", "write", "edit"] {
+        check_tool(tool, "/etc/hosts")
+            .success()
+            .stdout(predicate::str::starts_with("DEFER"));
+    }
+
+    // Secret reads are denied wherever the file lives — outside or committed in.
+    check_tool("read", "/home/user/.ssh/id_rsa")
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
+    let inside_secret = project.path().join(".aws/credentials");
+    check_tool("read", &inside_secret.to_string_lossy())
+        .code(2)
+        .stdout(predicate::str::starts_with("DENY"));
 }
 
 #[test]
@@ -3637,13 +3691,12 @@ fn check_tool_web_fetch_url_rules_allow_and_defer() {
 fn capability_project() -> TempDir {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".git")).unwrap();
-    let edit_glob = format!("{}/**", dir.path().to_string_lossy());
     let cfg = serde_json::json!({
         "rules": [
             { "name": "no env files", "tool": "write", "action": "deny",
               "params": { "path": ["**/*.env"] } },
             { "name": "edits in repo", "tool": "edit", "action": "allow",
-              "params": { "path": [edit_glob] } },
+              "params": { "path": ["./**"] } },
             { "name": "globbing is free", "tool": "glob", "action": "allow" },
             { "name": "grepping is free", "tool": "grep", "action": "allow" },
             { "name": "confirm searches", "tool": "web_search", "action": "ask" }

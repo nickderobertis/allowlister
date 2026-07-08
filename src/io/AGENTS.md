@@ -7,6 +7,13 @@
   never fails the caller.
 - Harness adapters translate one product's request/response envelope into the
   shared decision pipeline; only the I/O shape differs between them.
+- A tool call's `path` is scoped to the working directory in `gate` (and mirrored
+  in `check`) before the engine sees it: inside the dir → `./`-relative,
+  forward-slash, `.`/`..` resolved; outside → verbatim. This makes a portable
+  `./**` profile rule match any harness/path style and is why the domain still
+  matches raw strings. Decide inside-vs-outside from the *normalized* path so
+  traversal can't disguise an external file as in-project; keep it purely lexical
+  (no fs, no symlink resolution).
 - Each adapter normalizes its harness's native session field to one `session_id`
   threaded through `gate` to plugins (Cursor's is `conversation_id`, not the
   per-message `generation_id`; Copilot's is `sessionId`; OpenCode's arrives from

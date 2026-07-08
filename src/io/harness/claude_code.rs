@@ -194,11 +194,13 @@ mod tests {
     fn sandbox_with_read_rules() -> TempDir {
         let dir = TempDir::new().unwrap();
         fs::create_dir(dir.path().join(".git")).unwrap();
-        let allow_glob = format!("{}/**", dir.path().to_string_lossy());
+        // `./**` is the portable "inside the project" glob: the hook normalizes
+        // each tool path to the config directory first, so an absolute in-repo
+        // path and a relative one to the same file both match this one rule.
         let cfg = json!({
             "rules": [
                 { "name": "reads in repo", "tool": "read", "action": "allow",
-                  "params": { "path": [allow_glob] } },
+                  "params": { "path": ["./**"] } },
                 { "name": "no secrets", "tool": "read", "action": "deny",
                   "params": { "path": ["**/.ssh/**"] } }
             ]
@@ -222,6 +224,17 @@ mod tests {
         let dir = sandbox_with_read_rules();
         let path = format!("{}/src/main.rs", dir.path().to_string_lossy());
         let (code, value) = run_payload(&read_payload(&dir, &path));
+        assert_eq!(code, 0);
+        assert_eq!(decision(&value), "allow");
+    }
+
+    #[test]
+    fn read_tool_relative_path_inside_repo_is_allowed() {
+        // The normalization payoff: a path relative to the project resolves to the
+        // same `./…` form an absolute in-repo path does, so the one `./**` rule
+        // allows it too — the verdict does not depend on how the harness spells it.
+        let dir = sandbox_with_read_rules();
+        let (code, value) = run_payload(&read_payload(&dir, "src/main.rs"));
         assert_eq!(code, 0);
         assert_eq!(decision(&value), "allow");
     }

@@ -717,6 +717,17 @@ versa); a rule that mixes them is skipped with a warning. Which tool classes eac
 agent actually exposes is in the
 [tool-use support matrix](#one-allowlist-every-agent) above.
 
+Path scoping: before matching, a tool call's `path` is normalized to the working
+directory (where config discovery starts). A file **inside** that directory
+becomes a `./`-relative, forward-slash path, so one portable glob — `./**` —
+means "inside the project" whether the agent sent an absolute path, a relative
+one, or a different spelling per harness (`.`/`..` are resolved, so traversal
+can't disguise an outside file as in-project). A path that resolves **outside**
+the directory is matched as written, so an absolute secret-path deny still fires.
+The bundled `read-only` and `repo-write` profiles use this to gate the built-in
+file tools: reads (and, for `repo-write`, writes/edits) auto-allow inside the
+project, secret reads are denied anywhere, and a path outside the project defers.
+
 ### Decision algorithm
 
 For each fragment the precedence is **deny > ask > allow**: any matching **deny**

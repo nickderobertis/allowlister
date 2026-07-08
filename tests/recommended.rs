@@ -14,7 +14,9 @@
 use std::path::PathBuf;
 
 use allowlister::config::{self, LoadedConfig};
-use allowlister::domain::{evaluate, Verdict};
+use allowlister::domain::{
+    evaluate, evaluate_tool_call, Capability, NormalizedParams, ParamKey, ToolCall, Verdict,
+};
 
 fn load(profile: &str) -> LoadedConfig {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -34,6 +36,27 @@ fn check(rules: &LoadedConfig, command: &str, expected: Verdict) {
     assert_eq!(
         result.verdict, expected,
         "command={command:?} expected {expected:?} got {:?} (reason: {})",
+        result.verdict, result.reason
+    );
+}
+
+/// Evaluate a non-shell file-tool call against a profile's tool rules. `path` is
+/// given in the form the io scoping layer produces — an in-project file as
+/// `./…`, an outside file as its absolute or `~` path — so these pins test the
+/// profile rules directly, independent of the (separately tested) normalization.
+fn check_tool(rules: &LoadedConfig, capability: Capability, path: &str, expected: Verdict) {
+    let mut params = NormalizedParams::new();
+    params.insert(ParamKey::Path, path.to_string());
+    let call = ToolCall::new(
+        capability,
+        "test".to_string(),
+        params,
+        serde_json::Value::Null,
+    );
+    let result = evaluate_tool_call(&call, &rules.tool_rules);
+    assert_eq!(
+        result.verdict, expected,
+        "tool={capability:?} path={path:?} expected {expected:?} got {:?} (reason: {})",
         result.verdict, result.reason
     );
 }
@@ -557,5 +580,62 @@ fn repo_write_defers_general_code_execution() {
         "awk BEGIN{system(\"id\")}",
     ] {
         check(&r, cmd, Verdict::Defer);
+    }
+}
+
+// ---- Non-shell file-tool rules ----
+// Paths below are in the form the io scoping layer emits: an in-project file as
+// `./…`, an outside file as an absolute or `~` path. A regression in the profiles'
+// tool rules (a missing secret deny, an allow that leaks outside the project, a
+// scope that stops firing) fails here.
+
+#[test]
+fn read_only_read_tool_allows_inside_denies_secrets_defers_outside() {
+    let r = load("read-only");
+    // Reads inside the config directory auto-allow.
+    check_tool(&r, Capability::Read, "./src/main.rs", Verdict::Allow);
+    check_tool(&r, Capability::Read, "./README.md", Verdict::Allow);
+    check_tool(&r, Capability::Read, "./a/b/c.txt", Verdict::Allow);
+    // Reads outside the project defer to the harness's own prompt.
+    check_tool(&r, Capability::Read, "/etc/hosts", Verdict::Defer);
+    check_tool(&r, Capability::Read, "/var/log/syslog", Verdict::Defer);
+    // Secret reads are denied wherever the file lives: outside, `~`-relative, or
+    // even committed inside the project (deny outranks the in-project allow).
+    for path in [
+        "/home/u/.ssh/id_rsa",
+        "~/.ssh/id_rsa",
+        "/home/u/.aws/credentials",
+        "~/.config/gh/hosts.yml",
+        "./.aws/credentials",
+        "./deploy/id_ed25519",
+        "./certs/server.pem",
+    ] {
+        check_tool(&r, Capability::Read, path, Verdict::Deny);
+    }
+    // read-only never auto-allows a write or an edit — they carry no rule.
+    check_tool(&r, Capability::Write, "./src/main.rs", Verdict::Defer);
+    check_tool(&r, Capability::Edit, "./src/main.rs", Verdict::Defer);
+}
+
+#[test]
+fn repo_write_allows_file_ops_inside_the_project() {
+    let r = load("repo-write");
+    // read/write/edit inside the config directory auto-allow.
+    for capability in [Capability::Read, Capability::Write, Capability::Edit] {
+        check_tool(&r, capability, "./src/main.rs", Verdict::Allow);
+        check_tool(&r, capability, "./docs/guide.md", Verdict::Allow);
+    }
+    // Every file tool defers for a path outside the project.
+    for capability in [Capability::Read, Capability::Write, Capability::Edit] {
+        check_tool(&r, capability, "/etc/hosts", Verdict::Defer);
+        check_tool(&r, capability, "/usr/local/bin/tool", Verdict::Defer);
+    }
+    // The secret-read deny still fires even in this more permissive profile.
+    for path in [
+        "/home/u/.ssh/id_rsa",
+        "~/.aws/credentials",
+        "./deploy/id_ed25519",
+    ] {
+        check_tool(&r, Capability::Read, path, Verdict::Deny);
     }
 }
