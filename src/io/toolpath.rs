@@ -17,16 +17,22 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::domain::{ParamKey, ToolCall};
+use crate::domain::{Capability, ParamKey, ToolCall};
 
 /// Return a copy of `call` whose canonical `path` parameter is scoped to `base`
 /// (see module docs). A call without a `path` parameter — a web fetch, an MCP
-/// tool, a `read` that carried no path — is returned unchanged.
+/// tool, a `read` that carried no path — is returned unchanged, except for
+/// `glob`/`grep`: those search the working directory when no path is given, so an
+/// absent path is really "the project root". Scoping it like an explicit `.` lets
+/// an in-project `./**` rule fire instead of deferring — which would strand a
+/// headless agent (a bare `Glob`/`Grep` with no approval channel) on a defer.
 pub(crate) fn scope_to_base(call: &ToolCall, base: &Path) -> ToolCall {
-    let Some(path) = call.params.get(ParamKey::Path) else {
-        return call.clone();
+    let path = match call.params.get(ParamKey::Path) {
+        Some(path) => path.to_string(),
+        None if matches!(call.capability, Capability::Glob | Capability::Grep) => ".".to_string(),
+        None => return call.clone(),
     };
-    let scoped = scope_path(path, base);
+    let scoped = scope_path(&path, base);
     let mut params = call.params.clone();
     params.insert(ParamKey::Path, scoped);
     ToolCall::new(
@@ -248,5 +254,51 @@ mod tests {
         );
         let out = scope_to_base(&call, Path::new("/repo"));
         assert_eq!(out.params.get(ParamKey::Url), Some("https://github.com/x"));
+        // A pathless read (Codex apply_patch, a read carrying no path) has nothing
+        // to scope, so no synthetic in-project path is invented for it.
+        let read = ToolCall::new(
+            Capability::Read,
+            "read".to_string(),
+            NormalizedParams::new(),
+            json!({}),
+        );
+        assert_eq!(
+            scope_to_base(&read, Path::new("/repo"))
+                .params
+                .get(ParamKey::Path),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn glob_and_grep_without_a_path_scope_to_the_project_root() {
+        // glob/grep default to searching the working directory, so an absent path
+        // must scope to the project root (`./`) — which an in-project `./**` rule
+        // matches — rather than staying pathless and deferring (the halt in #119).
+        for capability in [Capability::Glob, Capability::Grep] {
+            let call = ToolCall::new(
+                capability,
+                "test".to_string(),
+                NormalizedParams::new(),
+                json!({ "pattern": "**/*.rs" }),
+            );
+            let out = scope_to_base(&call, Path::new("/repo"));
+            assert_eq!(
+                out.params.get(ParamKey::Path),
+                Some("./"),
+                "{capability:?} with no path should target the project root"
+            );
+        }
+        // An explicit in-project glob path still normalizes the usual way.
+        let mut params = NormalizedParams::new();
+        params.insert(ParamKey::Path, "/repo/src".to_string());
+        let call = ToolCall::new(Capability::Glob, "test".to_string(), params, json!({}));
+        assert_eq!(
+            scope_to_base(&call, Path::new("/repo"))
+                .params
+                .get(ParamKey::Path),
+            Some("./src")
+        );
     }
 }

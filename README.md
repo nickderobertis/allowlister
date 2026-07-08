@@ -725,8 +725,11 @@ one, or a different spelling per harness (`.`/`..` are resolved, so traversal
 can't disguise an outside file as in-project). A path that resolves **outside**
 the directory is matched as written, so an absolute secret-path deny still fires.
 The bundled `read-only` and `repo-write` profiles use this to gate the built-in
-file tools: reads (and, for `repo-write`, writes/edits) auto-allow inside the
-project, secret reads are denied anywhere, and a path outside the project defers.
+file tools: reads and the read-only `glob`/`grep` (and, for `repo-write`,
+writes/edits) auto-allow inside the project, secret reads via `read`/`grep` are
+denied anywhere, and a path outside the project defers. A `glob`/`grep` with no
+path searches the working directory, so it is scoped to the project root and
+allowed like an explicit in-project path.
 
 ### Decision algorithm
 
