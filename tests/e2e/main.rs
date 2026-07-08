@@ -2947,6 +2947,219 @@ fn opencode_read_tool_denies_secret_via_stdin() {
     assert_eq!(opencode_decision_of(&output), "deny");
 }
 
+// ---- Path scoping: bundled profiles + every harness, end to end ------------
+//
+// The io scoping layer normalizes a tool call's `path` to the config directory
+// before the engine matches it, so a portable `./**` profile rule fires the same
+// for an absolute path, a relative one, or a different spelling per harness.
+// These drive the compiled binary to pin every scenario and feature.
+
+/// Init a bundled profile into a fresh `.git`-rooted project dir (no hooks).
+fn project_with_profile(profile: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    Command::cargo_bin("allowlister")
+        .unwrap()
+        .args(["init", "--local", "--profile", profile, "--no-hooks"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    dir
+}
+
+/// Drive `hook claude-code` with a built-in file tool and return its decision.
+/// Claude's Read/Write/Edit all carry the file under `file_path`.
+fn claude_file_tool_decision(empty: &TempDir, cwd: &Path, tool: &str, path: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": { "file_path": path },
+        "cwd": cwd.to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(empty)
+        .args(["hook", "claude-code"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    decision_of(&output)
+}
+
+#[test]
+fn repo_write_hook_scopes_file_tools_across_every_path_shape() {
+    let empty = TempDir::new().unwrap();
+    let project = project_with_profile("repo-write");
+    let root = project.path().to_string_lossy().into_owned();
+    let abs = |rel: &str| format!("{root}/{rel}");
+    let dec =
+        |tool: &str, path: &str| claude_file_tool_decision(&empty, project.path(), tool, path);
+
+    // Reads: an absolute in-repo path, a relative one, a nested one, a `./` form,
+    // and a `..` that resolves back inside all allow via the single `./**` rule.
+    assert_eq!(dec("Read", &abs("src/main.rs")), "allow");
+    assert_eq!(dec("Read", "src/main.rs"), "allow");
+    assert_eq!(dec("Read", &abs("a/b/c/deep.rs")), "allow");
+    assert_eq!(dec("Read", "./docs/guide.md"), "allow");
+    assert_eq!(dec("Read", &abs("sub/../top.rs")), "allow");
+    // A path outside the project — absolute, or via `..` traversal that escapes it
+    // — matches no rule and defers; the escape must NOT read as in-project.
+    assert_eq!(dec("Read", "/etc/hosts"), "defer");
+    assert_eq!(dec("Read", &abs("../escaped.txt")), "defer");
+    // Secret reads deny wherever the file lives: `~`, absolute, or committed in.
+    assert_eq!(dec("Read", "~/.ssh/id_rsa"), "deny");
+    assert_eq!(dec("Read", "/home/u/.ssh/id_rsa"), "deny");
+    assert_eq!(dec("Read", &abs(".aws/credentials")), "deny");
+    // Writes and edits inside the project allow (absolute or relative); a path
+    // outside the project defers, same as reads.
+    assert_eq!(dec("Write", &abs("out/log.txt")), "allow");
+    assert_eq!(dec("Write", "out/log.txt"), "allow");
+    assert_eq!(dec("Write", "/etc/passwd"), "defer");
+    assert_eq!(dec("Edit", &abs("src/lib.rs")), "allow");
+    assert_eq!(dec("Edit", "src/lib.rs"), "allow");
+    assert_eq!(dec("Edit", "/usr/local/bin/tool"), "defer");
+}
+
+#[test]
+fn read_only_hook_allows_reads_defers_writes_denies_secrets() {
+    let empty = TempDir::new().unwrap();
+    let project = project_with_profile("read-only");
+    let root = project.path().to_string_lossy().into_owned();
+    let abs = |rel: &str| format!("{root}/{rel}");
+    let dec =
+        |tool: &str, path: &str| claude_file_tool_decision(&empty, project.path(), tool, path);
+
+    // Reads inside allow; outside defers; secrets deny (in-repo or not).
+    assert_eq!(dec("Read", &abs("src/main.rs")), "allow");
+    assert_eq!(dec("Read", "src/main.rs"), "allow");
+    assert_eq!(dec("Read", "/etc/hosts"), "defer");
+    assert_eq!(dec("Read", "/home/u/.ssh/id_rsa"), "deny");
+    assert_eq!(dec("Read", &abs(".aws/credentials")), "deny");
+    // read-only never auto-allows a write or an edit, even inside the project.
+    assert_eq!(dec("Write", &abs("src/main.rs")), "defer");
+    assert_eq!(dec("Edit", &abs("src/main.rs")), "defer");
+}
+
+/// A project whose only tool rule denies reads under the in-repo relative subtree
+/// `./blocked/**`. Sending an *absolute* in-repo path to that subtree can only be
+/// denied if the shared gate first normalized it to `./blocked/…`, so a deny is a
+/// direct proof that path scoping ran for the harness under test.
+fn scoping_probe_project() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    fs::create_dir_all(dir.path().join(".git")).unwrap();
+    let cfg = serde_json::json!({
+        "rules": [
+            { "name": "blocked subtree", "tool": "read", "action": "deny",
+              "params": { "path": ["./blocked/**"] } }
+        ]
+    })
+    .to_string();
+    fs::write(dir.path().join(".allowlister.json"), cfg).unwrap();
+    dir
+}
+
+#[test]
+fn path_scoping_runs_in_the_shared_gate_for_every_harness() {
+    let empty = TempDir::new().unwrap();
+    let project = scoping_probe_project();
+    let root = project.path().to_string_lossy().into_owned();
+    // The same absolute in-repo path, addressed to each harness's read tool. Each
+    // must normalize it to `./blocked/secret.txt` and deny.
+    let abs = format!("{root}/blocked/secret.txt");
+    let abs = abs.as_str();
+    let root = root.as_str();
+    let run = |harness: &str, payload: String| {
+        hermetic_cmd(&empty)
+            .args(["hook", harness])
+            .write_stdin(payload)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    };
+
+    // claude-code — Read/file_path.
+    let out = run(
+        "claude-code",
+        serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":abs},"cwd":root}).to_string(),
+    );
+    assert_eq!(decision_of(&out), "deny", "claude-code");
+
+    // qwen — read_file/file_path.
+    let out = run(
+        "qwen",
+        serde_json::json!({"hook_event_name":"PreToolUse","tool_name":"read_file","tool_input":{"file_path":abs},"cwd":root}).to_string(),
+    );
+    assert_eq!(decision_of(&out), "deny", "qwen");
+
+    // crush — view/file_path, flat `decision`.
+    let out = run(
+        "crush",
+        serde_json::json!({"event":"PreToolUse","tool_name":"view","tool_input":{"file_path":abs},"cwd":root}).to_string(),
+    );
+    assert_eq!(crush_decision_of(&out), "deny", "crush");
+
+    // goose — bare `read`/path, cwd under `working_dir`. Goose expresses a deny as
+    // its native `block`.
+    let out = run(
+        "goose",
+        serde_json::json!({"event":"PreToolUse","tool_name":"read","tool_input":{"path":abs},"working_dir":root}).to_string(),
+    );
+    assert_eq!(goose_decision_of(&out), "block", "goose");
+
+    // copilot — view/path, toolArgs as a JSON string.
+    let tool_args = serde_json::to_string(&serde_json::json!({"path":abs})).unwrap();
+    let out = run(
+        "copilot",
+        serde_json::json!({"toolName":"view","toolArgs":tool_args,"cwd":root}).to_string(),
+    );
+    assert_eq!(copilot_decision_of(&out), "deny", "copilot");
+
+    // cursor — beforeReadFile/file_path, cwd from workspace_roots.
+    let out = run(
+        "cursor",
+        serde_json::json!({"hook_event_name":"beforeReadFile","file_path":abs,"workspace_roots":[root]}).to_string(),
+    );
+    assert_eq!(permission_of(&out), "deny", "cursor");
+
+    // opencode — read/filePath, flat `decision`.
+    let out = run(
+        "opencode",
+        serde_json::json!({"tool_name":"read","tool_input":{"filePath":abs},"cwd":root})
+            .to_string(),
+    );
+    assert_eq!(opencode_decision_of(&out), "deny", "opencode");
+}
+
+#[test]
+fn copilot_hook_allows_absolute_in_repo_read() {
+    // The allow side of scoping is portable too: a second harness (Copilot, whose
+    // read tool is `view`/`path` with stringified args) allows an absolute in-repo
+    // read via the same `./**` rule that scoping enables.
+    let empty = TempDir::new().unwrap();
+    let project = tool_project();
+    let file = format!("{}/a.txt", project.path().to_string_lossy());
+    let tool_args = serde_json::to_string(&serde_json::json!({ "path": file })).unwrap();
+    let payload = serde_json::json!({
+        "toolName": "view",
+        "toolArgs": tool_args,
+        "cwd": project.path().to_string_lossy(),
+    })
+    .to_string();
+    let output = hermetic_cmd(&empty)
+        .args(["hook", "copilot"])
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(copilot_decision_of(&output), "allow");
+}
+
 // ---- usage history ---------------------------------------------------------
 //
 // Recording is opt-in. These drive the real binary with `ALLOWLISTER_HISTORY=1`
