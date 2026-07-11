@@ -13,6 +13,13 @@
 # launched detached in the background (still non-blocking) instead of advised.
 set -eu
 
+# Cloud sessions may have uv but not just; ensure the command-surface entry point
+# exists before printing any advice that names `just setup`.
+if ! command -v just >/dev/null 2>&1 && command -v uv >/dev/null 2>&1; then
+  uv tool install rust-just >/dev/null 2>&1 || true
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+
 # Skip only in this repo's own GitHub Actions CI (the live-harness e2e job spins
 # up a real session). Escape hatch for any other automated context:
 # ALLOWLISTER_SKIP_SETUP.
