@@ -12,10 +12,18 @@ name: E2E (Codex)
 # the key.
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      os:
+        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Check one harness/platform without a full rerun."
+        type: choice
+        default: default
+        options:
+          - default
+          - all
+          - ubuntu-latest
+          - macos-latest
 
 permissions:
   contents: read
@@ -36,11 +44,14 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
+      # Codex is a primary harness, so it keeps its full PR matrix -- which is
+      # Linux/macOS only (see below); workflow_dispatch can pin a single OS. See
+      # AGENTS.md > "Live e2e in CI".
       matrix:
         # Linux/macOS only: Codex loads hooks solely in its interactive TUI, which
         # this check drives through a pseudo-terminal — unavailable on Windows — so
         # the gate cannot be enforced there. See the README support matrix.
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),

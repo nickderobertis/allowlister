@@ -130,6 +130,14 @@ clippy: lint
 clippy-fix:
     cargo clippy --fix --allow-dirty --allow-staged --locked --all-targets --all-features
 
+# Drift gate for the live-e2e CI matrix contract: assert every
+# .github/workflows/e2e-*.yml matches the single source in
+# scripts/check-e2e-matrix.sh (no push trigger; claude/codex keep the full PR
+# matrix, the rest Linux-only on PR; on-demand `os` dispatch). Keeps the matrix
+# duplication GitHub Actions forces from drifting. See .github/AGENTS.md.
+lint-workflows:
+    @bash scripts/check-e2e-matrix.sh
+
 # Run unit + integration tests (excludes the slower binary e2e suite).
 test:
     cargo nextest run --locked --status-level fail -E 'not binary(e2e)'
@@ -288,6 +296,7 @@ check:
     phase "format";        just fmt-check
     phase "typecheck";     just typecheck
     phase "lint";          just lint
+    phase "lint-workflows"; just lint-workflows
     phase "test";          just test
     phase "test-e2e";      just test-e2e
     phase "coverage";      just test-cov
