@@ -183,6 +183,20 @@ fn read_only_handles_allowlister_own_commands() {
     );
     check(&r, "allowlister install repo-write", Verdict::Ask);
     check(&r, "allowlister install read-only --local", Verdict::Ask);
+    // `config add`/`config remove` edit the gate's own rules — the same
+    // self-widening path as install — so they ask; `config show` is a read.
+    check(&r, "allowlister config show", Verdict::Allow);
+    check(&r, "allowlister config show --json", Verdict::Allow);
+    check(
+        &r,
+        "allowlister config add --match 'rm *' --action allow",
+        Verdict::Ask,
+    );
+    check(
+        &r,
+        "allowlister config remove some-rule --local",
+        Verdict::Ask,
+    );
     // The harness-hook verb is left unclassified — an agent never runs it by hand.
     check(&r, "allowlister hook claude-code", Verdict::Defer);
 }
@@ -430,6 +444,13 @@ fn repo_write_handles_allowlister_own_commands() {
     check(&r, "allowlister history clear -y", Verdict::Ask);
     check(&r, "allowlister init -y", Verdict::Ask);
     check(&r, "allowlister install read-only --local", Verdict::Ask);
+    check(&r, "allowlister config show", Verdict::Allow);
+    check(
+        &r,
+        "allowlister config add --tool write --param path=/repo/**",
+        Verdict::Ask,
+    );
+    check(&r, "allowlister config remove some-rule", Verdict::Ask);
     check(&r, "allowlister hook claude-code", Verdict::Defer);
 }
 
@@ -681,4 +702,74 @@ fn repo_write_allows_file_ops_inside_the_project() {
     check_tool(&r, Capability::Grep, "~/.ssh/id_rsa", Verdict::Deny);
     check_tool(&r, Capability::Grep, "./deploy/id_ed25519", Verdict::Deny);
     check_tool(&r, Capability::Glob, "./deploy/id_ed25519", Verdict::Allow);
+}
+
+// ---- Self-modification guard: editing allowlister's own config ----
+// A profile that can silently edit the config it gates by is no gate at all: the
+// agent could add an allow (or drop an ask/deny) and widen its own permissions.
+// Both profiles route every write to an allowlister config through `ask`, whether
+// it comes as a shell command or a built-in file tool, in every profile.
+
+#[test]
+fn both_profiles_ask_before_editing_own_config_via_shell() {
+    for profile in ["read-only", "repo-write"] {
+        let r = load(profile);
+        // File-writing shell commands aimed at an allowlister config surface for
+        // approval, across the dotfile, `.allowlister/`, and user `allowlister/`
+        // forms and whether the path is bare, `./`, `~/`, or absolute.
+        for cmd in [
+            "tee .allowlister.jsonc",
+            "cp evil.jsonc .allowlister.jsonc",
+            "cp evil.jsonc ./.allowlister.json",
+            "mv staged ~/.allowlister.jsonc",
+            "cp x ./.allowlister/config.jsonc",
+            "sed -i s/allow/deny/ .allowlister.jsonc",
+            "install -m 644 evil /home/u/.config/allowlister/config.jsonc",
+        ] {
+            check(&r, cmd, Verdict::Ask);
+        }
+        // Reading a config is not a back door — it stays a plain allowed read.
+        check(&r, "cat .allowlister.jsonc", Verdict::Allow);
+        // The guard is scoped to config paths: writing an ordinary file is not
+        // promoted to ask by it (a non-config `cp` is simply unclassified here).
+        check(&r, "cp a.txt b.txt", Verdict::Defer);
+    }
+}
+
+#[test]
+fn both_profiles_ask_before_editing_own_config_via_tool() {
+    for profile in ["read-only", "repo-write"] {
+        let r = load(profile);
+        // write/edit tool aimed at an allowlister config asks — in repo-write this
+        // outranks the broad in-project `./**` write/edit allow; in read-only it
+        // is an explicit ask in place of the bare defer, so a headless run still
+        // surfaces it. Covers the project dotfile, `.allowlister/`, and the user
+        // `allowlister/` config outside the project.
+        for capability in [Capability::Write, Capability::Edit] {
+            check_tool(&r, capability, "./.allowlister.jsonc", Verdict::Ask);
+            check_tool(&r, capability, "./.allowlister.json", Verdict::Ask);
+            check_tool(&r, capability, "./.allowlister/config.jsonc", Verdict::Ask);
+            check_tool(&r, capability, "./.allowlister/config.json", Verdict::Ask);
+            check_tool(
+                &r,
+                capability,
+                "~/.config/allowlister/config.jsonc",
+                Verdict::Ask,
+            );
+        }
+        // Reading the config via the read tool is fine (allowed inside the project).
+        check_tool(&r, Capability::Read, "./.allowlister.jsonc", Verdict::Allow);
+    }
+}
+
+#[test]
+fn repo_write_still_allows_ordinary_in_project_edits() {
+    // The config guard must not regress the profile's normal write/edit allow: a
+    // non-config in-project edit still auto-approves in repo-write.
+    let r = load("repo-write");
+    check_tool(&r, Capability::Write, "./src/main.rs", Verdict::Allow);
+    check_tool(&r, Capability::Edit, "./docs/guide.md", Verdict::Allow);
+    // read-only never auto-allowed a non-config edit and still does not.
+    let ro = load("read-only");
+    check_tool(&ro, Capability::Edit, "./src/main.rs", Verdict::Defer);
 }
