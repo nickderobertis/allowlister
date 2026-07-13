@@ -723,13 +723,16 @@ fn both_profiles_ask_before_editing_own_config_via_shell() {
             "cp evil.jsonc ./.allowlister.json",
             "mv staged ~/.allowlister.jsonc",
             "cp x ./.allowlister/config.jsonc",
-            "sed -i s/allow/deny/ .allowlister.jsonc",
             "install -m 644 evil /home/u/.config/allowlister/config.jsonc",
         ] {
             check(&r, cmd, Verdict::Ask);
         }
         // Reading a config is not a back door — it stays a plain allowed read.
         check(&r, "cat .allowlister.jsonc", Verdict::Allow);
+        // The writer guard is limited to commands that always write their target:
+        // a sed/awk/perl READ of a config (no in-place flag) is NOT promoted to
+        // ask — it defers as a plain interpreter invocation in both profiles.
+        check(&r, "sed -n p .allowlister.jsonc", Verdict::Defer);
         // The guard is scoped to config paths: writing an ordinary file is not
         // promoted to ask by it (a non-config `cp` is simply unclassified here).
         check(&r, "cp a.txt b.txt", Verdict::Defer);

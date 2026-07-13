@@ -205,9 +205,9 @@
       "action": "ask"
     },
     {
-      "name": "ask: shell edit of an allowlister config (self-widening back door)",
-      "description": "Editing an allowlister config through a file-writing shell command (tee, cp, mv, sed -i, install, ln, ...) changes the gate the agent runs under just as `allowlister install` does, so hold it for approval rather than letting it defer. Output redirection to a config path is already blocked by the redirection policy; this catches the argument-writers that bypass it. Reading a config (cat/less) is unaffected.",
-      "match": "@(tee|cp|mv|dd|install|ln|rsync|truncate|sponge|sed|awk|perl) *@(.allowlister.json?(c)|.allowlister/config.json?(c)|allowlister/config.json?(c))*",
+      "name": "ask: shell write of an allowlister config (self-widening back door)",
+      "description": "Writing an allowlister config through a file-writing shell command (tee, cp, mv, install, ln, ...) changes the gate the agent runs under just as `allowlister install` does, so hold it for approval rather than letting it defer. The listed commands always write their target argument; output redirection to a config path is already blocked by the redirection policy. Interpreters (sed/awk/perl) are intentionally excluded -- without `-i` they only read a config, so matching them here would ask for reads too; an in-place `sed -i` edit is already an ask in read-only and defers as general code execution in repo-write. Reading a config (cat/less) is unaffected.",
+      "match": "@(tee|cp|mv|dd|install|ln|rsync|truncate|sponge) *@(.allowlister.json?(c)|.allowlister/config.json?(c)|allowlister/config.json?(c))*",
       "action": "ask"
     },
     {
