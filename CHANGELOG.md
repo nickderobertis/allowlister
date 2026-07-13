@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.9](https://github.com/nickderobertis/allowlister/compare/v0.5.8...v0.5.9) - 2026-07-13
+
+### Fixed
+
+- gate edits to allowlister's own config; slim live-e2e CI ([#123](https://github.com/nickderobertis/allowlister/pull/123))
+
 ## [0.5.8](https://github.com/nickderobertis/allowlister/compare/v0.5.7...v0.5.8) - 2026-07-08
 
 ### Fixed
