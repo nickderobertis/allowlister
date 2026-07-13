@@ -59,10 +59,18 @@ check_one() {
 	grep -qE '^[[:space:]]*workflow_dispatch:' "$f" || fail "$f missing workflow_dispatch trigger"
 	grep -qE '^[[:space:]]+os:$' "$f" || fail "$f missing the workflow_dispatch 'os' input"
 
+	# The `os` input must default to `default` and offer the full canonical option
+	# list, so the dispatch half of the contract can't drift per workflow either
+	# (windows-latest is gated separately below, by capability).
+	grep -qE '^[[:space:]]+default: default$' "$f" || fail "$f 'os' input default is not 'default'"
+	for opt in default all ubuntu-latest macos-latest; do
+		grep -qE "^[[:space:]]+- ${opt}$" "$f" || fail "$f 'os' input missing option: $opt"
+	done
+
 	# The matrix is a single fromJSON expression; match its PR-default and 'all'
-	# arms as literals (the GitHub expression is not shell-expanded).
+	# arms as literals.
 	local line
-	# shellcheck disable=SC2016
+	# shellcheck disable=SC2016 -- single quotes are intentional: the GitHub Actions ${{ }} expression is grepped as a literal, not shell-expanded
 	line="$(grep -F 'os: ${{ fromJSON(' "$f" || true)"
 	[ -n "$line" ] || { fail "$f has no fromJSON matrix expression"; return; }
 	printf '%s' "$line" | grep -qF "|| '$prd') }}" ||
