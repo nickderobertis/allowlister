@@ -12,10 +12,18 @@ name: E2E (Copilot)
 # the token.
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      os:
+        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Check one harness/platform without a full rerun."
+        type: choice
+        default: default
+        options:
+          - default
+          - all
+          - ubuntu-latest
+          - macos-latest
 
 permissions:
   contents: read
@@ -30,17 +38,21 @@ env:
 jobs:
   live:
     name: copilot live e2e (${{ matrix.os }})
+    # llmlint: ignore-file[live_tier_compiles_and_requires_credential] fork PRs get a read-only token with no secrets, so the live tier must skip (not fail) there; this same-repo guard is intentional and documented in .github/AGENTS.md.
     if: >-
       github.repository == 'nickderobertis/allowlister' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
+      # Linux-only on PR to keep paid live runs down; workflow_dispatch widens
+      # to 'all' (ubuntu+macos -- see below) or a single OS on demand. See
+      # AGENTS.md > "Live e2e in CI".
       matrix:
         # Linux/macOS only: GitHub Copilot CLI does not load its preToolUse hook
         # on Windows, so the gate cannot be enforced there (a harness limitation
         # oneharness documents and excludes too). See the README support matrix.
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),

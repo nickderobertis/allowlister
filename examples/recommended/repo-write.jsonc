@@ -176,9 +176,9 @@
       "action": "allow"
     },
     {
-      "name": "allowlister read-only: evaluate and explain",
-      "description": "allowlister's own read-only verbs: check/explain evaluate a command or tool call against the rules and print a verdict -- they touch no files and run nothing of what they evaluate. The config-mutating verbs (init, install) and the history delete are held for approval below.",
-      "match": "allowlister @(check|explain)?( *)",
+      "name": "allowlister read-only: evaluate, explain, and show config",
+      "description": "allowlister's own read-only verbs: check/explain evaluate a command or tool call against the rules and print a verdict, and `config show` prints the effective merged config -- none touch files or run what they evaluate. The config-mutating verbs (init, install, config add/remove) and the history delete are held for approval below.",
+      "match": "allowlister @(check|explain|config show)?( *)",
       "action": "allow"
     },
     {
@@ -194,8 +194,20 @@
     },
     {
       "name": "ask: allowlister init/install (write config and harness settings)",
-      "description": "init writes a config and edits the harness's settings; install merges an allowlist into your config. Both change the gate the agent itself runs under -- a self-modification and permission-widening path -- so they surface for human approval rather than auto-allowing.",
+      "description": "init writes a config and edits the harness's settings; install merges an allowlist into your config. Both change the gate the agent itself runs under -- a self-modification and permission-widening path -- so they surface for human approval rather than auto-allowing. `config add/remove` is the same self-widening path and asks below.",
       "match": "allowlister @(init|install)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: allowlister config add/remove (edit the gate's own rules)",
+      "description": "`config add`/`config remove` mutate an allowlister config directly -- the most surgical self-widening path there is (add an allow, drop an ask). Like init/install they surface for approval; the read-only `config show` allows above.",
+      "match": "allowlister config @(add|remove)?( *)",
+      "action": "ask"
+    },
+    {
+      "name": "ask: shell write of an allowlister config (self-widening back door)",
+      "description": "Writing an allowlister config through a file-writing shell command (tee, cp, mv, install, ln, ...) changes the gate the agent runs under just as `allowlister install` does, so hold it for approval rather than letting it defer. The listed commands always write their target argument; output redirection to a config path is already blocked by the redirection policy. Interpreters (sed/awk/perl) are intentionally excluded -- without `-i` they only read a config, so matching them here would ask for reads too; an in-place `sed -i` edit is already an ask in read-only and defers as general code execution in repo-write. Reading a config (cat/less) is unaffected.",
+      "match": "@(tee|cp|mv|dd|install|ln|rsync|truncate|sponge) *@(.allowlister.json?(c)|.allowlister/config.json?(c)|allowlister/config.json?(c))*",
       "action": "ask"
     },
     {
@@ -837,6 +849,38 @@
           "**/.pgpass",
           "**/.git-credentials",
           "**/.config/gh/hosts.yml"
+        ]
+      }
+    },
+    {
+      "name": "write tool: ask before editing an allowlister config",
+      "description": "The in-project `write tool` allow below auto-approves any `./**` path, which would include the gate's own config -- a silent self-widening back door. This ask outranks that allow (deny > ask > allow) so writing an allowlister config surfaces for approval, wherever the config lives (project dotfile, `.allowlister/`, or the user `allowlister/` dir).",
+      "tool": "write",
+      "action": "ask",
+      "params": {
+        "path": [
+          "**/.allowlister.jsonc",
+          "**/.allowlister.json",
+          "**/.allowlister/config.jsonc",
+          "**/.allowlister/config.json",
+          "**/allowlister/config.jsonc",
+          "**/allowlister/config.json"
+        ]
+      }
+    },
+    {
+      "name": "edit tool: ask before editing an allowlister config",
+      "description": "The edit-tool parallel of the write ask above: the `./**` edit allow would otherwise auto-approve editing the gate's own config, so this ask outranks it and holds the edit for approval.",
+      "tool": "edit",
+      "action": "ask",
+      "params": {
+        "path": [
+          "**/.allowlister.jsonc",
+          "**/.allowlister.json",
+          "**/.allowlister/config.jsonc",
+          "**/.allowlister/config.json",
+          "**/allowlister/config.jsonc",
+          "**/allowlister/config.json"
         ]
       }
     },
