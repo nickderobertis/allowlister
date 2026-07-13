@@ -108,16 +108,24 @@ jobs:
       - name: Install llmlint toolchain
         run: ./scripts/setup-llmlint.sh
       # oneharness drives the real `codex` CLI (its primary harness, per
-      # oneharness.toml), so the binary must be on PATH — without it the fallback
-      # chain finds no runnable harness and the judge errors. Same install as
-      # e2e-codex.yml; it authenticates with OPENAI_API_KEY below.
+      # oneharness.toml), so the binary must be on PATH AND authenticated — else
+      # its fallback chain finds no runnable harness and the judge errors. The
+      # codex CLI does not read OPENAI_API_KEY from the env; it needs an explicit
+      # `codex login --with-api-key`, the same mechanism scripts/e2e-codex.sh uses.
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
-      - name: Install Codex CLI (the oneharness primary harness)
+      - name: Install and authenticate the Codex CLI (oneharness primary harness)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           npm install -g @openai/codex
           codex --version
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY is required to authenticate the codex CLI for llmlint" >&2
+            exit 1
+          fi
+          printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
       - name: Validate llmlint config
         run: just lint-llm-validate --diff-base origin/main
       - name: Lint changed files
