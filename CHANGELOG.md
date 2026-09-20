@@ -6,6 +6,82 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.10](https://github.com/nickderobertis/allowlister/compare/v0.5.9...v0.5.10) - 2026-09-20
+
+### Added
+
+- gate built-in file tools in bundled profiles, scoped to the config directory ([#117](https://github.com/nickderobertis/allowlister/pull/117))
+- forward harness session id to approval plugins (protocol v3) ([#111](https://github.com/nickderobertis/allowlister/pull/111))
+- deliver resolved project identity to approval plugins ([#104](https://github.com/nickderobertis/allowlister/pull/104))
+- [**breaking**] protocol v2 plugin payload — structured fragments and tool-call support ([#100](https://github.com/nickderobertis/allowlister/pull/100))
+- stamp configs with the published "$schema" on init/install ([#89](https://github.com/nickderobertis/allowlister/pull/89))
+- publish a JSON Schema for config files ([#88](https://github.com/nickderobertis/allowlister/pull/88))
+- track usage history by git repository, not folder ([#85](https://github.com/nickderobertis/allowlister/pull/85))
+- make init idempotent so a second harness wires cleanly ([#78](https://github.com/nickderobertis/allowlister/pull/78))
+- add `config add`, `config remove`, and `config show` commands ([#74](https://github.com/nickderobertis/allowlister/pull/74))
+- track recency in usage history and weigh it when refining ([#70](https://github.com/nickderobertis/allowlister/pull/70))
+- preserve comments on config updates and default to .jsonc
+- surface the projects each subcommand ran in via history ([#60](https://github.com/nickderobertis/allowlister/pull/60))
+- list every asking fragment in the ask verdict reason ([#58](https://github.com/nickderobertis/allowlister/pull/58))
+- tier allowlister's own commands in the recommended profiles ([#56](https://github.com/nickderobertis/allowlister/pull/56))
+- allow discard redirects to /dev/null and standard-stream devices ([#54](https://github.com/nickderobertis/allowlister/pull/54))
+- add refine-allowlist agent skill to tune configs from history ([#48](https://github.com/nickderobertis/allowlister/pull/48))
+- record and report allowlister usage history ([#46](https://github.com/nickderobertis/allowlister/pull/46))
+- [**breaking**] add ask verdict and re-tier recommended profiles
+- *(tools)* complete tool-use gating with OpenCode and Cursor ([#34](https://github.com/nickderobertis/allowlister/pull/34))
+- *(tools)* extend tool-use gating to Codex, Copilot, Qwen, Crush, Goose
+- *(tools)* gate non-shell tool calls (engine + config + Claude Code) ([#32](https://github.com/nickderobertis/allowlister/pull/32))
+- add redirection-only rule type for profile-wide scratch writes ([#30](https://github.com/nickderobertis/allowlister/pull/30))
+- *(opencode)* add OpenCode support via a tool.execute.before plugin shim ([#28](https://github.com/nickderobertis/allowlister/pull/28))
+- *(goose)* add full Goose support via the PreToolUse hook plugin ([#27](https://github.com/nickderobertis/allowlister/pull/27))
+- *(qwen)* add full Qwen Code support via the PreToolUse hook ([#26](https://github.com/nickderobertis/allowlister/pull/26))
+- *(crush)* add full Crush support via the PreToolUse hook ([#25](https://github.com/nickderobertis/allowlister/pull/25))
+- *(codex)* add full OpenAI Codex CLI support via the PreToolUse hook ([#24](https://github.com/nickderobertis/allowlister/pull/24))
+- *(copilot)* [**breaking**] add full GitHub Copilot CLI support via the preToolUse hook ([#23](https://github.com/nickderobertis/allowlister/pull/23))
+- *(cursor)* add full Cursor support via the beforeShellExecution hook ([#21](https://github.com/nickderobertis/allowlister/pull/21))
+- *(repo-write)* let text filters redirect stdout to scratch/build paths
+- [**breaking**] promote the init setup consolidation to the 0.2.0 milestone ([#16](https://github.com/nickderobertis/allowlister/pull/16))
+- *(init)* consolidate setup into init and automate releases ([#13](https://github.com/nickderobertis/allowlister/pull/13))
+
+### Changed
+
+- *(io)* adopt oneharness-core as the hook installer ([#83](https://github.com/nickderobertis/allowlister/pull/83))
+
+### Documentation
+
+- add allowlister logo banner to README ([#113](https://github.com/nickderobertis/allowlister/pull/113))
+- advertise the cross-platform allowlist with a support matrix ([#29](https://github.com/nickderobertis/allowlister/pull/29))
+- add asdf plugin as an install option ([#7](https://github.com/nickderobertis/allowlister/pull/7))
+
+### Fixed
+
+- gate edits to allowlister's own config; slim live-e2e CI ([#123](https://github.com/nickderobertis/allowlister/pull/123))
+- *(profiles)* allow read-only glob & grep tools in bundled profiles ([#120](https://github.com/nickderobertis/allowlister/pull/120))
+- *(profiles)* tighten repo-write — defer general code execution, config & remote-exec ([#115](https://github.com/nickderobertis/allowlister/pull/115))
+- note container support for the static Linux binaries ([#109](https://github.com/nickderobertis/allowlister/pull/109))
+- emit complete Cursor hook responses ([#98](https://github.com/nickderobertis/allowlister/pull/98))
+- let Cursor read defers fall through ([#94](https://github.com/nickderobertis/allowlister/pull/94))
+- *(copilot)* normalize MCP tool names from the preToolUse dash form ([#81](https://github.com/nickderobertis/allowlister/pull/81))
+- harden read-only profile against secret-read, write, and code-exec bypasses ([#18](https://github.com/nickderobertis/allowlister/pull/18))
+
+### Other
+
+- Add external dynamic approval plugins (schema, loader, runtime, example) ([#92](https://github.com/nickderobertis/allowlister/pull/92))
+- Merge pull request #71 from nickderobertis/claude/config-format-json-yaml-jeo8dz
+- Add `install` command to merge allowlists/profiles into a config ([#6](https://github.com/nickderobertis/allowlister/pull/6))
+- Add recommended read-only and repo-write allowlist profiles ([#5](https://github.com/nickderobertis/allowlister/pull/5))
+- Match metacharacter-free globs as literals, skipping regex build
+- Add cross-platform install script for prebuilt binaries ([#3](https://github.com/nickderobertis/allowlister/pull/3))
+- Add performance benchmarking and profiling suite
+- Initial release: structural allow/deny/defer engine for agent shell commands
+
+### Performance
+
+- ship static, non-PIE Linux and static-CRT Windows release binaries ([#106](https://github.com/nickderobertis/allowlister/pull/106))
+- cut per-spawn cost ~70% by deferring regex-engine work ([#76](https://github.com/nickderobertis/allowlister/pull/76))
+- defer glob regex compilation behind a literal-prefix gate
+- skip redundant validation when installing a built-in profile ([#9](https://github.com/nickderobertis/allowlister/pull/9))
+
 ## [0.5.9](https://github.com/nickderobertis/allowlister/compare/v0.5.8...v0.5.9) - 2026-07-13
 
 ### Fixed
