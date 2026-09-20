@@ -32,12 +32,12 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 # Build configuration every cargo invocation anywhere inside this clone reads.
 #
-# `target-dir` here is resolved relative to this file's parent directory, so every
-# crate in this clone — workspace members and any crate outside the workspace
-# alike — builds into `<clone>/target`, and a second clone or worktree of this
-# repository, carrying its own copy of this file, builds into its own root. Never
-# point this outside the clone: concurrent worktrees must not share one target
-# directory.
+# `target-dir` here is resolved relative to the directory holding `.cargo/`, so
+# every crate in this clone — workspace members and any crate outside the
+# workspace alike — builds into `<clone>/target`, and a second clone or worktree
+# of this repository, carrying its own copy of this file, builds into its own
+# root. Never point this outside the clone: concurrent worktrees must not share
+# one target directory.
 [build]
 target-dir = "target"
 
