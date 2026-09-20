@@ -167,9 +167,26 @@ mod tests {
         fs::write(git.join("config"), body).unwrap();
     }
 
+    /// A fresh directory with no `.git` anywhere above it. Its ancestors belong
+    /// to the host, so verify them: a stray `.git` above the temp root (an
+    /// accidental empty `/tmp/.git` has happened) makes every temp dir read as
+    /// a remote-less repo and the fallback unobservable — name it rather than
+    /// fail on a baffling path mismatch.
+    fn non_git_dir() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        if let Some(root) = find_repo_root(dir.path()) {
+            panic!(
+                "temp dir {} sits inside a repository rooted at {}: remove that `.git` or point TMPDIR outside it",
+                dir.path().display(),
+                root.display()
+            );
+        }
+        dir
+    }
+
     #[test]
     fn non_git_dir_falls_back_to_the_folder() {
-        let dir = TempDir::new().unwrap();
+        let dir = non_git_dir();
         let cwd = dir.path().to_string_lossy().into_owned();
         assert_eq!(identify(&cwd), cwd);
     }

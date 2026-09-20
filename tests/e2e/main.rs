@@ -1217,7 +1217,7 @@ fn plugin_request_falls_back_to_cwd_outside_a_git_repo() {
     let sandbox = Sandbox::new();
     let plugin = assert_cmd::cargo::cargo_bin("allowlister");
     let plugin = serde_json::to_string(&plugin.to_string_lossy()).unwrap();
-    let nongit = TempDir::new().unwrap();
+    let nongit = non_git_dir();
     fs::write(
         nongit.path().join(".allowlister.json"),
         format!(
@@ -3344,6 +3344,23 @@ fn history_xdg() -> TempDir {
     xdg
 }
 
+/// A fresh directory with no `.git` anywhere above it, for the non-repo
+/// fallback. Its ancestors belong to the host, so verify them: a stray `.git`
+/// above the temp root (an accidental empty `/tmp/.git` has happened) makes every
+/// temp dir tag as a remote-less repo — name it rather than fail on a baffling
+/// path mismatch.
+fn non_git_dir() -> TempDir {
+    let dir = TempDir::new().unwrap();
+    if let Some(root) = dir.path().ancestors().find(|dir| dir.join(".git").exists()) {
+        panic!(
+            "temp dir {} sits inside a repository rooted at {}: remove that `.git` or point TMPDIR outside it",
+            dir.path().display(),
+            root.display()
+        );
+    }
+    dir
+}
+
 /// A git checkout whose `.git/config` names `origin` = `remote` (no remote when
 /// `remote` is empty).
 fn git_checkout(remote: &str) -> TempDir {
@@ -3429,7 +3446,7 @@ fn history_keeps_distinct_repos_and_non_git_dirs_separate() {
     let xdg = history_xdg();
     let repo_x = git_checkout("https://github.com/octocat/Hello-World.git");
     let repo_y = git_checkout("git@gitlab.com:group/other.git");
-    let plain = TempDir::new().unwrap(); // no `.git`: a non-repo folder
+    let plain = non_git_dir();
 
     record_in(xdg.path(), repo_x.path(), "ls -la");
     record_in(xdg.path(), repo_y.path(), "ls -la");
