@@ -96,7 +96,6 @@ bootstrap:
     fi
     # Nx (the orchestrator every gate recipe delegates to) from the locked
     # package-lock.json; scripts/nx runs `npm ci` whenever the lock moved.
-    echo "» installing the locked Nx toolchain (npm ci)"
     bash scripts/nx --version >/dev/null
     echo "✓ bootstrap complete"
 
@@ -225,8 +224,9 @@ supply-chain tier="affected": (nx-tier tier "-t supply-chain")
 schema-check:
     @bash scripts/nx run config-schema:test
 
+# The version is Cargo.toml's rust-version (scripts/msrv.sh); install that
+# toolchain first (`rustup toolchain install <version>`).
 # Check the workspace against its declared minimum supported Rust version.
-# Requires the MSRV toolchain (`rustup toolchain install 1.88.0`).
 msrv:
     @bash scripts/nx run workspace:msrv
 

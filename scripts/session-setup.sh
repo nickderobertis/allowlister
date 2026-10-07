@@ -23,7 +23,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 handoff_llmlint() {
   local setup="$SCRIPT_DIR/setup-llmlint.sh" dev="$SCRIPT_DIR/../.dev"
   [ -f "$setup" ] || return 0
-  mkdir -p "$dev" 2>/dev/null || return 0
+  local err
+  if ! err="$(mkdir -p "$dev" 2>&1)"; then
+    printf 'session-setup: llmlint not provisioned: cannot create %s (%s); fix that, then run just setup-llmlint\n' "$dev" "$err" >&2
+    return 0
+  fi
   # Detach from the hook's stdout/stderr (the session waits for them to close)
   # and from its process group, so neither the wait nor a hook timeout reaches
   # the install.

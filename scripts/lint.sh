@@ -18,4 +18,5 @@ for f in *.sh nx; do
     *) bash -n "$f" || status=1 ;;
   esac
 done
+[ "$status" -eq 0 ] || echo "lint: fix the shell syntax errors above (file:line), then re-run 'just lint'." >&2
 exit "$status"

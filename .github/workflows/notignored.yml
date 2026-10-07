@@ -1,16 +1,11 @@
-# Comment on every pull request with the lint and type-check suppressions it adds.
+# Post one sticky comment per pull request listing the lint and type-check
+# suppressions it adds (`#[allow(...)]`, `llmlint: ignore`, ...), each with its
+# rule, stated reason and line link, so review sees every bypass.
 #
-# A `# noqa`, an `#[allow(dead_code)]`, an `llmlint: ignore` — each costs one line
-# to add and scrolls past review unremarked, and in agent-written code silencing a
-# rule is often easier than fixing it. notignored posts one sticky comment listing
-# the suppressions *this change introduced*, each with its rule, its stated reason,
-# and a link to the line — so a human reviewing at a high level sees every bypass
-# without reading the diff line by line. It is drop-in: no config, no install.
-#
-# Deliberately NOT a required status check. It skips fork pull requests (whose
-# read-only token cannot upsert a comment), and a required context that never
-# reports would block them forever. It is a review artifact, not a gate — the gate
-# is `just check`. See references/ci.md.
+# A review artifact, not a gate (the gate is `just check`), and deliberately not a
+# required status check: it skips fork pull requests, whose read-only token
+# cannot write the comment, and a required context that never reports would
+# block them forever.
 
 name: notignored
 
@@ -22,15 +17,13 @@ permissions:
   contents: read
   pull-requests: write
 
-# Cancel superseded runs on the same ref: only the newest comment is wanted.
+# Only the newest comment is wanted.
 concurrency:
   group: notignored-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   suppressions:
-    # A fork's pull request is granted a read-only token, so the comment upsert
-    # would fail on something the contributor has no way to fix.
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
@@ -38,11 +31,5 @@ jobs:
         with:
           # The scan diffs against the base branch, which a shallow checkout omits.
           fetch-depth: 0
-
-      # `@v0` is a floating major tag: it follows every 0.x release and moves only
-      # once that release's artifacts have published, so it never resolves to
-      # unreleased work. Pin exactly (`@v0.1.11`) only where a reproducible build
-      # matters more than picking up fixes. Every input has a usable default —
-      # `diff-base` is the PR's base branch, `paths` the whole repo — so a repo
-      # that wants the default review artifact passes none.
+      # Floating major tag: follows every published 0.x release.
       - uses: nickderobertis/notignored@v0

@@ -27,6 +27,12 @@ semver_check = false
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
+# The release PR's head branch prefix (release-plz's default, stated so it has
+# one source): ci.yml routes a pull request from such a branch to the full sweep
+# (.github/scripts/gate-tier.mjs reads this key), and release-plz.yml's
+# auto-merge step selects the release PR by it.
+pr_branch_prefix = "release-plz-"
+
 # The workspace's other members are test-only crates (publish = false, version
 # 0.0.0): never versioned, changelogged, tagged or released, so `allowlister`
 # stays the one package release-plz bumps and `v{{ version }}` stays its tag.

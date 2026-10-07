@@ -48,10 +48,14 @@
     },
     "msrv": {
       "executor": "nx:run-commands",
+      "inputs": [
+        "default",
+        "{workspaceRoot}/scripts/msrv.sh"
+      ],
       "options": {
-        "command": "cargo +1.88.0 check --locked --workspace --all-targets --all-features"
+        "command": "bash scripts/msrv.sh"
       },
-      "//": "Needs the MSRV toolchain (rustup toolchain install 1.88.0); like before the graph, not part of the gate's target list."
+      "//": "The toolchain comes from Cargo.toml's rust-version (scripts/msrv.sh), and needs installing first; like before the graph, not part of the gate's target list."
     }
   }
 }

@@ -8,7 +8,9 @@
 //     another member (normal, dev or build) is an edge;
 //   * every project.json's implicitDependencies are edges too.
 // Each project must carry exactly one `type:*` tag, and every edge must be
-// allowed by the constraint for the source project's tag. When Nx is installed
+// allowed by the constraint for the source project's tag. Nx reads no Cargo
+// manifest, so every Cargo edge must also be declared as an implicit dependency
+// (else affected detection would miss it); this check reconciles the two. When Nx is installed
 // in the tree being checked, the implicit edges read here must also match the
 // graph `nx graph` resolves, so the two readings cannot drift.
 //
@@ -214,6 +216,12 @@ if (existsSync(join(root, "node_modules/.bin/nx"))) {
   const only = (a, b) => [...a].filter((e) => !b.has(e));
   for (const e of only(nxEdges, implicitEdges)) errors.push(`Nx resolves ${e}, which this checker did not; teach expandImplicit that pattern.`);
   for (const e of only(implicitEdges, nxEdges)) errors.push(`this checker resolves ${e}, which Nx does not; align expandImplicit with Nx.`);
+}
+
+for (const [from, to, how] of edges) {
+  if (how.startsWith("Cargo ") && !implicitEdges.has(`${from} -> ${to}`)) {
+    errors.push(`${from} has a ${how} that its project.json does not declare: add "${to}" to its implicitDependencies (Nx cannot see Cargo edges).`);
+  }
 }
 
 for (const name of projects.keys()) typeTag(name);

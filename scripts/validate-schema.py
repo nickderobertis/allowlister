@@ -10,8 +10,8 @@ A drift guard the Rust suite cannot cheaply provide: it proves the committed
 (the examples, the recommended profiles, and the repo's own dogfood config) and
 is itself a valid draft 2020-12 schema. A schema that grows too strict — say an
 `additionalProperties: false` that rejects a field the loader accepts — fails
-here. It is the `config-schema` project's `test` target (`uv run --script
-schema/validate-schema.py`, which resolves the dependency declared above).
+here. Run it with `just schema-check` (the `config-schema` project's `test`
+target; uv resolves the dependency declared above).
 
 Exits non-zero on the first schema or instance error.
 """

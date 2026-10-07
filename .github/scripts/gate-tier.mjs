@@ -27,8 +27,9 @@ export class RoutingError extends Error {
 }
 
 /**
- * The branch prefix release-plz opens its release PR from: `pr_branch_prefix` in
- * release-plz.toml when set, else release-plz's default `release-plz-`.
+ * The branch prefix release-plz opens its release PR from: the
+ * `pr_branch_prefix` key of release-plz.toml's `[workspace]` table, which must be
+ * set there (its one source) as a plain double-quoted branch-name prefix.
  */
 export function releaseBranchPrefix(root = repoRoot) {
   let toml;
@@ -37,8 +38,21 @@ export function releaseBranchPrefix(root = repoRoot) {
   } catch (err) {
     throw new RoutingError(`cannot read release-plz.toml: ${err.message}`, "check out the full repository.");
   }
-  const set = toml.match(/^\s*pr_branch_prefix\s*=\s*"([^"]+)"/m);
-  return set ? set[1] : "release-plz-";
+  // Only the [workspace] table counts: its lines run from that header to the
+  // next table header.
+  const lines = toml.split(/\r?\n/);
+  const start = lines.findIndex((l) => l.trim() === "[workspace]");
+  const end = start < 0 ? -1 : lines.findIndex((l, i) => i > start && /^\s*\[/.test(l));
+  const table = start < 0 ? [] : lines.slice(start + 1, end < 0 ? undefined : end);
+  const entries = table.filter((l) => /^\s*pr_branch_prefix\s*=/.test(l));
+  const value = entries.length === 1 ? entries[0].match(/^\s*pr_branch_prefix\s*=\s*"([A-Za-z0-9._/-]+)"\s*(#.*)?$/) : null;
+  if (!value) {
+    throw new RoutingError(
+      "release-plz.toml's [workspace] table must set pr_branch_prefix exactly once, as a double-quoted branch-name prefix",
+      'set `pr_branch_prefix = "release-plz-"` under [workspace] in release-plz.toml.',
+    );
+  }
+  return value[1];
 }
 
 function git(args, cwd) {

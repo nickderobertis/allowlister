@@ -55,15 +55,24 @@ require() {
 # and pass. Members are read from `cargo metadata` (JSON parsed by Node, which the
 # Nx toolchain already provides).
 validate_crate() {
-  local crate="$1" members
+  local crate="$1" metadata members
   printf '%s' "$crate" | grep -Eq '^[a-z0-9][a-z0-9-]*$' \
     || { echo "coverage: '$crate' is not a crate name (lowercase letters, digits, -)." >&2; exit 2; }
-  if ! members="$(cargo metadata --format-version 1 --no-deps --locked 2>/dev/null | node -e '
+  if ! metadata="$(cargo metadata --format-version 1 --no-deps --locked 2>&1)"; then
+    printf '%s\n' "$metadata" >&2
+    echo "coverage: 'cargo metadata' failed (above); fix the manifests or Cargo.lock it names, then re-run." >&2
+    exit 1
+  fi
+  if ! members="$(printf '%s' "$metadata" | node -e '
     const m = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const str = (v) => typeof v === "string" && v.length > 0;
+    if (!Array.isArray(m.workspace_members) || !m.workspace_members.every(str)) throw new Error("workspace_members is not a list of package ids");
+    if (!Array.isArray(m.packages) || !m.packages.every((p) => p && str(p.id) && str(p.name))) throw new Error("packages are not {id, name} objects");
     const ids = new Set(m.workspace_members);
     console.log(m.packages.filter((p) => ids.has(p.id)).map((p) => p.name).join("\n"));
-  ')"; then
-    echo "coverage: could not list the workspace members ('cargo metadata' piped to node failed); run 'cargo metadata --locked' to see why." >&2
+  ' 2>&1)"; then
+    printf '%s\n' "$members" >&2
+    echo "coverage: could not read the workspace members from 'cargo metadata' (above); check the cargo version, and that node is on PATH ('just bootstrap')." >&2
     exit 1
   fi
   printf '%s\n' "$members" | grep -qxF -- "$crate" \
@@ -88,7 +97,7 @@ case "$STEP" in
     if [ "$CRATE" != "allowlister" ]; then
       if ! out="$(cargo llvm-cov --no-report run -p allowlister --bin allowlister --locked -- --version 2>&1)"; then
         printf '%s\n' "$out" >&2
-        echo "coverage: building the instrumented allowlister binary failed (above)." >&2
+        echo "coverage: building the instrumented allowlister binary failed (above); fix the build error, then re-run 'just test-e2e'." >&2
         exit 1
       fi
     fi

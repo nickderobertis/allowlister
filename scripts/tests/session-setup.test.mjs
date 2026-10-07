@@ -6,7 +6,7 @@
 // isolated HOME, so nothing touches the real machine.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -113,4 +113,42 @@ test("the real installer, with uv missing from PATH, logs why and the hook still
     await new Promise((r) => setTimeout(r, 50));
   }
   assert.match(readFileSync(log, "utf8"), /uv not found; cannot install llmlint/);
+});
+
+test("without setsid the hand-off falls back to nohup and still detaches", { skip }, async (t) => {
+  // A PATH holding every system tool except setsid.
+  const dir = stage(OUTCOMES.hangs);
+  const bin = join(dir, "no-setsid");
+  mkdirSync(bin);
+  for (const sys of ["/usr/bin", "/bin"]) {
+    for (const name of readdirSync(sys)) {
+      if (name === "setsid" || existsSync(join(bin, name))) continue;
+      symlinkSync(join(sys, name), join(bin, name));
+    }
+  }
+  if (spawnSync("bash", ["-c", "command -v setsid"], { env: { PATH: bin } }).status === 0) {
+    t.skip("could not hide setsid");
+    return;
+  }
+  const out = runHook(dir, { PATH: bin, GITHUB_ACTIONS: "true" });
+  assert.equal(out.status, 0, out.stderr);
+  assert.ok(out.ms < 5_000, `hook took ${out.ms}ms`);
+  assert.ok(await waitFor(join(dir, "repo/handoff.ran")), "the nohup branch never launched the installer");
+});
+
+test("a missing installer is skipped quietly", { skip }, () => {
+  const dir = stage(null);
+  rmSync(join(dir, "repo/scripts/setup-llmlint.sh"));
+  const out = runHook(dir, { GITHUB_ACTIONS: "true" });
+  assert.deepEqual([out.status, out.stdout, out.stderr], [0, "", ""]);
+});
+
+test("an unwritable .dev/ skips the install, says why and what to run, and still exits 0", { skip }, async () => {
+  const dir = stage(OUTCOMES.succeeds);
+  writeFileSync(join(dir, "repo/.dev"), "a file where the log directory should be\n");
+  const out = runHook(dir, { GITHUB_ACTIONS: "true" });
+  assert.equal(out.status, 0);
+  assert.equal(out.stdout, "");
+  assert.match(out.stderr, /session-setup: llmlint not provisioned: cannot create .*\.dev .*run just setup-llmlint/);
+  assert.equal(await waitFor(join(dir, "repo/handoff.ran"), 1_000), false);
 });

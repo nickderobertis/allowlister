@@ -93,3 +93,11 @@ test("every project carries one known type tag, and every Cargo member a project
   assert.match(out.stderr, /ci-workflows must carry exactly one type:\* tag/);
   assert.match(out.stderr, /Cargo member allowlister-e2e \(tests\/e2e\/Cargo.toml\) has no project.json beside it/);
 });
+
+test("a Cargo edge Nx is not told about is refused", () => {
+  const dir = copyTree();
+  edit(dir, "tests/e2e/project.json", (p) => (p.implicitDependencies = []));
+  const out = check(dir);
+  assert.equal(out.status, 1);
+  assert.match(out.stderr, /allowlister-e2e has a Cargo dev dependency on allowlister that its project.json does not declare/);
+});

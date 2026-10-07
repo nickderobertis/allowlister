@@ -81,14 +81,30 @@ test("a base ref that is not a plain branch name is refused, running nothing", (
   assert.throws(() => decide("pull_request", pr("feature", { baseRef: "a..b" }), { cwd: git.dir }), RoutingError);
 });
 
-test("the release branch prefix is release-plz's default unless release-plz.toml sets one", () => {
+test("the release branch prefix is read from release-plz.toml's [workspace] table, and nowhere else", () => {
   assert.equal(releaseBranchPrefix(repo), "release-plz-");
   const dir = mkdtempSync(join(tmpdir(), "gate-tier-prefix-"));
   scratch.push(dir);
-  writeFileSync(join(dir, "release-plz.toml"), '[workspace]\npr_branch_prefix = "rel-"\n');
+  const write = (toml) => writeFileSync(join(dir, "release-plz.toml"), toml);
+  write('[workspace]\npr_branch_prefix = "rel-"\n\n[changelog]\n');
   assert.equal(releaseBranchPrefix(dir), "rel-");
-  const d = decide("pull_request", pr("rel-1"), { cwd: git.dir, root: dir });
-  assert.equal(d.tier, "all");
+  assert.equal(decide("pull_request", pr("rel-1"), { cwd: git.dir, root: dir }).tier, "all");
+  // Unset, set only in another table, single-quoted, unsafe, or set twice: refused.
+  for (const toml of [
+    "[workspace]\npublish = false\n",
+    '[workspace]\n\n[[package]]\npr_branch_prefix = "rel-"\n',
+    "[workspace]\npr_branch_prefix = 'rel-'\n",
+    '[workspace]\npr_branch_prefix = "rel-$(id)"\n',
+    '[workspace]\npr_branch_prefix = "a-"\npr_branch_prefix = "b-"\n',
+  ]) {
+    write(toml);
+    assert.throws(() => releaseBranchPrefix(dir), RoutingError, toml);
+  }
+});
+
+test("release-plz.yml's auto-merge selects the release PR by the same prefix", () => {
+  const workflow = readFileSync(join(repo, ".github/workflows/release-plz.yml"), "utf8");
+  assert.ok(workflow.includes(`startswith("${releaseBranchPrefix(repo)}")`), "the auto-merge step must select the configured prefix");
 });
 
 test("the entrypoint writes tier and base to GITHUB_OUTPUT from the event payload", () => {

@@ -23,6 +23,7 @@ const types = (step?.with?.types ?? "")
   .map((t) => t.trim())
   .filter(Boolean);
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] the hosted `pr-title` check runs the action itself and stays the authority; this local copy reproduces its parse with the very packages and majors the action's package.json pins (conventional-commits-parser ^6.2.0, conventional-changelog-conventionalcommits 9.1.0, locked in package-lock.json) so the type list can be exercised offline, and reconciling it against the floating v6 tag would need the network the gate never touches.
 /** The action's validation of a title against `types`; returns the failure, or null. */
 async function validate(title) {
   const { parser } = await conventionalCommitsPreset();
@@ -32,6 +33,7 @@ async function validate(title) {
   if (!types.some((t) => new RegExp(`^${t}$`).test(result.type))) return `unknown type ${result.type}`;
   return null;
 }
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 test("job pr-title runs the v6 action on the PR events that change a title, with only pull-requests: read", () => {
   assert.ok(job, "pr-title.yml must define job pr-title");

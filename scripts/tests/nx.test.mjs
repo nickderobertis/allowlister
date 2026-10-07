@@ -55,13 +55,27 @@ test("the wrapper installs from the lock once, then reuses it, and passes argume
   assert.equal(npmCalls(dir).length, 1, "an up-to-date install must not reinstall");
 });
 
-test("a lock newer than the install reinstalls", { skip }, () => {
+test("a lock or manifest newer than the install reinstalls", { skip }, () => {
   const dir = stageWrapper();
   assert.equal(runWrapper(dir, ["--version"]).status, 0);
-  const later = new Date(Date.now() + 60_000);
-  utimesSync(join(dir, "package-lock.json"), later, later);
+  for (const [i, file] of ["package-lock.json", "package.json"].entries()) {
+    const later = new Date(Date.now() + 60_000 * (i + 1));
+    utimesSync(join(dir, file), later, later);
+    assert.equal(runWrapper(dir, ["--version"]).status, 0);
+    assert.equal(npmCalls(dir).length, i + 2, `a newer ${file} must reinstall`);
+  }
+});
+
+test("a damaged install (Nx executable or stamp gone) is reinstalled, not trusted", { skip }, () => {
+  const dir = stageWrapper();
   assert.equal(runWrapper(dir, ["--version"]).status, 0);
+  rmSync(join(dir, "node_modules/.bin/nx"));
+  const repaired = runWrapper(dir, ["--version"]);
+  assert.equal(repaired.status, 0, repaired.stderr);
   assert.equal(npmCalls(dir).length, 2);
+  rmSync(join(dir, "node_modules/.npm-ci-stamp"));
+  assert.equal(runWrapper(dir, ["--version"]).status, 0);
+  assert.equal(npmCalls(dir).length, 3);
 });
 
 test("a failing install stops before Nx, says why, and is retried next time", { skip }, () => {
