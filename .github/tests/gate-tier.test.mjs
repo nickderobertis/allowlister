@@ -137,3 +137,36 @@ test("the entrypoint writes tier and base to GITHUB_OUTPUT from the event payloa
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /gate-tier: next: /);
 });
+
+test("outside Actions the entrypoint prints the decision on stdout", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-tier-stdout-"));
+  scratch.push(dir);
+  const event = join(dir, "event.json");
+  writeFileSync(event, JSON.stringify(pr("feature")));
+  const { GITHUB_OUTPUT: _unset, ...env } = process.env;
+  const out = spawnSync("node", [router], {
+    cwd: git.dir,
+    encoding: "utf8",
+    env: { ...env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: event },
+  });
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, `tier=affected\nbase=${sha.m1}\n`);
+  assert.match(out.stderr, /^gate-tier: affected — /);
+});
+
+test("an unwritable GITHUB_OUTPUT fails the entrypoint with the next action", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gate-tier-unwritable-"));
+  scratch.push(dir);
+  const event = join(dir, "event.json");
+  writeFileSync(event, JSON.stringify(pr("feature")));
+  // A directory cannot be appended to, on every OS.
+  const out = spawnSync("node", [router], {
+    cwd: git.dir,
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_EVENT_NAME: "pull_request", GITHUB_EVENT_PATH: event, GITHUB_OUTPUT: dir },
+  });
+  assert.equal(out.status, 1);
+  assert.equal(out.stdout, "");
+  assert.match(out.stderr, /gate-tier: could not append to GITHUB_OUTPUT/);
+  assert.match(out.stderr, /gate-tier: next: /);
+});

@@ -30,7 +30,6 @@ const scratch = [];
 after(() => scratch.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 const CONTRACT = ["test (ubuntu-latest)", "test (macos-latest)", "test (windows-latest)", "coverage", "deps & security"];
-// The recipe each contract job runs at the routed tier.
 const RECIPES = { test: "check", coverage: "test-cov", deps: "supply-chain" };
 
 /** The status-check contexts a job reports: its name (or id), expanded over a literal `matrix.os`. */
