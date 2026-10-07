@@ -74,6 +74,13 @@ for (const [path, env] of Object.entries(PATHS)) {
       assert.ok(out.ms < 5_000, `hook took ${out.ms}ms; the hand-off must not block`);
       assert.ok(await waitFor(join(dir, "repo/handoff.ran")), "setup-llmlint.sh was never launched");
       assert.doesNotMatch(out.stdout, /installer-noise/, "installer output must stay out of the session context");
+      if (outcome !== "hangs") {
+        const log = join(dir, "repo/.dev/setup-llmlint.log");
+        for (const end = Date.now() + 5_000; Date.now() < end && !readFileSync(log, "utf8").includes("installer-noise"); ) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.match(readFileSync(log, "utf8"), /installer-noise/, "the installer's output must reach .dev/setup-llmlint.log");
+      }
       if (path === "advice (not set up)") assert.match(out.stdout, /ACTION: run 'just setup'/);
       if (path === "this repo's CI" || path === "the skip escape hatch") assert.equal(out.stdout, "");
     });
@@ -143,12 +150,17 @@ test("a missing installer is skipped quietly", { skip }, () => {
   assert.deepEqual([out.status, out.stdout, out.stderr], [0, "", ""]);
 });
 
-test("an unwritable .dev/ skips the install, says why and what to run, and still exits 0", { skip }, async () => {
-  const dir = stage(OUTCOMES.succeeds);
-  writeFileSync(join(dir, "repo/.dev"), "a file where the log directory should be\n");
-  const out = runHook(dir, { GITHUB_ACTIONS: "true" });
-  assert.equal(out.status, 0);
-  assert.equal(out.stdout, "");
-  assert.match(out.stderr, /session-setup: llmlint not provisioned: cannot create .*\.dev .*run just setup-llmlint/);
-  assert.equal(await waitFor(join(dir, "repo/handoff.ran"), 1_000), false);
-});
+for (const [what, block] of [
+  [".dev/ is not a directory", (dir) => writeFileSync(join(dir, "repo/.dev"), "a file where the log directory should be\n")],
+  ["the log cannot be opened", (dir) => mkdirSync(join(dir, "repo/.dev/setup-llmlint.log"), { recursive: true })],
+]) {
+  test(`when ${what}, the hook skips the install, says why and what to run, and still exits 0`, { skip }, async () => {
+    const dir = stage(OUTCOMES.succeeds);
+    block(dir);
+    const out = runHook(dir, { GITHUB_ACTIONS: "true" });
+    assert.equal(out.status, 0);
+    assert.equal(out.stdout, "");
+    assert.match(out.stderr, /^session-setup: llmlint not provisioned: cannot write .*setup-llmlint\.log \(.+\); fix that, then run just setup-llmlint$/m);
+    assert.equal(await waitFor(join(dir, "repo/handoff.ran"), 1_000), false);
+  });
+}

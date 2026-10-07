@@ -39,19 +39,13 @@ follow-ups (see "Workflow").
   coverage floor (lines, functions, regions) in the gate, and `cargo deny` +
   `cargo machete` as a dedicated supply-chain job. The release tier follows the
   reference's tag-driven `release-plz` + per-target native-runner archive model.
-- **Intersection:** `intersections/rust-cli.md` — the binary-driving suite is its
-  own `allowlister-e2e` crate whose `test` depends on `allowlister:build`,
-  coverage is enforced once over the union of the crates' runs, and release
-  archives are built per target on native runners with one asset-naming contract.
-- **Base + cross-cutting:** `base.md`; `ci.md` (CI runs `just bootstrap` then
-  `just check` at the routed tier on a Linux/macOS/Windows matrix, with coverage
-  and the supply chain as their own jobs, the live harness checks and benchmarks
-  as informational workflows, plus the pr-title lint and the notignored
-  suppressions comment); `llmlint.md` (the judged tier, `llmlint.yml`);
-  `releasing.md` (release-plz, see "Commits, releases, and merging");
-  `project-graph.md` (Nx over the projects below; Cargo keeps one `Cargo.lock`).
-  Each crate also declares a `typecheck` target (`cargo check --all-targets
-  --all-features`), so a type error fails by name before clippy's findings.
+- **Intersection:** `intersections/rust-cli.md` — the binary-driving suite is a
+  crate of its own, still in the gate, and every install surface shares the
+  release workflow's asset names.
+- **Base + cross-cutting:** `base.md`, `ci.md`, `llmlint.md`, `releasing.md`
+  (see "Commits, releases, and merging") and `project-graph.md` (Nx runs the
+  targets; Cargo keeps one `Cargo.lock`). Each crate keeps a `typecheck` target,
+  so a type error fails by name ahead of clippy's findings.
 - **Excluded — and why:** `shapes/library.md` does not apply: this ships an
   executable, not a published library API (the intentionally public Rust surface
   in `lib.rs` exists only to test the engine, not as a distribution target).
@@ -70,30 +64,15 @@ follow-ups (see "Workflow").
   domain).
 - `src/errors.rs` — typed errors.
 
-Nx projects (`project.json` each; `just` recipes run them by tier — see
-"Quality gate"). A project owns every file under its directory; a file it reads
+Nx projects (`nx show projects`; each `project.json` says what it holds). A
+project owns every file under its directory; a file it reads
 from elsewhere is a `{workspaceRoot}/...` input of its target, which Nx also
 treats as affecting it. Edges (Cargo path deps, `implicitDependencies`) are only
 for what a project builds against or drives; a Cargo edge is always restated as
 an implicit dependency (Nx reads no manifest; `workspace:lint` checks it).
 `.nxignore` keeps files no target reads (agent notes, changelog, contributor
-docs) out of the graph — never list a file a target reads there.
-
-- `allowlister` (repo root, `type:app`) — the crate; unit + `tests/*.rs`
-  integration tests; also owns every file no nested project claims.
-- `allowlister-e2e` (`tests/e2e/`, `type:e2e`) — workspace member crate driving
-  the compiled binary.
-- `config-schema` (`schema/`, `type:contract`) — the published JSON Schema and
-  its validator over `examples/` and `.allowlister.jsonc`.
-- `ci-workflows` (`.github/`, `type:tooling`) — workflows, the e2e-matrix drift
-  gate, the tier router, and the workflow-contract tests.
-- `scripts` (`scripts/`, `type:tooling`) — every script, syntax-checked and
-  subprocess-tested; projects that run one list it as an input.
-- `workspace` (`tools/`) and `coverage` (`tools/coverage/`) (`type:workspace`) —
-  module boundaries, supply chain, MSRV; the aggregate coverage floor.
-- `live-e2e-<harness>` (`live-e2e/<harness>/`) and `skill-refine-allowlist`
-  (`skills/`) (`type:live`) — external suites with no gate target, run only by
-  their own workflows.
+docs) out of the graph — never list a file a target reads there. A suite that
+touches an external service is a `type:live` project with no gate target.
 
 ## Hard rules
 

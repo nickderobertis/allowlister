@@ -5,14 +5,10 @@
 #   output. Diagnostics live in explicit recipes (`doctor`, `cargo-tree`).
 # - Failing recipes preserve actionable output (paths, lints, diffs, codes).
 # - Every recipe pins dependencies with `--locked`.
-# - The gate recipes DELEGATE to Nx (`scripts/nx`): each project's project.json
-#   declares what its targets run (cargo fmt, clippy, nextest under
-#   cargo-llvm-cov, ...); the root only chooses which projects run them. Each
-#   takes a tier: `affected` (the default) runs the projects this change can
-#   reach, keyed off the explicit base scripts/nx-base.sh prints (NX_BASE, else
-#   the merge base with origin/main); `all` is one full sweep. A mistyped tier
-#   aborts rather than quietly buying a weaker one. AGENTS.md "Commits,
-#   releases, and merging" records which CI run uses which tier.
+# - The gate recipes DELEGATE to Nx (`scripts/nx`): each project.json declares
+#   what its targets run; the root only chooses which projects run them, by tier
+#   (`affected`, the default, from the base scripts/nx-base.sh prints; or `all`).
+#   A mistyped tier aborts rather than quietly buying a weaker one.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
@@ -142,8 +138,8 @@ typecheck tier="affected": (nx-tier tier "-t typecheck")
 # Lint with every warning treated as an error.
 lint tier="affected": (nx-tier tier "-t lint")
 
-# Alias for `lint` (kept for muscle memory and existing docs).
-clippy tier="affected": (lint tier)
+# Clippy (-D warnings) over the Rust crates only: their `lint` targets.
+clippy tier="affected": (nx-tier tier "-t lint --projects=tag:lang:rust")
 
 # Apply machine-applicable clippy fixes across the workspace.
 clippy-fix:

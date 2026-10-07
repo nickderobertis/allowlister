@@ -1,7 +1,5 @@
-// Decide which gate tier a CI run owes and the explicit base it keys off — the
-// placement AGENTS.md "Commits, releases, and merging" records. Releases are
-// batched behind release-plz's release PR, so that PR gets the full sweep (`all`)
-// and every other pull request, and every push to main, gets the affected tier.
+// Decide which gate tier a CI run owes and the explicit base it keys off, per
+// the placement AGENTS.md "Commits, releases, and merging" records.
 //
 // Reads GITHUB_EVENT_NAME and the payload at GITHUB_EVENT_PATH and writes
 // `tier=<affected|all>` and `base=<sha>` (empty for `all`) to GITHUB_OUTPUT,

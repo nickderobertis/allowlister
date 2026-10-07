@@ -1,17 +1,8 @@
 name: CI
 
-# Every gate job runs a `just` recipe at the tier .github/scripts/gate-tier.mjs
-# chooses for the event — the same recipes developers run, so local and CI cannot
-# drift (AGENTS.md "Commits, releases, and merging" records the placement):
-#
-#   * release-plz's release PR (head branch `release-plz-*`) runs the BROADER
-#     tier, `just <recipe> all`: one full sweep over every gate-eligible project.
-#     Releases are batched behind that PR, so it is the one lifecycle point the
-#     shipped commit is swept; a red sweep turns these same contexts red and
-#     auto-merge cannot cut a release past it.
-#   * every other pull request, and every push to main, runs the AFFECTED tier
-#     against an explicitly derived base (the merge base with the PR's base
-#     branch; the previous tip on a push).
+# Every gate job runs the same `just` recipe developers run, at the tier
+# .github/scripts/gate-tier.mjs picks for the event (the placement is recorded in
+# AGENTS.md "Commits, releases, and merging").
 #
 # Fixed status-check contexts (branch protection names them): `test
 # (ubuntu-latest)`, `test (macos-latest)`, `test (windows-latest)`, `coverage`,

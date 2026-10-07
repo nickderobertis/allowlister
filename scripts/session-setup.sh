@@ -22,10 +22,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 handoff_llmlint() {
   local setup="$SCRIPT_DIR/setup-llmlint.sh" dev="$SCRIPT_DIR/../.dev"
+  local log="$dev/setup-llmlint.log" err
   [ -f "$setup" ] || return 0
-  local err
-  if ! err="$(mkdir -p "$dev" 2>&1)"; then
-    printf 'session-setup: llmlint not provisioned: cannot create %s (%s); fix that, then run just setup-llmlint\n' "$dev" "$err" >&2
+  # Open the log here, not in the detached job: a failure is then reported, with
+  # its cause and the next step, instead of dying unseen in the background.
+  if ! err="$( { mkdir -p "$dev" && : >"$log"; } 2>&1)"; then
+    printf 'session-setup: llmlint not provisioned: cannot write %s (%s); fix that, then run just setup-llmlint\n' "$log" "$err" >&2
     return 0
   fi
   # Detach from the hook's stdout/stderr (the session waits for them to close)
@@ -33,9 +35,9 @@ handoff_llmlint() {
   # the install.
   # llmlint: ignore-block[work_goes_through_command_surface] this hook runs before `just` is guaranteed to exist (it installs just itself a few lines below), so it launches the script `just setup-llmlint` wraps directly, as the create-repo session-setup template does.
   if command -v setsid >/dev/null 2>&1; then
-    setsid bash "$setup" >"$dev/setup-llmlint.log" 2>&1 </dev/null &
+    setsid bash "$setup" >>"$log" 2>&1 </dev/null &
   else
-    nohup bash "$setup" >"$dev/setup-llmlint.log" 2>&1 </dev/null &
+    nohup bash "$setup" >>"$log" 2>&1 </dev/null &
   fi
   # llmlint: ignore-end[work_goes_through_command_surface]
   return 0

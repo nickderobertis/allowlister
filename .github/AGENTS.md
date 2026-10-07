@@ -3,9 +3,8 @@
 - CI runs the same `just` recipes developers do, at the tier
   `.github/scripts/gate-tier.mjs` picks for the event: a check that gates locally
   must gate in CI too. The `test (<os>)`, `coverage` and `deps & security`
-  contexts are fixed — no `if`, `needs` or path filter on those jobs — and
-  `.github/tests/workflow-contract.test.mjs` holds that, the routing, and the
-  pr-title and notignored shapes.
+  contexts are fixed — no `if`, `needs` or path filter on those jobs
+  (`.github/tests/` enforces the workflow contract).
 - Pin actions to a stable major version (or a SHA) and grant least-privilege
   `permissions`.
 - Release artifacts publish only after the gate passes; never publish untested
