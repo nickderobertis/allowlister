@@ -190,7 +190,7 @@ test("the live harness suites stay informational, fork-guarded, and outside the 
 });
 
 const realJust = spawnSync("bash", ["-c", "command -v just"], { encoding: "utf8" }).stdout.trim();
-const noJust = (process.platform === "win32" && "bash stub") || (!realJust && "just is not on PATH");
+const journeySkip = (process.platform === "win32" && "bash stub") || (!realJust && "just is not on PATH");
 
 /**
  * The real justfile in a scratch root whose scripts/nx records each Nx call
@@ -241,7 +241,7 @@ function parseNx(line) {
   return { mode, targets, filters };
 }
 
-test("the pull-request jobs run supply-chain once, and a local `just check` still runs it", { skip: noJust }, () => {
+test("the pull-request jobs run supply-chain once, and a local `just check` still runs it", { skip: journeySkip }, () => {
   const run = gateSandbox();
   const jobs = workflows["ci.yml"].jobs;
   for (const [tier, mode] of [["affected", "affected"], ["all", "run-many"]]) {
@@ -273,7 +273,7 @@ test("the pull-request jobs run supply-chain once, and a local `just check` stil
   assert.deepEqual(typo.nx, []);
 });
 
-test("release.yml gates on the single gate recipe, covering every stage its old inline steps ran", { skip: noJust }, () => {
+test("release.yml gates on the single gate recipe, covering every stage its old inline steps ran", { skip: journeySkip }, () => {
   const run = gateSandbox();
   const job = workflows["release.yml"].jobs.test;
   const gates = job.steps.map((s) => s.run).filter((r) => /\bjust\b/.test(r ?? ""));
