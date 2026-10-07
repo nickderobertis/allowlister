@@ -133,14 +133,16 @@ function runStep(step, env, justExit) {
   return { status: out.status, calls: readFileSync(record, "utf8").trim().split("\n") };
 }
 
-test("routing per event reaches the gate step, and a failing sweep fails the job", { skip: process.platform === "win32" && "bash stub" }, () => {
+// Which tier each event routes to is gate-tier.test.mjs's: this feeds the gate
+// step each decision the router can write and checks what reaches the recipe.
+test("the gate step hands each routed tier and base to its recipe, and a failing sweep fails the job", { skip: process.platform === "win32" && "bash stub" }, () => {
   const jobs = workflows["ci.yml"].jobs;
   for (const [id, recipe] of Object.entries(RECIPES)) {
     const gate = jobs[id].steps.at(-1);
-    // Release PR: the router says tier=all, base empty.
+    // Release PR: the router writes tier=all, base empty.
     const sweep = runStep(gate, { TIER: "all", NX_BASE: "" }, 0);
     assert.deepEqual([sweep.status, sweep.calls], [0, [`${recipe} all|NX_BASE=`]]);
-    // Ordinary PR / push to main: affected from the derived base.
+    // Ordinary PR / push to main: the router writes affected and the derived base.
     const affected = runStep(gate, { TIER: "affected", NX_BASE: "0123abc" }, 0);
     assert.deepEqual([affected.status, affected.calls], [0, [`${recipe} affected|NX_BASE=0123abc`]]);
     // A red sweep: the recipe's non-zero exit is the step's, hence the job's.
