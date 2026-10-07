@@ -1,4 +1,4 @@
-// The live-e2e CI matrix drift gate (.github/scripts/check-e2e-matrix.sh) is the
+// The live-e2e CI matrix drift gate (scripts/check-e2e-matrix.sh) is the
 // single source of the contract every .github/workflows/e2e-*.yml must match.
 // These tests drive its two observable outcomes — pass on the committed
 // workflows, fail on a drifted copy — so a regression in the gate (or an
@@ -21,9 +21,9 @@ after(() => scratch.forEach((d) => rmSync(d, { recursive: true, force: true })))
 function stage() {
   const tmp = mkdtempSync(join(tmpdir(), "e2e-matrix-"));
   scratch.push(tmp);
-  mkdirSync(join(tmp, ".github/scripts"), { recursive: true });
+  mkdirSync(join(tmp, "scripts"), { recursive: true });
   mkdirSync(join(tmp, ".github/workflows"), { recursive: true });
-  copyFileSync(join(repo, ".github/scripts/check-e2e-matrix.sh"), join(tmp, ".github/scripts/check-e2e-matrix.sh"));
+  copyFileSync(join(repo, "scripts/check-e2e-matrix.sh"), join(tmp, "scripts/check-e2e-matrix.sh"));
   for (const name of readdirSync(join(repo, ".github/workflows"))) {
     if (name.startsWith("e2e-") && name.endsWith(".yml")) {
       copyFileSync(join(repo, ".github/workflows", name), join(tmp, ".github/workflows", name));
@@ -32,7 +32,7 @@ function stage() {
   return tmp;
 }
 
-const run = (tmp) => spawnSync("bash", [join(tmp, ".github/scripts/check-e2e-matrix.sh")], { encoding: "utf8" });
+const run = (tmp) => spawnSync("bash", [join(tmp, "scripts/check-e2e-matrix.sh")], { encoding: "utf8" });
 
 function mutate(tmp, file, from, to) {
   const path = join(tmp, ".github/workflows", file);

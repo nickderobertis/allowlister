@@ -1,7 +1,7 @@
 name: Skill install
 
 # Verifies the `refine-allowlist` agent skill installs via `gh skill` and that
-# the allowlister CLI contract it drives still holds (skills/verify-skill-install.sh).
+# the allowlister CLI contract it drives still holds (scripts/verify-skill-install.sh).
 #
 # Informational, like the live-harness checks: it is NOT part of `just full-check`
 # and is not a required check. It needs the `gh skill` preview command (not the
@@ -17,7 +17,7 @@ on:
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "skills/verify-skill-install.sh"
+      - "scripts/verify-skill-install.sh"
       - ".github/workflows/skill-install.yml"
   pull_request:
     paths:
@@ -25,7 +25,7 @@ on:
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
-      - "skills/verify-skill-install.sh"
+      - "scripts/verify-skill-install.sh"
       - ".github/workflows/skill-install.yml"
   workflow_dispatch:
 

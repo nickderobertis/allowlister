@@ -92,15 +92,19 @@ def main() -> int:
         rel = path.relative_to(ROOT)
         if errors:
             failed = True
-            print(f"FAIL {rel}")
+            print(f"FAIL {rel}", file=sys.stderr)
             for err in errors[:10]:
                 where = "/".join(str(p) for p in err.path) or "<root>"
-                print(f"     at {where}: {err.message}")
+                print(f"     at {where}: {err.message}", file=sys.stderr)
         else:
             print(f"ok   {rel}")
 
     if failed:
-        print("\nSchema drift: a shipped config no longer validates against the schema.")
+        print(
+            "\nSchema drift: a shipped config no longer validates against the schema; "
+            "fix the config or widen schema/allowlister.schema.json.",
+            file=sys.stderr,
+        )
         return 1
     return 0
 

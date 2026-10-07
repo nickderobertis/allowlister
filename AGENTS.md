@@ -50,8 +50,8 @@ follow-ups (see "Workflow").
   suppressions comment); `llmlint.md` (the judged tier, `llmlint.yml`);
   `releasing.md` (release-plz, see "Commits, releases, and merging");
   `project-graph.md` (Nx over the projects below; Cargo keeps one `Cargo.lock`).
-  The crates also declare a `typecheck` target (`cargo check --all-targets`):
-  the gate ran that phase before the graph, so it stays.
+  Each crate also declares a `typecheck` target (`cargo check --all-targets
+  --all-features`), so a type error fails by name before clippy's findings.
 - **Excluded — and why:** `shapes/library.md` does not apply: this ships an
   executable, not a published library API (the intentionally public Rust surface
   in `lib.rs` exists only to test the engine, not as a distribution target).
@@ -72,8 +72,9 @@ follow-ups (see "Workflow").
 
 Nx projects (`project.json` each; `just` recipes run them by tier — see
 "Quality gate"). A project owns every file under its directory; a file it reads
-from elsewhere is a `{workspaceRoot}/...` input, which Nx also treats as
-affecting it.
+from elsewhere is a `{workspaceRoot}/...` input of its target, which Nx also
+treats as affecting it. Edges (Cargo path deps, `implicitDependencies`) are only
+for what a project builds against or drives.
 
 - `allowlister` (repo root, `type:app`) — the crate; unit + `tests/*.rs`
   integration tests; also owns every file no nested project claims.
@@ -83,11 +84,13 @@ affecting it.
   its validator over `examples/` and `.allowlister.jsonc`.
 - `ci-workflows` (`.github/`, `type:tooling`) — workflows, the e2e-matrix drift
   gate, the tier router, and the workflow-contract tests.
+- `scripts` (`scripts/`, `type:tooling`) — every script, syntax-checked and
+  subprocess-tested; projects that run one list it as an input.
 - `workspace` (`tools/`) and `coverage` (`tools/coverage/`) (`type:workspace`) —
   module boundaries, supply chain, MSRV; the aggregate coverage floor.
-- `live-e2e-<harness>` + `live-e2e-lib` (`live-e2e/`) and
-  `skill-refine-allowlist` (`skills/`) (`type:live`) — external suites with no
-  gate target, run only by their own workflows.
+- `live-e2e-<harness>` (`live-e2e/<harness>/`) and `skill-refine-allowlist`
+  (`skills/`) (`type:live`) — external suites with no gate target, run only by
+  their own workflows.
 
 ## Hard rules
 
@@ -125,11 +128,11 @@ affecting it.
 - Convert warning-level diagnostics to errors or disable the check. No lint
   baselines, no ignored-warning backlog. Keep aspirational checks disabled until
   they can be enforced as errors.
-- `just check` (alias `full-check`) is the gate: Nx runs `format-check lint
-  typecheck test build doc release-check coverage supply-chain` over the affected
-  projects (`just check all` sweeps every gate-eligible project); any failing
-  target fails the recipe. The affected tier always keys off an explicit base
-  (`NX_BASE`, else the merge base with `origin/main`), never Nx's default.
+- `just check` (alias `full-check`) is the gate over the affected projects;
+  `just check all` sweeps every gate-eligible project; any failing target fails
+  the recipe. The affected tier always keys off an explicit base (`NX_BASE`,
+  else the merge base with `origin/main`), never Nx's default. A check that
+  belongs in the gate is a target in that list, never a step outside Nx.
 - Module boundaries are tags checked by `workspace:lint`
   (`tools/project-boundaries.json`): the contract depends on nothing it serves,
   the crate on none of its suites, and nothing outside the live tier on a live

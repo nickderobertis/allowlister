@@ -27,11 +27,13 @@ handoff_llmlint() {
   # Detach from the hook's stdout/stderr (the session waits for them to close)
   # and from its process group, so neither the wait nor a hook timeout reaches
   # the install.
+  # llmlint: ignore-block[work_goes_through_command_surface] this hook runs before `just` is guaranteed to exist (it installs just itself a few lines below), so it launches the script `just setup-llmlint` wraps directly, as the create-repo session-setup template does.
   if command -v setsid >/dev/null 2>&1; then
     setsid bash "$setup" >"$dev/setup-llmlint.log" 2>&1 </dev/null &
   else
     nohup bash "$setup" >"$dev/setup-llmlint.log" 2>&1 </dev/null &
   fi
+  # llmlint: ignore-end[work_goes_through_command_surface]
   return 0
 }
 trap 'handoff_llmlint || true' EXIT

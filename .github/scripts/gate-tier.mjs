@@ -123,6 +123,7 @@ if (import.meta.main) {
       appendFileSync(process.env.GITHUB_OUTPUT, lines);
     } catch (err) {
       console.error(`gate-tier: could not append to GITHUB_OUTPUT (${process.env.GITHUB_OUTPUT}): ${err.message}`);
+      console.error("gate-tier: next: run this inside a GitHub Actions step (it provides a writable GITHUB_OUTPUT), or unset it to print the decision.");
       process.exit(1);
     }
   }

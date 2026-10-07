@@ -1,21 +1,39 @@
 {
   "$schema": "../node_modules/nx/schemas/project-schema.json",
   "name": "ci-workflows",
-  "//": "The GitHub Actions workflows and their contract checks: lint is the live-e2e matrix drift gate (scripts/check-e2e-matrix.sh) and test is the workflow-contract suite (tests/) — the gate's fixed status-check contexts, the per-event tier routing (scripts/gate-tier.mjs), the pr-title rules, and the drift gate's own pass/fail journeys. release-plz.toml is an input because the pr-title types must match its changelog parsers.",
+  "//": "The GitHub Actions workflows and their contract checks: lint is the live-e2e matrix drift gate (scripts/check-e2e-matrix.sh, an input here) and test is the workflow-contract suite (.github/tests) — the gate's fixed status-check contexts, the per-event tier routing (.github/scripts/gate-tier.mjs), the pr-title rules, and the drift gate's own pass/fail journeys. release-plz.toml is an input because the pr-title types must match its changelog parsers.",
   "projectType": "library",
-  "tags": ["type:tooling", "scope:ci"],
+  "tags": [
+    "type:tooling",
+    "scope:ci"
+  ],
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "{workspaceRoot}/release-plz.toml", "sharedGlobals"]
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/scripts/check-e2e-matrix.sh",
+      "{workspaceRoot}/release-plz.toml",
+      "{workspaceRoot}/justfile",
+      "sharedGlobals"
+    ]
   },
   "targets": {
     "lint": {
       "executor": "nx:run-commands",
-      "options": { "command": "bash .github/scripts/check-e2e-matrix.sh" }
+      "options": {
+        "command": "bash scripts/check-e2e-matrix.sh"
+      },
+      "inputs": [
+        "default"
+      ]
     },
     "test": {
       "executor": "nx:run-commands",
-      "inputs": ["default"],
-      "options": { "command": "node --test .github/tests/*.test.mjs" }
+      "inputs": [
+        "default"
+      ],
+      "options": {
+        "command": "node --test .github/tests/*.test.mjs"
+      }
     }
   }
 }

@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           staging="$(mktemp -d)"
           # Only the published artifact: schema/ also holds the config-schema
-          # project's definition and validator, which are not served.
+          # project's definition and agent notes, which are not served.
           cp schema/allowlister.schema.json schema/index.html "$staging/"
           # Serve files verbatim (no Jekyll), including any leading-underscore names.
           touch "$staging/.nojekyll"

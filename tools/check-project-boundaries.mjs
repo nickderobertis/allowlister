@@ -204,6 +204,8 @@ if (existsSync(join(root, "node_modules/.bin/nx"))) {
   const wellFormed =
     deps !== null &&
     typeof deps === "object" &&
+    !Array.isArray(deps) &&
+    Object.keys(deps).length > 0 &&
     Object.values(deps).every((list) => Array.isArray(list) && list.every((d) => typeof d?.target === "string" && typeof d?.type === "string"));
   if (!wellFormed) fail(["'nx graph' produced a graph of an unexpected shape; check the Nx version in package.json, then re-run."]);
   const nxEdges = new Set(

@@ -1,0 +1,18 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "scripts",
+  "//": "The repository's scripts — setup and session provisioning, the Nx wrapper and explicit-base helper, packaging (dist.sh, install.sh), the bench and profile drivers, and the scripts other projects run (the schema validator, the e2e-matrix drift gate, the live harness suites, the skill install check), which those projects list as inputs. lint syntax-checks every shell script; test drives the scripts the gate and setup depend on as subprocesses (tests/). Its own project so a script change never reruns the crate's suites.",
+  "projectType": "library",
+  "tags": ["type:tooling", "scope:repo"],
+  "targets": {
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash scripts/lint.sh" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": ["default"],
+      "options": { "command": "node --test scripts/tests/*.test.mjs" }
+    }
+  }
+}

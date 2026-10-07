@@ -185,3 +185,17 @@ test("release.yml still re-gates clippy, the unit tests and e2e over the whole c
   for (const cmd of ["just clippy all", "just test all", "just test-e2e all"]) assert.ok(runs.includes(cmd), `release.yml test runs ${cmd}`);
   assert.deepEqual(workflows["release.yml"].jobs.upload.needs, "test");
 });
+
+test("pages.yml stages only the published schema files, never schema/'s project files", { skip: process.platform === "win32" && "bash step" }, () => {
+  const step = workflows["pages.yml"].jobs.publish.steps.find((s) => (s.run ?? "").includes("staging="));
+  // Run the step's own staging lines (everything before it touches git) against
+  // a copy of the real schema/ directory.
+  const staging = step.run.split("\n").slice(0, step.run.split("\n").findIndex((l) => l.includes("git config")));
+  const dir = mkdtempSync(join(tmpdir(), "pages-"));
+  scratch.push(dir);
+  spawnSync("cp", ["-R", join(repo, "schema"), join(dir, "schema")]);
+  const out = spawnSync("bash", ["-eo", "pipefail", "-c", `${staging.join("\n")}\nls -A "$staging"`], { cwd: dir, encoding: "utf8" });
+  assert.equal(out.status, 0, out.stderr);
+  assert.deepEqual(out.stdout.trim().split("\n").sort(), [".nojekyll", "allowlister.schema.json", "index.html"]);
+  assert.ok(readdirSync(join(repo, "schema")).includes("project.json"), "the fixture must contain a file that is not published");
+});

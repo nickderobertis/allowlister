@@ -115,6 +115,7 @@ jobs:
         env:
           TIER: ${{ steps.tier.outputs.tier }}
           NX_BASE: ${{ steps.tier.outputs.base }}
+        # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] `coverage` is one of the fixed required contexts branch protection names, so it must report on every pull request on its own; folding it into `test (<os>)` (or making it reuse that job) changes the required-check contract, which is a governance decision outside this workflow.
         run: just test-cov "$TIER"
 
   # Supply chain: run once on Linux (not duplicated across the OS matrix).
@@ -157,8 +158,7 @@ jobs:
       # oneharness.toml), so the binary must be on PATH AND authenticated — else
       # its fallback chain finds no runnable harness and the judge errors. The
       # codex CLI does not read OPENAI_API_KEY from the env; it needs an explicit
-      # `codex login --with-api-key`, the same mechanism live-e2e/codex/e2e-codex.sh
-      # uses.
+      # `codex login --with-api-key`, the same mechanism scripts/e2e-codex.sh uses.
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*

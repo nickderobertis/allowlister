@@ -1,8 +1,0 @@
-{
-  "$schema": "../node_modules/nx/schemas/project-schema.json",
-  "name": "live-e2e-lib",
-  "//": "Helpers every live harness suite sources (e2e-lib.sh) and the stdio MCP server fixture they share (e2e-mcp-server.py). No targets: it exists so a change here reaches all eight live-e2e-<harness> projects and nothing else.",
-  "projectType": "library",
-  "tags": ["type:live", "scope:harness"],
-  "targets": {}
-}

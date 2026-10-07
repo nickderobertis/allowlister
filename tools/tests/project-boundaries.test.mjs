@@ -65,11 +65,11 @@ test("the contract may not depend on the crate it serves", () => {
 test("nothing outside the live tier may depend on a live suite", () => {
   const dir = copyTree();
   edit(dir, "project.json", (p) => (p.implicitDependencies = ["live-e2e-claude"]));
-  edit(dir, "tests/e2e/project.json", (p) => p.implicitDependencies.push("live-e2e-lib"));
+  edit(dir, "tests/e2e/project.json", (p) => p.implicitDependencies.push("live-e2e-codex"));
   const out = check(dir);
   assert.equal(out.status, 1);
   assert.match(out.stderr, /allowlister \(type:app\) may not depend on live-e2e-claude \(type:live\)/);
-  assert.match(out.stderr, /allowlister-e2e \(type:e2e\) may not depend on live-e2e-lib \(type:live\)/);
+  assert.match(out.stderr, /allowlister-e2e \(type:e2e\) may not depend on live-e2e-codex \(type:live\)/);
 });
 
 test("the crate may not depend on its e2e suite through Cargo either", () => {

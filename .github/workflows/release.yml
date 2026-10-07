@@ -43,9 +43,11 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest,cargo-llvm-cov
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] a recorded standing decision (this file's header, .github/AGENTS.md): a release cut by hand never had a release-PR sweep, and the release event cannot tell the two kinds apart, so the release always re-runs clippy and both test tiers before any binary uploads.
       - run: just clippy all
       - run: just test all
       - run: just test-e2e all
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit]
 
   upload:
     name: upload (${{ matrix.target }})

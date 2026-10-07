@@ -133,8 +133,10 @@ fmt tier="affected": (format tier)
 # Check formatting without writing (fails on any diff).
 fmt-check tier="affected": (nx-tier tier "-t format-check")
 
+# llmlint: ignore-block[diagnostics_error_or_absent] every rustc warning already fails the gate: the `lint` target runs clippy with -D warnings over the same crates, --all-targets and --all-features, so a warning cargo check prints here is an error one target over; repeating -D warnings via RUSTFLAGS would make cargo rebuild the dependency graph for each flag set.
 # Type-check all targets and features of each affected crate.
 typecheck tier="affected": (nx-tier tier "-t typecheck")
+# llmlint: ignore-end[diagnostics_error_or_absent]
 
 # Covers clippy per crate, the workflow-matrix drift gate and the project
 # boundaries.
@@ -149,8 +151,8 @@ clippy-fix:
     cargo clippy --fix --allow-dirty --allow-staged --locked --workspace --all-targets --all-features
 
 # Asserts every .github/workflows/e2e-*.yml matches the single source in
-# .github/scripts/check-e2e-matrix.sh (no push trigger; claude/codex keep the
-# full PR matrix, the rest Linux-only on PR; on-demand `os` dispatch). It is the
+# scripts/check-e2e-matrix.sh (no push trigger; claude/codex keep the full PR
+# matrix, the rest Linux-only on PR; on-demand `os` dispatch). It is the
 # ci-workflows project's lint target, so `lint` runs it too. See .github/AGENTS.md.
 # Drift gate for the live-e2e CI matrix contract.
 lint-workflows:
@@ -171,39 +173,39 @@ test-e2e tier="affected": (nx-tier tier "-t test --projects=tag:type:e2e")
 
 # Live check against the real `claude` CLI (needs Claude Code + auth + network; opt-in, not in full-check).
 test-claude:
-    @bash live-e2e/claude/e2e-claude.sh
+    @bash scripts/e2e-claude.sh
 
 # Live check against the real `cursor-agent` CLI (needs Cursor CLI + auth + network; opt-in, not in full-check).
 test-cursor:
-    @bash live-e2e/cursor/e2e-cursor.sh
+    @bash scripts/e2e-cursor.sh
 
 # Live check against the real `codex` CLI (needs Codex CLI + auth + network; opt-in, not in full-check).
 test-codex:
-    @bash live-e2e/codex/e2e-codex.sh
+    @bash scripts/e2e-codex.sh
 
 # Live check against the real `copilot` CLI (needs Copilot CLI + auth + network; opt-in, not in full-check).
 test-copilot:
-    @bash live-e2e/copilot/e2e-copilot.sh
+    @bash scripts/e2e-copilot.sh
 
 # Live check against the real `crush` CLI (needs Crush + a provider key + network; opt-in, not in full-check).
 test-crush:
-    @bash live-e2e/crush/e2e-crush.sh
+    @bash scripts/e2e-crush.sh
 
 # Live check against the real `qwen` CLI (needs Qwen Code + a provider key + network; opt-in, not in full-check).
 test-qwen:
-    @bash live-e2e/qwen/e2e-qwen.sh
+    @bash scripts/e2e-qwen.sh
 
 # Live check against the real `goose` CLI (needs Goose + a provider key + network; opt-in, not in full-check).
 test-goose:
-    @bash live-e2e/goose/e2e-goose.sh
+    @bash scripts/e2e-goose.sh
 
 # Live check against the real `opencode` CLI (needs OpenCode + a provider key + network; opt-in, not in full-check).
 test-opencode:
-    @bash live-e2e/opencode/e2e-opencode.sh
+    @bash scripts/e2e-opencode.sh
 
 # Install the refine-allowlist skill via `gh skill` and assert its CLI contract (needs gh 2.93+; opt-in, not in full-check).
 verify-skill:
-    @bash skills/verify-skill-install.sh
+    @bash scripts/verify-skill-install.sh
 
 # coverage:coverage runs after both crates' instrumented `test` targets and
 # merges their profiles; the floor lives in tools/coverage/coverage.sh.
@@ -308,8 +310,10 @@ check tier="affected":
     #!/usr/bin/env bash
     set -euo pipefail
     case {{ quote(tier) }} in
+        # llmlint: ignore-block[diagnostics_error_or_absent] the build, test and release-check compilations are of the same sources `lint` checks with clippy -D warnings over --all-targets --all-features, so any rustc warning already fails this recipe through that target; denying again per invocation would rebuild the graph per RUSTFLAGS set.
         affected) base="$(bash scripts/nx-base.sh)"; exec bash scripts/nx affected --base="$base" --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
         all) exec bash scripts/nx run-many --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
+        # llmlint: ignore-end[diagnostics_error_or_absent]
         *) printf "unknown tier '%s' — use 'affected' (the default) or 'all'\n" {{ quote(tier) }} >&2; exit 2 ;;
     esac
 
