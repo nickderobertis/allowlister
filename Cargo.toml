@@ -4,7 +4,7 @@
 # test-only and never released (release-plz.toml).
 [package]
 name = "allowlister"
-version = "0.5.10"
+version = "0.5.11"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
