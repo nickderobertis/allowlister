@@ -307,7 +307,8 @@ check tier="affected" skip="":
     #!/usr/bin/env bash
     set -euo pipefail
     targets=(format-check lint typecheck test build doc release-check coverage supply-chain)
-    read -ra skips <<< {{ quote(skip) }}
+    # `-d ''` reads every line of `skip`, so a newline cannot hide a name from the check below.
+    read -r -d '' -a skips <<< {{ quote(skip) }} || true
     # The `${a[@]+...}` form keeps an empty array legal under `set -u` on bash 3.2 (macOS).
     for s in ${skips[@]+"${skips[@]}"}; do
         [[ " ${targets[*]} " == *" $s "* ]] || { printf "unknown gate target '%s' to skip — choose from: %s\n" "$s" "${targets[*]}" >&2; exit 2; }

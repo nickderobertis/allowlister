@@ -204,20 +204,22 @@ function gateSandbox() {
   mkdirSync(join(dir, "bin"));
   writeFileSync(join(dir, "justfile"), readFileSync(join(repo, "justfile"), "utf8"));
   const record = join(dir, "nx-calls");
-  writeFileSync(join(dir, "scripts/nx"), `printf '%s\\n' "$*" >> ${JSON.stringify(record)}\n`);
+  // The stubs take their paths from the environment, never spliced into shell text.
+  writeFileSync(join(dir, "scripts/nx"), `printf '%s\\n' "$*" >> "$GATE_NX_RECORD"\n`);
   writeFileSync(join(dir, "scripts/nx-base.sh"), "echo 0123abc\n");
   writeFileSync(
     join(dir, "bin/just"),
-    `#!/usr/bin/env bash\nexec ${JSON.stringify(realJust)} --justfile ${JSON.stringify(join(dir, "justfile"))} --working-directory ${JSON.stringify(dir)} "$@"\n`,
+    '#!/usr/bin/env bash\nexec "$GATE_REAL_JUST" --justfile "$GATE_ROOT/justfile" --working-directory "$GATE_ROOT" "$@"\n',
   );
   chmodSync(join(dir, "bin/just"), 0o755);
+  const sandboxEnv = { GATE_NX_RECORD: record, GATE_REAL_JUST: realJust, GATE_ROOT: dir };
   /** Run a step's script as Actions runs `shell: bash`; returns its status and each Nx call, parsed. */
   const run = (script, env = {}) => {
     rmSync(record, { force: true });
     const out = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
       cwd: dir,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ...env },
+      env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ...sandboxEnv, ...env },
     });
     const lines = existsSync(record) ? readFileSync(record, "utf8").trim().split("\n") : [];
     return { status: out.status, stderr: out.stderr, nx: lines.filter(Boolean).map(parseNx) };
@@ -271,6 +273,9 @@ test("the pull-request jobs run supply-chain once, and a local `just check` stil
   assert.equal(typo.status, 2);
   assert.match(typo.stderr, /unknown gate target 'supply-chian'/);
   assert.deepEqual(typo.nx, []);
+  const hidden = run("just check all $'supply-chain\\nsupply-chian'");
+  assert.equal(hidden.status, 2, "a name on a later line of the skip list is checked too");
+  assert.deepEqual(hidden.nx, []);
 });
 
 test("release.yml gates on the single gate recipe, covering every stage its old inline steps ran", { skip: journeySkip }, () => {
