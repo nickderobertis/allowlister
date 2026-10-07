@@ -1,0 +1,47 @@
+# Lint the pull-request title as a Conventional Commit.
+#
+# Squash-merge makes the PR title the one commit subject that lands on main, and
+# release-plz computes the next version and the changelog from those subjects —
+# so a malformed title merges as a commit release-plz cannot classify, and a
+# `feat` or `fix` silently ships no release. This check fails the PR instead.
+#
+# The admitted types are exactly the ones release-plz.toml's `commit_parsers`
+# name (feat, fix, perf, refactor, docs, test, ci, chore, build, style); keep the
+# two lists in lockstep.
+# Making `pr-title` a required status check is a branch-protection setting, not
+# part of this file.
+
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+# Least privilege: the action only reads the pull request it validates.
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-title-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            ci
+            chore
+            build
+            style
