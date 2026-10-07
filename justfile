@@ -145,10 +145,8 @@ clippy tier="affected": (nx-tier tier "-t lint --projects=tag:lang:rust")
 clippy-fix:
     cargo clippy --fix --allow-dirty --allow-staged --locked --workspace --all-targets --all-features
 
-# Asserts every .github/workflows/e2e-*.yml matches the single source in
-# scripts/check-e2e-matrix.sh (no push trigger; claude/codex keep the full PR
-# matrix, the rest Linux-only on PR; on-demand `os` dispatch). It is the
-# ci-workflows project's lint target, so `lint` runs it too. See .github/AGENTS.md.
+# The ci-workflows project's lint target (scripts/check-e2e-matrix.sh), so `lint`
+# runs it too; the contract it holds is in .github/AGENTS.md.
 # Drift gate for the live-e2e CI matrix contract.
 lint-workflows:
     @bash scripts/nx run ci-workflows:lint

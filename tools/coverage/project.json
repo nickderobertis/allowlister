@@ -33,6 +33,16 @@
       "outputs": [
         "{workspaceRoot}/target/llvm-cov-target"
       ]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "default"
+      ],
+      "options": {
+        "command": "node --test tools/coverage/tests/*.test.mjs"
+      },
+      "//": "The coverage driver's own suite (the summary it prints); fast, and not one of the coverage:profiles crates, so the aggregate never waits on it."
     }
   }
 }

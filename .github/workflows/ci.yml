@@ -32,11 +32,8 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
-  # The gate. A clean checkout runs `just bootstrap` then `just check` at the
-  # routed tier: format, type-check, lint, every test target (unit + integration,
-  # binary e2e, schema validation, workflow contracts), enforced coverage,
-  # docs, the release build + plan, and the supply chain. Matrix over the
-  # platforms the binary ships to.
+  # The gate: a clean checkout runs `just bootstrap` then `just check` at the
+  # routed tier, on every platform the binary ships to.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
