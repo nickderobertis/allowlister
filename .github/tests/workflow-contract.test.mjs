@@ -9,7 +9,8 @@
 //   * the review artifact and the informational workflows (notignored, the live
 //     harness suites, skill-install) report none of those contexts;
 //   * release.yml still re-gates clippy, the unit tests and e2e over the crate;
-//   * every setup-node `node-version-file` resolves to the pinned Node version.
+//   * every pinned Node setup reads the .tool-versions `nodejs` pin through the
+//     workflow's own step, run here, never through setup-node's version-file parser.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -188,27 +189,47 @@ test("release.yml still re-gates clippy, the unit tests and e2e over the whole c
   assert.deepEqual(workflows["release.yml"].jobs.upload.needs, "test");
 });
 
-/**
- * The Node version actions/setup-node@v4 reads from a non-JSON version file: the
- * first line matching its pattern. A bare token — a lone `#` comment line — matches
- * too, so it would be resolved as the version and fail every job that sets up Node.
- */
-const setupNodeVersion = (text) => text.match(/^(?:node(js)?\s+)?v?(?<version>[^\s]+)$/m)?.groups?.version ?? text.trim();
+/** Run a Node-pin step's script in a directory holding `toolVersions`; returns its exit status and GITHUB_OUTPUT. */
+function runPinStep(step, toolVersions) {
+  const dir = mkdtempSync(join(tmpdir(), "node-pin-"));
+  scratch.push(dir);
+  writeFileSync(join(dir, ".tool-versions"), toolVersions);
+  const output = join(dir, "output");
+  writeFileSync(output, "");
+  const out = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", step.run], {
+    cwd: dir,
+    encoding: "utf8",
+    env: { ...process.env, GITHUB_OUTPUT: output },
+  });
+  return { status: out.status, output: readFileSync(output, "utf8") };
+}
 
-test("every setup-node version file resolves to the pinned Node version", () => {
-  const steps = Object.entries(workflows).flatMap(([file, wf]) =>
-    Object.values(wf.jobs ?? {}).flatMap((job) =>
-      (job.steps ?? []).filter((s) => s.uses?.startsWith("actions/setup-node@") && s.with?.["node-version-file"]).map((s) => [file, s]),
-    ),
-  );
-  assert.ok(steps.length > 0, "the gate's jobs set up Node from a version file");
-  for (const [file, step] of steps) {
-    const versionFile = step.with["node-version-file"];
-    const text = readFileSync(join(repo, versionFile), "utf8");
-    const pinned = text.match(/^nodejs\s+(\S+)\s*$/m)?.[1];
-    assert.ok(pinned, `${versionFile} pins nodejs`);
-    assert.equal(setupNodeVersion(text), pinned, `${file}: setup-node resolves ${versionFile} to the nodejs pin`);
+test("every pinned Node setup reads the .tool-versions nodejs pin through its own step", { skip: process.platform === "win32" && "bash step" }, () => {
+  const toolVersions = readFileSync(join(repo, ".tool-versions"), "utf8");
+  const pinned = toolVersions.match(/^nodejs\s+(\S+)\s*$/m)?.[1];
+  assert.ok(pinned, ".tool-versions pins nodejs");
+  let pinnedSetups = 0;
+  for (const [file, wf] of Object.entries(workflows)) {
+    for (const [id, job] of Object.entries(wf.jobs ?? {})) {
+      const steps = job.steps ?? [];
+      steps.forEach((step, i) => {
+        if (!step.uses?.startsWith("actions/setup-node@")) return;
+        assert.equal(step.with?.["node-version-file"], undefined, `${file}:${id} must not hand a version file to setup-node's parser`);
+        if (step.with?.["node-version"] !== "${{ steps.node.outputs.version }}") return;
+        pinnedSetups += 1;
+        const pin = steps.slice(0, i).find((s) => s.id === "node");
+        assert.ok(pin, `${file}:${id} reads the pin in a step with id 'node' before setup-node`);
+        // The committed file (its comment lines included) resolves to the pin.
+        assert.deepEqual(runPinStep(pin, toolVersions), { status: 0, output: `version=${pinned}\n` }, `${file}:${id}`);
+        // A file pinning no Node fails the step rather than letting setup-node fall back.
+        assert.notEqual(runPinStep(pin, "#\njust 1.40.0\n").status, 0, `${file}:${id} fails without a nodejs pin`);
+      });
+    }
   }
+  for (const file of ["ci.yml", "release.yml"]) {
+    assert.ok(JSON.stringify(workflows[file]).includes("steps.node.outputs.version"), `${file} sets up the pinned Node`);
+  }
+  assert.ok(pinnedSetups >= 4, `the gate's jobs and the release re-gate set up the pinned Node (found ${pinnedSetups})`);
 });
 
 test("pages.yml stages only the published schema files, never schema/'s project files", { skip: process.platform === "win32" && "bash step" }, () => {

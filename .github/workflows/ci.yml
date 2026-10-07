@@ -49,10 +49,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # Node runs Nx; the version is the .tool-versions pin.
+      # Node runs Nx; the version is the .tool-versions `nodejs` pin, read by its
+      # own step because setup-node's node-version-file parser takes the first
+      # lone-token line (a bare `#` comment) as the version.
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version-file: .tool-versions
+          node-version: ${{ steps.node.outputs.version }}
       # uv runs the schema validator (config-schema:test).
       - uses: astral-sh/setup-uv@v6
       - name: Install pinned toolchain
@@ -88,9 +97,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version-file: .tool-versions
+          node-version: ${{ steps.node.outputs.version }}
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -114,9 +130,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version-file: .tool-versions
+          node-version: ${{ steps.node.outputs.version }}
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2

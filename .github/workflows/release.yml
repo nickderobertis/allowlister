@@ -34,9 +34,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Node runs Nx at the .tool-versions pin (read as in ci.yml).
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         with:
-          node-version-file: .tool-versions
+          node-version: ${{ steps.node.outputs.version }}
       - uses: astral-sh/setup-uv@v6
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
