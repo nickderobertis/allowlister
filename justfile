@@ -311,9 +311,9 @@ check tier="affected" skip="":
     read -r -d '' -a skips <<< {{ quote(skip) }} || true
     # The `${a[@]+...}` form keeps an empty array legal under `set -u` on bash 3.2 (macOS).
     for s in ${skips[@]+"${skips[@]}"}; do
-        [[ " ${targets[*]} " == *" $s "* ]] || { printf "unknown gate target '%s' to skip — choose from: %s\n" "$s" "${targets[*]}" >&2; exit 2; }
         kept=()
         for t in "${targets[@]}"; do [ "$t" = "$s" ] || kept+=("$t"); done
+        [ "${#kept[@]}" -lt "${#targets[@]}" ] || { printf "unknown gate target '%s' to skip — choose from: %s\n" "$s" "${targets[*]}" >&2; exit 2; }
         targets=(${kept[@]+"${kept[@]}"})
     done
     case {{ quote(tier) }} in

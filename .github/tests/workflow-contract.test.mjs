@@ -276,6 +276,10 @@ test("the pull-request jobs run supply-chain once, and a local `just check` stil
   const hidden = run("just check all $'supply-chain\\nsupply-chian'");
   assert.equal(hidden.status, 2, "a name on a later line of the skip list is checked too");
   assert.deepEqual(hidden.nx, []);
+  // Names match exactly: a pattern names no target.
+  const glob = run("just check all '*'");
+  assert.equal(glob.status, 2, "a glob is not a gate target");
+  assert.deepEqual(glob.nx, []);
 });
 
 test("release.yml gates on the single gate recipe, covering every stage its old inline steps ran", { skip: journeySkip }, () => {
