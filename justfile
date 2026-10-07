@@ -298,14 +298,27 @@ profile *args:
 # reach, or every project with `just check all` (the release-PR sweep).
 # `bootstrap` then `check` is what CI runs; nothing here is warnings-only, and
 # any failing target fails the recipe.
+# `skip` names gate targets (space-separated) to leave out, only for a CI job
+# whose sibling context runs that target itself: the `test (<os>)` jobs pass
+# `supply-chain`, which `deps & security` runs once. A name outside the gate's
+# target list aborts rather than quietly skipping nothing.
 # Full quality gate (`just check all` sweeps every project).
-check tier="affected":
+check tier="affected" skip="":
     #!/usr/bin/env bash
     set -euo pipefail
+    targets=(format-check lint typecheck test build doc release-check coverage supply-chain)
+    read -ra skips <<< {{ quote(skip) }}
+    # The `${a[@]+...}` form keeps an empty array legal under `set -u` on bash 3.2 (macOS).
+    for s in ${skips[@]+"${skips[@]}"}; do
+        [[ " ${targets[*]} " == *" $s "* ]] || { printf "unknown gate target '%s' to skip — choose from: %s\n" "$s" "${targets[*]}" >&2; exit 2; }
+        kept=()
+        for t in "${targets[@]}"; do [ "$t" = "$s" ] || kept+=("$t"); done
+        targets=(${kept[@]+"${kept[@]}"})
+    done
     case {{ quote(tier) }} in
         # llmlint: ignore-block[diagnostics_error_or_absent] the build, test and release-check compilations are of the same sources `lint` checks with clippy -D warnings over --all-targets --all-features, so any rustc warning already fails this recipe through that target; denying again per invocation would rebuild the graph per RUSTFLAGS set.
-        affected) base="$(bash scripts/nx-base.sh)"; exec bash scripts/nx affected --base="$base" --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
-        all) exec bash scripts/nx run-many --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
+        affected) base="$(bash scripts/nx-base.sh)"; exec bash scripts/nx affected --base="$base" --exclude=tag:type:live -t "${targets[@]}" ;;
+        all) exec bash scripts/nx run-many --exclude=tag:type:live -t "${targets[@]}" ;;
         # llmlint: ignore-end[diagnostics_error_or_absent]
         *) printf "unknown tier '%s' — use 'affected' (the default) or 'all'\n" {{ quote(tier) }} >&2; exit 2 ;;
     esac

@@ -25,15 +25,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Gate the release on a passing test run so untested artifacts never publish.
-  # Kept for the manual-release fallback (a release cut by hand skips the
-  # release-PR sweep). The recipes delegate to Nx, so each runs at the `all` tier
-  # to cover the whole crate: clippy, the unit + integration tests, and the
-  # binary e2e suite.
+  # Gate the release on the full gate so untested artifacts never publish. Kept
+  # for the manual-release fallback (a release cut by hand skips the release-PR
+  # sweep): `just check all` runs every gate target over every project — clippy,
+  # the unit + integration tests and the binary e2e suite among them.
   test:
     runs-on: ubuntu-latest
     steps:
+      # Full history, as ci.yml's release-PR sweep checks out.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # Node runs Nx at the .tool-versions pin (read as in ci.yml).
       - name: Read the pinned Node version
         id: node
@@ -48,13 +50,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
+      # The cargo subcommands the gate's targets run (ci.yml's coverage and deps
+      # jobs install the same).
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-nextest,cargo-llvm-cov
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] a recorded standing decision (this file's header, .github/AGENTS.md): a release cut by hand never had a release-PR sweep, and the release event cannot tell the two kinds apart, so the release always re-runs clippy and both test tiers before any binary uploads.
-      - run: just clippy all
-      - run: just test all
-      - run: just test-e2e all
+          tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit] a recorded standing decision (this file's header, .github/AGENTS.md): a release cut by hand never had a release-PR sweep, and the release event cannot tell the two kinds apart, so the release always re-runs the gate before any binary uploads.
+      - name: Gate (just check all)
+        run: just check all
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit]
 
   upload:

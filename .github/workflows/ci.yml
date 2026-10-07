@@ -82,11 +82,14 @@ jobs:
       - name: Choose the gate tier
         id: tier
         run: node .github/scripts/gate-tier.mjs
+      # Every gate target but `supply-chain`: platform-independent, it runs once,
+      # in `deps & security`, rather than again in each OS cell. A local `just
+      # check` still runs it.
       - name: Gate (just check)
         env:
           TIER: ${{ steps.tier.outputs.tier }}
           NX_BASE: ${{ steps.tier.outputs.base }}
-        run: just check "$TIER"
+        run: just check "$TIER" supply-chain
 
   # Dedicated coverage job: a standalone required context and a fast path to the
   # report on Linux. The same 95% floor is also enforced inside `just check`.
@@ -122,7 +125,8 @@ jobs:
         # llmlint: ignore[no_second_broader_sweep_over_an_already_gated_commit] `coverage` is one of the fixed required contexts branch protection names, so it must report on every pull request on its own; folding it into `test (<os>)` (or making it reuse that job) changes the required-check contract, which is a governance decision outside this workflow.
         run: just test-cov "$TIER"
 
-  # Supply chain: run once on Linux (not duplicated across the OS matrix).
+  # Supply chain: the gate's `supply-chain` target, run once on Linux — the
+  # single run per commit, since the `test (<os>)` jobs skip it from their gate.
   deps:
     name: deps & security
     runs-on: ubuntu-latest
