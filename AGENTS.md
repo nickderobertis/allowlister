@@ -70,8 +70,8 @@ from elsewhere is a `{workspaceRoot}/...` input of its target, which Nx also
 treats as affecting it. Edges (Cargo path deps, `implicitDependencies`) are only
 for what a project builds against or drives; a Cargo edge is always restated as
 an implicit dependency (Nx reads no manifest; `workspace:lint` checks it).
-`.nxignore` keeps files no target reads (agent notes, changelog, contributor
-docs) out of the graph — never list a file a target reads there. A suite that
+`.nxignore` keeps files no target reads (agent notes, docs, dev-environment
+settings) out of the graph — never list a file a target reads there. A suite that
 touches an external service is a `type:live` project with no gate target.
 
 ## Hard rules

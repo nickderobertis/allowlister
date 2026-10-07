@@ -206,8 +206,7 @@ verify-skill:
 test-cov tier="affected": (nx-tier tier "-t coverage")
 
 # Build the API docs (warnings are errors).
-doc:
-    @bash scripts/nx run allowlister:doc
+doc tier="affected": (nx-tier tier "-t doc")
 
 # Supply chain: cargo-deny (advisories, bans, licenses, sources) + cargo-machete.
 supply-chain tier="affected": (nx-tier tier "-t supply-chain")

@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/nx/schemas/project-schema.json",
   "name": "allowlister",
-  "//": "The released crate: lib + bin `allowlister`, its unit tests and the in-process integration tests in tests/*.rs. As the root project it also owns every file no nested project claims (the justfile, README, Cargo.lock), so a change to any of those reaches it and its dependents; agent notes, the changelog and contributor docs are in .nxignore, so they reach nothing; its inputs are narrowed to what the crate compiles and tests from so cached lint/typecheck results survive a docs edit. tests/schema.rs reads the published schema, hence that one config-schema file among the inputs (an input, not an edge, so the schema validator's own changes never rerun this crate).",
+  "//": "The released crate: lib + bin `allowlister`, its unit tests and the in-process integration tests in tests/*.rs. As the root project it also owns every file no nested project claims (the justfile, README, Cargo.lock), so a change to any of those reaches it and its dependents; agent notes, docs and dev-environment settings (agent, hook, editor) are in .nxignore, so they reach nothing; its inputs are narrowed to what the crate compiles and tests from so cached lint/typecheck results survive a docs edit. tests/schema.rs reads the published schema, hence that one config-schema file among the inputs (an input, not an edge, so the schema validator's own changes never rerun this crate).",
   "projectType": "application",
   "tags": [
     "type:app",
