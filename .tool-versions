@@ -1,14 +1,16 @@
 # asdf-managed tool versions for a reproducible local setup.
-#
+
 # Scope: tools needed to *bootstrap* the project. The Rust toolchain is
 # deliberately NOT managed here — rust-toolchain.toml + rustup remain the single
 # source of truth (channel, components, targets, profile). Adding `rust` here
 # would create a second, conflicting toolchain mechanism.
-#
+
 # `just` is pinned so a fresh machine can run `just setup` (and the rest of the
 # gate) at a known version before any cargo tooling is installed. Bump alongside
 # the developer-tool versions in the justfile via `just upgrade`.
 just 1.40.0
 # Node runs Nx, the orchestrator every gate recipe delegates to (the Nx version
-# itself is locked in package-lock.json). CI's setup-node reads this line too.
+# itself is locked in package-lock.json). CI's setup-node reads this line too,
+# taking the first line that is a single token as the version: keep every
+# comment line more than a bare `#`.
 nodejs 24.13.0

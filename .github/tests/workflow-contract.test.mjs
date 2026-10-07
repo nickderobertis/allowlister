@@ -8,7 +8,8 @@
 //     sweep as the job's failure;
 //   * the review artifact and the informational workflows (notignored, the live
 //     harness suites, skill-install) report none of those contexts;
-//   * release.yml still re-gates clippy, the unit tests and e2e over the crate.
+//   * release.yml still re-gates clippy, the unit tests and e2e over the crate;
+//   * every setup-node `node-version-file` resolves to the pinned Node version.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -185,6 +186,29 @@ test("release.yml still re-gates clippy, the unit tests and e2e over the whole c
   const runs = job.steps.map((s) => s.run).filter(Boolean);
   for (const cmd of ["just clippy all", "just test all", "just test-e2e all"]) assert.ok(runs.includes(cmd), `release.yml test runs ${cmd}`);
   assert.deepEqual(workflows["release.yml"].jobs.upload.needs, "test");
+});
+
+/**
+ * The Node version actions/setup-node@v4 reads from a non-JSON version file: the
+ * first line matching its pattern. A bare token — a lone `#` comment line — matches
+ * too, so it would be resolved as the version and fail every job that sets up Node.
+ */
+const setupNodeVersion = (text) => text.match(/^(?:node(js)?\s+)?v?(?<version>[^\s]+)$/m)?.groups?.version ?? text.trim();
+
+test("every setup-node version file resolves to the pinned Node version", () => {
+  const steps = Object.entries(workflows).flatMap(([file, wf]) =>
+    Object.values(wf.jobs ?? {}).flatMap((job) =>
+      (job.steps ?? []).filter((s) => s.uses?.startsWith("actions/setup-node@") && s.with?.["node-version-file"]).map((s) => [file, s]),
+    ),
+  );
+  assert.ok(steps.length > 0, "the gate's jobs set up Node from a version file");
+  for (const [file, step] of steps) {
+    const versionFile = step.with["node-version-file"];
+    const text = readFileSync(join(repo, versionFile), "utf8");
+    const pinned = text.match(/^nodejs\s+(\S+)\s*$/m)?.[1];
+    assert.ok(pinned, `${versionFile} pins nodejs`);
+    assert.equal(setupNodeVersion(text), pinned, `${file}: setup-node resolves ${versionFile} to the nodejs pin`);
+  }
 });
 
 test("pages.yml stages only the published schema files, never schema/'s project files", { skip: process.platform === "win32" && "bash step" }, () => {
