@@ -1,0 +1,14 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "live-e2e-crush",
+  "//": "The live crush suite: drives the real crush CLI (network, a model call, a credential) against the release binary. Out of the gate entirely — its only target is live, which no gate recipe names — and run by .github/workflows/e2e-crush.yml through `just test-crush`.",
+  "projectType": "application",
+  "tags": ["type:live", "scope:harness"],
+  "implicitDependencies": ["allowlister", "live-e2e-lib"],
+  "targets": {
+    "live": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash live-e2e/crush/e2e-crush.sh" }
+    }
+  }
+}

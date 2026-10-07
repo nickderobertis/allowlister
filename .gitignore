@@ -22,3 +22,6 @@
 /.allowlister.local.json
 # Personal Claude Code settings (per-machine hooks/permissions; not shared)
 /.claude/settings.local.json
+# Nx: the locked `npm ci` install and its local cache / workspace data
+/node_modules/
+/.nx/

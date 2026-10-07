@@ -39,18 +39,22 @@ follow-ups (see "Workflow").
   coverage floor (lines, functions, regions) in the gate, and `cargo deny` +
   `cargo machete` as a dedicated supply-chain job. The release tier follows the
   reference's tag-driven `release-plz` + per-target native-runner archive model.
-- **Cross-cutting:** `ci.md` (always) — CI runs `just bootstrap` then `just check`
-  on a Linux/macOS/Windows matrix, with coverage and the dependency/security
-  checks as their own jobs, and the live per-CLI harness checks plus benchmarks
-  kept out of the gate as their own informational workflows.
-- **Excluded — and why:** `monorepo.md` does not apply (one deliverable, one
-  language — a single binary crate, not multiple apps/packages). `shapes/library.md`
-  does not apply: this ships an executable, not a published library API (the
-  intentionally public Rust surface in `lib.rs` exists only to test the engine,
-  not as a distribution target). No intersection reference is pulled in because a
-  `rust-cli.md` does not exist yet; its concerns (snapshot-testing a compiled
-  binary, cross-platform release artifacts) are handled here directly via the
-  `tests/e2e` suite and the release workflow.
+- **Intersection:** `intersections/rust-cli.md` — the binary-driving suite is its
+  own `allowlister-e2e` crate whose `test` depends on `allowlister:build`,
+  coverage is enforced once over the union of the crates' runs, and release
+  archives are built per target on native runners with one asset-naming contract.
+- **Base + cross-cutting:** `base.md`; `ci.md` (CI runs `just bootstrap` then
+  `just check` at the routed tier on a Linux/macOS/Windows matrix, with coverage
+  and the supply chain as their own jobs, the live harness checks and benchmarks
+  as informational workflows, plus the pr-title lint and the notignored
+  suppressions comment); `llmlint.md` (the judged tier, `llmlint.yml`);
+  `releasing.md` (release-plz, see "Commits, releases, and merging");
+  `project-graph.md` (Nx over the projects below; Cargo keeps one `Cargo.lock`).
+  The crates also declare a `typecheck` target (`cargo check --all-targets`):
+  the gate ran that phase before the graph, so it stays.
+- **Excluded — and why:** `shapes/library.md` does not apply: this ships an
+  executable, not a published library API (the intentionally public Rust surface
+  in `lib.rs` exists only to test the engine, not as a distribution target).
 
 ## Layout
 
@@ -65,6 +69,25 @@ follow-ups (see "Workflow").
 - `src/config.rs` — JSON rule schema and user/project merge (a boundary, not
   domain).
 - `src/errors.rs` — typed errors.
+
+Nx projects (`project.json` each; `just` recipes run them by tier — see
+"Quality gate"). A project owns every file under its directory; a file it reads
+from elsewhere is a `{workspaceRoot}/...` input, which Nx also treats as
+affecting it.
+
+- `allowlister` (repo root, `type:app`) — the crate; unit + `tests/*.rs`
+  integration tests; also owns every file no nested project claims.
+- `allowlister-e2e` (`tests/e2e/`, `type:e2e`) — workspace member crate driving
+  the compiled binary.
+- `config-schema` (`schema/`, `type:contract`) — the published JSON Schema and
+  its validator over `examples/` and `.allowlister.jsonc`.
+- `ci-workflows` (`.github/`, `type:tooling`) — workflows, the e2e-matrix drift
+  gate, the tier router, and the workflow-contract tests.
+- `workspace` (`tools/`) and `coverage` (`tools/coverage/`) (`type:workspace`) —
+  module boundaries, supply chain, MSRV; the aggregate coverage floor.
+- `live-e2e-<harness>` + `live-e2e-lib` (`live-e2e/`) and
+  `skill-refine-allowlist` (`skills/`) (`type:live`) — external suites with no
+  gate target, run only by their own workflows.
 
 ## Hard rules
 
@@ -102,7 +125,15 @@ follow-ups (see "Workflow").
 - Convert warning-level diagnostics to errors or disable the check. No lint
   baselines, no ignored-warning backlog. Keep aspirational checks disabled until
   they can be enforced as errors.
-- `just full-check` is the gate and stops at the first failing phase.
+- `just check` (alias `full-check`) is the gate: Nx runs `format-check lint
+  typecheck test build doc release-check coverage supply-chain` over the affected
+  projects (`just check all` sweeps every gate-eligible project); any failing
+  target fails the recipe. The affected tier always keys off an explicit base
+  (`NX_BASE`, else the merge base with `origin/main`), never Nx's default.
+- Module boundaries are tags checked by `workspace:lint`
+  (`tools/project-boundaries.json`): the contract depends on nothing it serves,
+  the crate on none of its suites, and nothing outside the live tier on a live
+  project.
 - Successful `just` recipes print little; failures preserve paths, line/columns,
   rule names, diffs, and exit codes. Noisy diagnostics belong in explicit recipes
   (`doctor`, `cargo-tree`), never in the default gate.
@@ -117,14 +148,27 @@ follow-ups (see "Workflow").
   effects across critical user journeys — not just that it starts.
 - A user-visible change or bug fix ships with a test that fails without it. Tests
   are deterministic, isolated (temp dirs/fixtures), and network-free.
-- Coverage is enforced with a floor; a miss fails the command. Do not lower the
-  floor to pass.
+- Coverage is enforced with a floor (95% lines, functions and regions, over the
+  crate's sources minus `src/main.rs` and `tests/`, combined across the unit and
+  e2e projects by `coverage:coverage`); a miss fails the command. Do not lower
+  the floor to pass.
 
-## Releasing & CI
+## Commits, releases, and merging
 
-- CI runs the full gate on Linux/macOS/Windows for every PR and main push with
-  least-privilege permissions; it must pass before any release artifact
-  publishes.
+- Releases are **batched**: release-plz's release PR accumulates every merge
+  since the last release, so the shipped commit is not one any merge job swept.
+  The **broader tier** (`just check all`) therefore runs on that release PR
+  (head branch `release-plz-*`) — release-prep — and **merge-to-main stays on the
+  affected tier**, as does every other PR. `.github/scripts/gate-tier.mjs` routes
+  each event; the same `test (<os>)`, `coverage` and `deps & security` contexts
+  report on every PR, so a red sweep keeps the release PR's required contexts red
+  and auto-merge cannot cut a release past it.
+- CI runs the gate on Linux/macOS/Windows with least-privilege permissions; it
+  must pass before any release artifact publishes. `release.yml` re-runs clippy,
+  the unit tests and e2e over the whole crate on `release: published`, kept on
+  purpose for a release cut by hand.
+- Squash-merge makes the PR title the release input: the `pr-title` check admits
+  exactly the Conventional types `release-plz.toml`'s `commit_parsers` name.
 - Releases are automated from Conventional Commits by release-plz: a merged
   release PR bumps the version + changelog, tags `vX.Y.Z`, and cuts the GitHub
   Release, which builds, archives, and checksums cross-platform binaries. Never

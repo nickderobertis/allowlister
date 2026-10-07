@@ -1,7 +1,7 @@
 name: E2E (Copilot)
 
 # Live end-to-end check that drives the real GitHub Copilot CLI (`copilot`)
-# against allowlister wired as a preToolUse hook (scripts/e2e-copilot.sh). Unlike
+# against allowlister wired as a preToolUse hook (live-e2e/copilot/e2e-copilot.sh). Unlike
 # ci.yml this needs network, a model call, and the COPILOT_GITHUB_TOKEN secret, so
 # it lives in its own workflow gated to trusted contexts only.
 #
@@ -55,7 +55,7 @@ jobs:
         os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # Bash on every platform: the live checks are bash scripts (live-e2e/*/e2e-*.sh),
     # so Windows runs them through Git Bash rather than the default PowerShell.
     defaults:
       run:

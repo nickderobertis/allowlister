@@ -14,6 +14,28 @@ use predicates::prelude::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+/// The repository root. This suite is its own workspace member under `tests/e2e`,
+/// so the shipped example configs it loads live two directories up.
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+/// The `allowlister` crate's version, read from its manifest at the repo root —
+/// this crate's own `CARGO_PKG_VERSION` is a placeholder (it is never released).
+fn allowlister_version() -> String {
+    let manifest = fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
+    let package = manifest
+        .split("\n[")
+        .find(|section| section.starts_with("package]"))
+        .expect("Cargo.toml has a [package] table");
+    package
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("[package] declares a literal version")
+        .to_owned()
+}
+
 /// A hermetic config sandbox: user config under XDG, project config in a
 /// `.git`-rooted working directory.
 struct Sandbox {
@@ -23,10 +45,9 @@ struct Sandbox {
 
 impl Sandbox {
     fn new() -> Sandbox {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let user_cfg = fs::read_to_string(manifest.join("examples/user-config.json")).unwrap();
-        let project_cfg =
-            fs::read_to_string(manifest.join("examples/project-config.json")).unwrap();
+        let root = repo_root();
+        let user_cfg = fs::read_to_string(root.join("examples/user-config.json")).unwrap();
+        let project_cfg = fs::read_to_string(root.join("examples/project-config.json")).unwrap();
 
         let xdg = TempDir::new().unwrap();
         let allowlister_dir = xdg.path().join("allowlister");
@@ -224,7 +245,7 @@ fn version_prints_package_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+        .stdout(predicate::str::contains(allowlister_version()));
 }
 
 #[test]

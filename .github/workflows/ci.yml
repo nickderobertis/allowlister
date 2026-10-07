@@ -1,5 +1,25 @@
 name: CI
 
+# Every gate job runs a `just` recipe at the tier .github/scripts/gate-tier.mjs
+# chooses for the event — the same recipes developers run, so local and CI cannot
+# drift (AGENTS.md "Commits, releases, and merging" records the placement):
+#
+#   * release-plz's release PR (head branch `release-plz-*`) runs the BROADER
+#     tier, `just <recipe> all`: one full sweep over every gate-eligible project.
+#     Releases are batched behind that PR, so it is the one lifecycle point the
+#     shipped commit is swept; a red sweep turns these same contexts red and
+#     auto-merge cannot cut a release past it.
+#   * every other pull request, and every push to main, runs the AFFECTED tier
+#     against an explicitly derived base (the merge base with the PR's base
+#     branch; the previous tip on a push).
+#
+# Fixed status-check contexts (branch protection names them): `test
+# (ubuntu-latest)`, `test (macos-latest)`, `test (windows-latest)`, `coverage`,
+# `deps & security`. Keep these job names and matrix values. None of these jobs
+# carries an `if`, a `needs`, or a path filter, so each reports on every pull
+# request — including one whose targets are all unaffected, where Nx runs nothing
+# and the job passes. .github/tests/workflow-contract.test.mjs enforces this.
+
 on:
   push:
     branches: [main]
@@ -21,11 +41,11 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
-  # The gate. A clean checkout runs `just bootstrap` then `just check` — the same
-  # full quality gate developers run locally (format, type-check, lint, the full
-  # test suite incl. binary e2e, enforced coverage, deps/security, docs, release
-  # build). Matrix over the platforms the binary ships to. The context names
-  # (`test (ubuntu-latest)`, ...) are the protected required checks — keep stable.
+  # The gate. A clean checkout runs `just bootstrap` then `just check` at the
+  # routed tier: format, type-check, lint, every test target (unit + integration,
+  # binary e2e, schema validation, workflow contracts), enforced coverage,
+  # docs, the release build + plan, and the supply chain. Matrix over the
+  # platforms the binary ships to.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -33,8 +53,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
+      # Full history: the affected tier resolves its base from it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Node runs Nx; the version is the .tool-versions pin.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+      # uv runs the schema validator (config-schema:test).
+      - uses: astral-sh/setup-uv@v6
       - name: Install pinned toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -50,8 +82,14 @@ jobs:
           tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
       - name: Bootstrap
         run: just bootstrap
+      - name: Choose the gate tier
+        id: tier
+        run: node .github/scripts/gate-tier.mjs
       - name: Gate (just check)
-        run: just check
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NX_BASE: ${{ steps.tier.outputs.base }}
+        run: just check "$TIER"
 
   # Dedicated coverage job: a standalone required context and a fast path to the
   # report on Linux. The same 95% floor is also enforced inside `just check`.
@@ -60,12 +98,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest,cargo-llvm-cov
-      - run: just test-cov
+      - name: Choose the gate tier
+        id: tier
+        run: node .github/scripts/gate-tier.mjs
+      - name: Coverage (just test-cov)
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NX_BASE: ${{ steps.tier.outputs.base }}
+        run: just test-cov "$TIER"
 
   # Supply chain: run once on Linux (not duplicated across the OS matrix).
   deps:
@@ -73,28 +123,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-deny,cargo-machete
-      - run: just deps-check
-      - run: just security
-
-  # Schema drift: the published JSON Schema must accept every config the project
-  # ships (examples, recommended profiles, and the repo's own dogfood config).
-  # Deterministic and Python-based, so it runs as its own Linux job rather than
-  # inside the Rust gate.
-  schema:
-    name: schema validation
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - run: pip install jsonschema
-      - run: python3 scripts/validate-schema.py
+      - name: Choose the gate tier
+        id: tier
+        run: node .github/scripts/gate-tier.mjs
+      - name: Supply chain (just supply-chain)
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NX_BASE: ${{ steps.tier.outputs.base }}
+        run: just supply-chain "$TIER"
 
   llmlint:
     if: github.event_name == 'pull_request'
@@ -111,7 +157,8 @@ jobs:
       # oneharness.toml), so the binary must be on PATH AND authenticated — else
       # its fallback chain finds no runnable harness and the judge errors. The
       # codex CLI does not read OPENAI_API_KEY from the env; it needs an explicit
-      # `codex login --with-api-key`, the same mechanism scripts/e2e-codex.sh uses.
+      # `codex login --with-api-key`, the same mechanism live-e2e/codex/e2e-codex.sh
+      # uses.
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*

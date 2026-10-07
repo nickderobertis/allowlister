@@ -1,6 +1,6 @@
 # Shared helpers for the live e2e scripts' tool-use cases (built-in tools + MCP).
 #
-# Each scripts/e2e-<harness>.sh proves the SHELL path (deny `touch`, allow
+# Each live-e2e/<harness>/e2e-<harness>.sh proves the SHELL path (deny `touch`, allow
 # `echo`/`mkdir`) on its own. This library adds the two non-shell paths the
 # tool-use feature introduced, so every harness's live check also exercises:
 #
@@ -72,7 +72,7 @@ JSON
 }
 
 # Absolute path to the shared stdio MCP server fixture. Arg: repo_root.
-al_mcp_server() { printf '%s/scripts/e2e-mcp-server.py' "$1"; }
+al_mcp_server() { printf '%s/live-e2e/e2e-mcp-server.py' "$1"; }
 
 # True when python3 can run the MCP server fixture.
 al_have_python() { command -v python3 >/dev/null 2>&1; }

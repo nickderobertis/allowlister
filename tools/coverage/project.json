@@ -1,0 +1,20 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "coverage",
+  "//": "The repo-level coverage gate: clears the shared profile directory before the crates' instrumented test runs, then merges their profiles and enforces the 95% line/function/region floor over the allowlister crate's sources (src/main.rs and tests/ excluded) once, across the unit and e2e projects. It depends on exactly the two crates whose tests write profiles, so a change elsewhere never reruns the Rust suites.",
+  "projectType": "library",
+  "tags": ["type:workspace", "scope:repo"],
+  "implicitDependencies": ["allowlister", "allowlister-e2e"],
+  "targets": {
+    "coverage-clear": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash tools/coverage/coverage.sh clear" }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "dependsOn": [{ "projects": ["allowlister", "allowlister-e2e"], "target": "test" }],
+      "options": { "command": "bash tools/coverage/coverage.sh report" },
+      "outputs": ["{workspaceRoot}/target/llvm-cov-target"]
+    }
+  }
+}

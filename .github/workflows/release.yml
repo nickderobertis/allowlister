@@ -26,18 +26,26 @@ env:
 
 jobs:
   # Gate the release on a passing test run so untested artifacts never publish.
+  # Kept for the manual-release fallback (a release cut by hand skips the
+  # release-PR sweep). The recipes delegate to Nx, so each runs at the `all` tier
+  # to cover the whole crate: clippy, the unit + integration tests, and the
+  # binary e2e suite.
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .tool-versions
+      - uses: astral-sh/setup-uv@v6
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-nextest
-      - run: just clippy
-      - run: just test
-      - run: just test-e2e
+          tool: just,cargo-nextest,cargo-llvm-cov
+      - run: just clippy all
+      - run: just test all
+      - run: just test-e2e all
 
   upload:
     name: upload (${{ matrix.target }})

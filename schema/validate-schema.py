@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.9"
+# dependencies = ["jsonschema>=4.18"]
+# ///
 """Validate the repo's config files against the published JSON Schema.
 
 A drift guard the Rust suite cannot cheaply provide: it proves the committed
@@ -6,7 +10,8 @@ A drift guard the Rust suite cannot cheaply provide: it proves the committed
 (the examples, the recommended profiles, and the repo's own dogfood config) and
 is itself a valid draft 2020-12 schema. A schema that grows too strict — say an
 `additionalProperties: false` that rejects a field the loader accepts — fails
-here. Run by CI; locally: `pip install jsonschema && python3 scripts/validate-schema.py`.
+here. It is the `config-schema` project's `test` target (`uv run --script
+schema/validate-schema.py`, which resolves the dependency declared above).
 
 Exits non-zero on the first schema or instance error.
 """
@@ -20,7 +25,7 @@ from pathlib import Path
 try:
     from jsonschema import Draft202012Validator
 except ImportError:  # pragma: no cover - surfaced as a clear CI message
-    sys.exit("error: this check needs the `jsonschema` package (pip install jsonschema)")
+    sys.exit("error: this check needs the `jsonschema` package (run it with `uv run --script`)")
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "schema" / "allowlister.schema.json"
@@ -75,14 +80,14 @@ def config_files() -> list[Path]:
 
 
 def main() -> int:
-    schema = json.loads(SCHEMA_PATH.read_text())
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     print(f"ok   schema is a valid draft 2020-12 schema ({SCHEMA_PATH.name})")
     validator = Draft202012Validator(schema)
 
     failed = False
     for path in config_files():
-        data = json.loads(strip_jsonc_comments(path.read_text()))
+        data = json.loads(strip_jsonc_comments(path.read_text(encoding="utf-8")))
         errors = sorted(validator.iter_errors(data), key=lambda e: list(e.path))
         rel = path.relative_to(ROOT)
         if errors:

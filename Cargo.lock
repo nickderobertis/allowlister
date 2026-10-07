@@ -33,19 +33,28 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "allowlister"
 version = "0.5.10"
 dependencies = [
- "assert_cmd",
  "brush-parser",
  "clap",
  "criterion",
  "fancy-regex",
  "oneharness-core",
- "predicates",
  "regex",
  "serde",
  "serde_json",
  "strum",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "allowlister-e2e"
+version = "0.0.0"
+dependencies = [
+ "allowlister",
+ "assert_cmd",
+ "predicates",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@
 #     their on-demand `all` is ubuntu+macos.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 FULL='["ubuntu-latest","macos-latest","windows-latest"]'
 UM='["ubuntu-latest","macos-latest"]'
@@ -95,7 +95,7 @@ while read -r id prd all win; do
 done <<<"$CONTRACT"
 
 if [ "$fails" -ne 0 ]; then
-	printf '\ncheck-e2e-matrix: %d drift(s) from the contract in scripts/check-e2e-matrix.sh\n' "$fails" >&2
+	printf '\ncheck-e2e-matrix: %d drift(s) from the contract in .github/scripts/check-e2e-matrix.sh\n' "$fails" >&2
 	exit 1
 fi
 echo "check-e2e-matrix: all e2e workflows match the matrix contract"

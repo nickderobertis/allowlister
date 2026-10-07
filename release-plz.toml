@@ -27,6 +27,13 @@ semver_check = false
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
 
+# The workspace's other members are test-only crates (publish = false, version
+# 0.0.0): never versioned, changelogged, tagged or released, so `allowlister`
+# stays the one package release-plz bumps and `v{{ version }}` stays its tag.
+[[package]]
+name = "allowlister-e2e"
+release = false
+
 # Keep-a-Changelog-style grouping. The version bump is computed from the
 # conventional-commit *type* (feat -> minor once past 1.0, fix/perf -> patch,
 # `!`/BREAKING -> major; pre-1.0 follows Cargo's 0.x rules), independent of these

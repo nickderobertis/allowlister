@@ -1,0 +1,46 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "workspace",
+  "//": "Repo-level checks over the whole Cargo workspace and the project graph: lint enforces the module boundaries (check-project-boundaries.mjs against project-boundaries.json) and test is that checker's own suite; supply-chain is cargo-deny (advisories, bans, licenses, sources) plus cargo-machete; msrv builds under the declared minimum Rust. It depends on the two crates whose manifests those read; every project.json and Cargo.toml is an input, so any graph edit reruns the boundary check. The coverage gate is the nested coverage project.",
+  "projectType": "library",
+  "tags": ["type:workspace", "scope:repo"],
+  "implicitDependencies": ["allowlister", "allowlister-e2e"],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/**/project.json",
+      "{workspaceRoot}/**/Cargo.toml",
+      "{workspaceRoot}/deny.toml",
+      "rust",
+      "sharedGlobals"
+    ]
+  },
+  "targets": {
+    "lint": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": { "command": "node tools/check-project-boundaries.mjs" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "node --test tools/tests/*.test.mjs" }
+    },
+    "supply-chain": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "cargo deny --locked check bans licenses sources",
+          "cargo deny --locked check advisories",
+          "cargo machete"
+        ],
+        "parallel": false
+      },
+      "//": "Uncached: advisories change upstream without any change here."
+    },
+    "msrv": {
+      "executor": "nx:run-commands",
+      "options": { "command": "cargo +1.88.0 check --locked --workspace --all-targets --all-features" },
+      "//": "Needs the MSRV toolchain (rustup toolchain install 1.88.0); like before the graph, not part of the gate's target list."
+    }
+  }
+}

@@ -26,13 +26,19 @@ TARGETS=(
 bin_name="allowlister"
 
 # Extract `key = "value"` from the [package] section of Cargo.toml using awk so
-# the script needs no JSON tooling (no python/jq).
+# the script needs no JSON tooling (no python/jq). A `key.workspace = true` entry
+# resolves to the same key in [workspace.package], as cargo inherits it.
 pkg_field() {
     awk -v key="$1" '
-        /^\[/ { in_pkg = ($0 == "[package]") }
-        in_pkg && $0 ~ "^"key"[[:space:]]*=" {
-            sub(/^[^=]*=[[:space:]]*/, ""); gsub(/^"|"[[:space:]]*$/, ""); print; exit
+        /^\[/ { section = $0 }
+        section == "[package]" && $0 ~ "^"key"[[:space:]]*=" {
+            sub(/^[^=]*=[[:space:]]*/, ""); gsub(/^"|"[[:space:]]*$/, ""); pkg = $0
         }
+        section == "[package]" && $0 ~ "^"key"\\.workspace[[:space:]]*=[[:space:]]*true" { inherit = 1 }
+        section == "[workspace.package]" && $0 ~ "^"key"[[:space:]]*=" {
+            sub(/^[^=]*=[[:space:]]*/, ""); gsub(/^"|"[[:space:]]*$/, ""); ws = $0
+        }
+        END { print (inherit ? ws : pkg) }
     ' Cargo.toml
 }
 

@@ -1,9 +1,13 @@
+# The `allowlister` crate (lib + bin), and the root of the Cargo workspace: one
+# Cargo.lock for every member. It stays the root package with a literal `version`
+# because release-plz bumps and tags exactly this manifest; the other members are
+# test-only and never released (release-plz.toml).
 [package]
 name = "allowlister"
 version = "0.5.10"
-edition = "2021"
-rust-version = "1.88"
-license = "MIT"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "Structural allow/deny/defer engine for AI coding-agent shell commands. Parses the bash AST, decomposes it into role-tagged fragments, and gates each fragment with glob/regex/argv rules."
 repository = "https://github.com/nickderobertis/allowlister"
 homepage = "https://github.com/nickderobertis/allowlister"
@@ -23,6 +27,10 @@ include = [
     "LICENSE",
     "examples/recommended/*.jsonc",
 ]
+# Integration tests are listed explicitly below: tests/e2e/ is a workspace member
+# of its own (the binary-driving suite), which Cargo's auto-discovery of
+# `tests/*/main.rs` would otherwise also claim as a target of this crate.
+autotests = false
 
 [[bin]]
 name = "allowlister"
@@ -44,7 +52,7 @@ fancy-regex = "0.18.0"
 oneharness-core = { git = "https://github.com/nickderobertis/oneharness", tag = "v0.2.528", version = "0.2" }
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json.workspace = true
 # `VariantArray` gives each config-vocabulary enum a compiler-generated
 # `VARIANTS` list, so the JSON Schema drift test compares against every variant
 # the engine actually has — adding a role/param/action/kind/grant fails that test
@@ -53,12 +61,10 @@ strum = { version = "0.27", features = ["derive"] }
 thiserror = "2.0"
 
 [dev-dependencies]
-assert_cmd = "2.0"
-predicates = "3.1"
 # Drives the schema-drift test: read each config enum's compiler-generated
 # `VARIANTS` and assert the published JSON Schema lists exactly those values.
 strum = { version = "0.27", features = ["derive"] }
-tempfile = "3.10"
+tempfile.workspace = true
 # Statistical micro-benchmarks of the pure engine (see `benches/`). Default
 # features (plotters HTML reports, rayon) are dropped to keep the dependency
 # tree — and the `cargo deny` surface — small; `cargo_bench_support` is the only
@@ -90,8 +96,12 @@ name = "golden"
 path = "tests/golden.rs"
 
 [[test]]
-name = "e2e"
-path = "tests/e2e/main.rs"
+name = "recommended"
+path = "tests/recommended.rs"
+
+[[test]]
+name = "schema"
+path = "tests/schema.rs"
 
 # Statistical micro-benchmarks of the engine hot paths. `harness = false` hands
 # `main` to Criterion instead of libtest, so `cargo nextest`/coverage never pick
@@ -106,3 +116,27 @@ harness = false
 [[bench]]
 name = "engine_allocs"
 harness = false
+
+# Cargo resolves every member against the one Cargo.lock above; Nx runs each
+# member's targets (project.json beside each manifest). Members are test-only
+# crates: `tests/e2e` drives the compiled binary from its own crate so a library
+# change that cannot reach it never rebuilds and respawns the binary.
+[workspace]
+members = ["tests/e2e"]
+resolver = "2"
+
+# Shared metadata every member inherits. `version` is deliberately not here: the
+# released crate keeps its own literal version (see the top of this file).
+[workspace.package]
+edition = "2021"
+# The MSRV `just msrv` checks; clippy.toml's `msrv` restates it.
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/nickderobertis/allowlister"
+
+# Dependencies more than one member declares, versioned once.
+[workspace.dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+serde_json = "1.0"
+tempfile = "3.10"

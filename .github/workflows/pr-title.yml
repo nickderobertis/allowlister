@@ -7,7 +7,7 @@
 #
 # The admitted types are exactly the ones release-plz.toml's `commit_parsers`
 # name (feat, fix, perf, refactor, docs, test, ci, chore, build, style); keep the
-# two lists in lockstep.
+# two lists in lockstep (.github/tests/pr-title.test.mjs reconciles them).
 # Making `pr-title` a required status check is a branch-protection setting, not
 # part of this file.
 

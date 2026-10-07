@@ -30,9 +30,11 @@ pre-push:
   parallel: false
   commands:
     clippy-all:
-      run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     test:
-      run: cargo nextest run --locked --status-level fail -E 'not binary(e2e)'
+      # The root crate's unit + integration tests (the e2e suite is its own
+      # workspace member, run by `just check`).
+      run: cargo nextest run --locked --status-level fail -p allowlister
     deny:
       run: cargo deny --locked check
     llmlint-validate:

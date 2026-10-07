@@ -35,15 +35,15 @@
 set -euo pipefail
 
 agent_bin="${COPILOT_BIN:-copilot}"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 bin="$repo_root/target/release/allowlister"
 
 note() { printf '%s\n' "$*"; }
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 # Shared helpers for the built-in-tool and MCP tool-use cases (rules + assertions).
-# shellcheck source=scripts/e2e-lib.sh
-. "$repo_root/scripts/e2e-lib.sh"
+# shellcheck source=live-e2e/e2e-lib.sh
+. "$repo_root/live-e2e/e2e-lib.sh"
 
 # A missing `copilot` is a skip, not a failure: this script is opt-in and the rest
 # of the project must build and test on machines without the harness.

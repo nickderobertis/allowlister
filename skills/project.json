@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "skill-refine-allowlist",
+  "//": "The refine-allowlist agent skill (refine-allowlist/, installed by users with `gh skill install`) and its install check (verify-skill-install.sh: install via gh, validate the frontmatter, drive the CLI contract the skill relies on). Out of the gate — it needs the gh skill preview command — and run by .github/workflows/skill-install.yml through `just verify-skill`. This project.json lives beside, not inside, the skill directory so an install never ships it.",
+  "projectType": "application",
+  "tags": ["type:live", "scope:skill"],
+  "implicitDependencies": ["allowlister"],
+  "targets": {
+    "verify-install": {
+      "executor": "nx:run-commands",
+      "options": { "command": "bash skills/verify-skill-install.sh" }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+# The binary-driving end-to-end suite: spawns the compiled `allowlister` binary
+# (built by the `allowlister:build` target, or the instrumented copy the coverage
+# driver builds) and asserts exit codes, stdout, stderr and file effects. Test-only
+# and never published or released. The dev-dependency on `allowlister` is for the
+# few library helpers the assertions reuse (JSONC parsing); the binary under test
+# is always the spawned executable, never an in-process call.
+[package]
+name = "allowlister-e2e"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autotests = false
+
+[[test]]
+name = "e2e"
+path = "main.rs"
+
+[dev-dependencies]
+allowlister = { path = "../.." }
+assert_cmd.workspace = true
+predicates.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

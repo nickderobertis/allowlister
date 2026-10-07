@@ -1,7 +1,7 @@
 name: E2E (Cursor)
 
 # Live end-to-end check that drives the real `cursor-agent` CLI against
-# allowlister wired as a beforeShellExecution hook (scripts/e2e-cursor.sh).
+# allowlister wired as a beforeShellExecution hook (live-e2e/cursor/e2e-cursor.sh).
 # Unlike ci.yml this needs network, a model call, and the CURSOR_API_KEY secret,
 # so it lives in its own workflow gated to trusted contexts only.
 #
@@ -53,7 +53,7 @@ jobs:
         os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest","windows-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
+    # Bash on every platform: the live checks are bash scripts (live-e2e/*/e2e-*.sh),
     # so Windows runs them through Git Bash rather than the default PowerShell.
     defaults:
       run:

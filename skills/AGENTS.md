@@ -9,3 +9,5 @@
   engine evolves.
 - Validate with `just verify-skill`: it installs the skill the way users do and exercises
   the CLI the skill depends on. Run it after changing a skill or that CLI surface.
+- `project.json` and `verify-skill-install.sh` sit beside, never inside, a skill
+  directory: `gh skill install` copies the whole directory to users.
