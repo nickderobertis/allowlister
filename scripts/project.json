@@ -21,12 +21,14 @@
         "{workspaceRoot}/Cargo.toml",
         "{workspaceRoot}/clippy.toml",
         "{workspaceRoot}/rust-toolchain.toml",
-        "{workspaceRoot}/justfile"
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/schema/allowlister.schema.json",
+        "{workspaceRoot}/examples/user-config.json"
       ],
       "options": {
         "command": "node --test scripts/tests/*.test.mjs"
       },
-      "//": "The suites also read the real manifests and pins they reconcile (the MSRV in Cargo.toml and clippy.toml, the release plan's package fields, the toolchain and justfile the setup scripts fingerprint), so those are inputs too: a change to any of them reruns these checks."
+      "//": "The suites also read the real manifests and files they reconcile or drive (the MSRV in Cargo.toml and clippy.toml, the release plan's package fields, the toolchain and justfile the setup scripts fingerprint, the published schema and a shipped config the validator runs against), so those are inputs too: a change to any of them reruns these checks."
     }
   }
 }

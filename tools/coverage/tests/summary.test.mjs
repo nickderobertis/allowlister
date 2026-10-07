@@ -45,3 +45,11 @@ test("anything other than one llvm coverage export is refused with the reason", 
     assert.match(out.stderr, /check the cargo-llvm-cov version/);
   }
 });
+
+test("the floor argument must be one percentage", () => {
+  for (const args of [[], ["ninety"], ["101"], ["95", "extra"], ["-5"]]) {
+    const out = spawnSync("node", [script, ...args], { input: JSON.stringify(exported(TOTALS)), encoding: "utf8" });
+    assert.equal(out.status, 2, JSON.stringify(args));
+    assert.match(out.stderr, /^usage: node tools\/coverage\/summary.mjs <floor percent, 0-100>/);
+  }
+});

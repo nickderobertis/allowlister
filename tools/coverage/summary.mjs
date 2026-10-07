@@ -22,8 +22,14 @@ export function summarize(exported, floor) {
 }
 
 if (import.meta.main) {
+  const args = process.argv.slice(2);
+  const floor = Number(args[0]);
+  if (args.length !== 1 || !/^\d+(\.\d+)?$/.test(args[0]) || floor > 100) {
+    console.error(`usage: node tools/coverage/summary.mjs <floor percent, 0-100> (got: ${args.join(" ") || "nothing"})`);
+    process.exit(2);
+  }
   try {
-    console.log(summarize(JSON.parse(readFileSync(0, "utf8")), process.argv[2]));
+    console.log(summarize(JSON.parse(readFileSync(0, "utf8")), args[0]));
   } catch (err) {
     console.error(`coverage: cannot summarize the report: ${err.message}; check the cargo-llvm-cov version against tools/coverage/summary.mjs.`);
     process.exit(1);
