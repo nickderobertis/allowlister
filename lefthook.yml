@@ -35,3 +35,18 @@ pre-push:
       run: cargo nextest run --locked --status-level fail -E 'not binary(e2e)'
     deny:
       run: cargo deny --locked check
+    llmlint-validate:
+      # The model-free llmlint gate (config structure, ignore directives naming
+      # real rules, fragment version bumps) — the same step CI's llmlint job runs
+      # first. llmlint is an optional tool, so a machine without it skips with a
+      # notice instead of blocking the push.
+      run: |
+        if ! command -v llmlint >/dev/null 2>&1; then
+          echo "llmlint not on PATH — skipping 'llmlint validate' (install: just setup-llmlint)"
+          exit 0
+        fi
+        if git rev-parse --verify --quiet origin/main >/dev/null; then
+          llmlint validate --diff-base origin/main
+        else
+          llmlint validate
+        fi
