@@ -29,10 +29,10 @@ table_value() {
 
 msrv="$(table_value workspace.package rust-version Cargo.toml)"
 printf '%s' "$msrv" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-  || fail "Cargo.toml's [workspace.package] must declare rust-version as MAJOR.MINOR[.PATCH] (got '${msrv}')."
+  || fail "Cargo.toml's [workspace.package] must declare rust-version as MAJOR.MINOR[.PATCH] (got '${msrv}'); set it there (e.g. rust-version = \"1.88\"), then re-run 'just msrv'."
 clippy_msrv="$(awk -F'"' '/^msrv[[:space:]]*=/ { print $2; exit }' clippy.toml)"
 [ "$clippy_msrv" = "$msrv" ] \
-  || fail "clippy.toml msrv '${clippy_msrv}' differs from Cargo.toml rust-version '${msrv}'; set both to the same version."
+  || fail "clippy.toml msrv '${clippy_msrv}' differs from Cargo.toml rust-version '${msrv}'; set both to the same version, then re-run 'just msrv'."
 
 # rust-version "1.88" means the 1.88.0 release.
 toolchain="$msrv"
