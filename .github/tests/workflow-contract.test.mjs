@@ -8,12 +8,15 @@
 //     sweep as the job's failure;
 //   * the review artifact and the informational workflows (notignored, the live
 //     harness suites, skill-install) report none of those contexts;
-//   * release.yml still re-gates clippy, the unit tests and e2e over the crate;
+//   * run through the real justfile (Nx stubbed to record its calls), the
+//     pull-request jobs together run `supply-chain` once while a local `just
+//     check` still runs it, and release.yml's one gate recipe covers every target
+//     its former clippy / unit / e2e steps ran;
 //   * every pinned Node setup reads the .tool-versions `nodejs` pin through the
 //     workflow's own step, run here, never through setup-node's version-file parser.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -32,7 +35,10 @@ const scratch = [];
 after(() => scratch.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 const CONTRACT = ["test (ubuntu-latest)", "test (macos-latest)", "test (windows-latest)", "coverage", "deps & security"];
-const RECIPES = { test: "check", coverage: "test-cov", deps: "supply-chain" };
+// Each contract job's gate command after `just`, with the tier as `$TIER`. The
+// test jobs leave `supply-chain` to `deps & security`, its single run.
+const GATES = { test: 'check "$TIER" supply-chain', coverage: 'test-cov "$TIER"', deps: 'supply-chain "$TIER"' };
+const RECIPES = Object.fromEntries(Object.entries(GATES).map(([id, gate]) => [id, gate.split(" ")[0]]));
 
 /** The status-check contexts a job reports: its name (or id), expanded over a literal `matrix.os`. */
 function contexts(id, job) {
@@ -87,14 +93,14 @@ test("no condition, dependency or skippable step can leave a contract job unrepo
 
 test("each contract job derives the tier explicitly and runs its recipe at it", () => {
   const jobs = workflows["ci.yml"].jobs;
-  for (const [id, recipe] of Object.entries(RECIPES)) {
+  for (const [id, command] of Object.entries(GATES)) {
     const steps = jobs[id].steps;
     const checkout = steps.find((s) => s.uses?.startsWith("actions/checkout@"));
     assert.equal(checkout?.with?.["fetch-depth"], 0, `job ${id} needs full history for the merge base`);
     const router = steps.find((s) => s.id === "tier");
     assert.equal(router?.run, "node .github/scripts/gate-tier.mjs", `job ${id} must route through gate-tier.mjs`);
     const gate = steps.at(-1);
-    assert.equal(gate.run, `just ${recipe} "$TIER"`, `job ${id}'s last step must be the gate`);
+    assert.equal(gate.run, `just ${command}`, `job ${id}'s last step must be the gate`);
     assert.deepEqual(gate.env, { TIER: "${{ steps.tier.outputs.tier }}", NX_BASE: "${{ steps.tier.outputs.base }}" });
     assert.ok(steps.indexOf(router) < steps.indexOf(gate));
   }
@@ -110,7 +116,7 @@ test("the tiered recipes key the affected tier off an explicit base and sweep wi
   assert.equal(sweep.length, 2);
   assert.doesNotMatch(justfile, /--uncommitted|--untracked/);
   for (const recipe of Object.values(RECIPES)) {
-    assert.match(justfile, new RegExp(`^${recipe} tier="affected":`, "m"), `recipe ${recipe} must take the tier`);
+    assert.match(justfile, new RegExp(`^${recipe} tier="affected"[ :]`, "m"), `recipe ${recipe} must take the tier`);
   }
 });
 
@@ -138,17 +144,18 @@ function runStep(step, env, justExit) {
 // step each decision the router can write and checks what reaches the recipe.
 test("the gate step hands each routed tier and base to its recipe, and a failing sweep fails the job", { skip: process.platform === "win32" && "bash stub" }, () => {
   const jobs = workflows["ci.yml"].jobs;
-  for (const [id, recipe] of Object.entries(RECIPES)) {
+  for (const [id, command] of Object.entries(GATES)) {
     const gate = jobs[id].steps.at(-1);
+    const at = (tier) => command.replace('"$TIER"', tier);
     // Release PR: the router writes tier=all, base empty.
     const sweep = runStep(gate, { TIER: "all", NX_BASE: "" }, 0);
-    assert.deepEqual([sweep.status, sweep.calls], [0, [`${recipe} all|NX_BASE=`]]);
+    assert.deepEqual([sweep.status, sweep.calls], [0, [`${at("all")}|NX_BASE=`]]);
     // Ordinary PR / push to main: the router writes affected and the derived base.
     const affected = runStep(gate, { TIER: "affected", NX_BASE: "0123abc" }, 0);
-    assert.deepEqual([affected.status, affected.calls], [0, [`${recipe} affected|NX_BASE=0123abc`]]);
+    assert.deepEqual([affected.status, affected.calls], [0, [`${at("affected")}|NX_BASE=0123abc`]]);
     // A red sweep: the recipe's non-zero exit is the step's, hence the job's.
     const red = runStep(gate, { TIER: "all", NX_BASE: "" }, 3);
-    assert.equal(red.status, 3, `job ${id} must fail when \`just ${recipe} all\` fails`);
+    assert.equal(red.status, 3, `job ${id} must fail when \`just ${at("all")}\` fails`);
   }
 });
 
@@ -182,10 +189,119 @@ test("the live harness suites stay informational, fork-guarded, and outside the 
   }
 });
 
-test("release.yml still re-gates clippy, the unit tests and e2e over the whole crate", () => {
+const realJust = spawnSync("bash", ["-c", "command -v just"], { encoding: "utf8" }).stdout.trim();
+const journeySkip = (process.platform === "win32" && "bash stub") || (!realJust && "just is not on PATH");
+
+/**
+ * The real justfile in a scratch root whose scripts/nx records each Nx call
+ * instead of running it, behind a `just` shim on PATH that runs that justfile —
+ * so a workflow step's own script drives the real recipes.
+ */
+function gateSandbox() {
+  const dir = mkdtempSync(join(tmpdir(), "gate-journey-"));
+  scratch.push(dir);
+  mkdirSync(join(dir, "scripts"));
+  mkdirSync(join(dir, "bin"));
+  writeFileSync(join(dir, "justfile"), readFileSync(join(repo, "justfile"), "utf8"));
+  const record = join(dir, "nx-calls");
+  // The stubs take their paths from the environment, never spliced into shell text.
+  writeFileSync(join(dir, "scripts/nx"), `printf '%s\\n' "$*" >> "$GATE_NX_RECORD"\n`);
+  writeFileSync(join(dir, "scripts/nx-base.sh"), "echo 0123abc\n");
+  writeFileSync(
+    join(dir, "bin/just"),
+    '#!/usr/bin/env bash\nexec "$GATE_REAL_JUST" --justfile "$GATE_ROOT/justfile" --working-directory "$GATE_ROOT" "$@"\n',
+  );
+  chmodSync(join(dir, "bin/just"), 0o755);
+  const sandboxEnv = { GATE_NX_RECORD: record, GATE_REAL_JUST: realJust, GATE_ROOT: dir };
+  /** Run a step's script as Actions runs `shell: bash`; returns its status and each Nx call, parsed. */
+  const run = (script, env = {}) => {
+    rmSync(record, { force: true });
+    const out = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ...sandboxEnv, ...env },
+    });
+    const lines = existsSync(record) ? readFileSync(record, "utf8").trim().split("\n") : [];
+    return { status: out.status, stderr: out.stderr, nx: lines.filter(Boolean).map(parseNx) };
+  };
+  return run;
+}
+
+/** An Nx call's mode, the targets after `-t`, and its project filters. */
+function parseNx(line) {
+  const [mode, ...args] = line.split(" ");
+  const targets = [];
+  const filters = [];
+  let inTargets = false;
+  for (const arg of args) {
+    if (arg === "-t") inTargets = true;
+    else if (arg.startsWith("--")) {
+      inTargets = false;
+      if (!arg.startsWith("--base=")) filters.push(arg);
+    } else if (inTargets) targets.push(arg);
+  }
+  return { mode, targets, filters };
+}
+
+test("the pull-request jobs run supply-chain once, and a local `just check` still runs it", { skip: journeySkip }, () => {
+  const run = gateSandbox();
+  const jobs = workflows["ci.yml"].jobs;
+  for (const [tier, mode] of [["affected", "affected"], ["all", "run-many"]]) {
+    const local = run(`just check ${tier}`);
+    assert.equal(local.status, 0, local.stderr);
+    assert.equal(local.nx.length, 1);
+    const gateTargets = local.nx[0].targets;
+    assert.ok(gateTargets.includes("supply-chain"), `local \`just check ${tier}\` runs supply-chain`);
+    let supplyChainRuns = 0;
+    for (const id of Object.keys(GATES)) {
+      const job = jobs[id];
+      const cells = job.strategy?.matrix?.os?.length ?? 1;
+      const { status, stderr, nx } = run(job.steps.at(-1).run, { TIER: tier, NX_BASE: "0123abc" });
+      assert.equal(status, 0, stderr);
+      for (const call of nx) {
+        assert.equal(call.mode, mode, `${id} runs the ${tier} tier`);
+        supplyChainRuns += cells * call.targets.filter((t) => t === "supply-chain").length;
+      }
+      if (id === "test") {
+        assert.deepEqual(nx.map((c) => c.targets), [gateTargets.filter((t) => t !== "supply-chain")]);
+      }
+    }
+    assert.equal(supplyChainRuns, 1, `the ${tier} tier's pull-request jobs run supply-chain exactly once`);
+  }
+  // A skip naming no gate target aborts before Nx runs, rather than skipping nothing.
+  const typo = run("just check all supply-chian");
+  assert.equal(typo.status, 2);
+  assert.match(typo.stderr, /unknown gate target 'supply-chian'/);
+  assert.deepEqual(typo.nx, []);
+  const hidden = run("just check all $'supply-chain\\nsupply-chian'");
+  assert.equal(hidden.status, 2, "a name on a later line of the skip list is checked too");
+  assert.deepEqual(hidden.nx, []);
+  // Names match exactly: a pattern names no target.
+  const glob = run("just check all '*'");
+  assert.equal(glob.status, 2, "a glob is not a gate target");
+  assert.deepEqual(glob.nx, []);
+});
+
+test("release.yml gates on the single gate recipe, covering every stage its old inline steps ran", { skip: journeySkip }, () => {
+  const run = gateSandbox();
   const job = workflows["release.yml"].jobs.test;
-  const runs = job.steps.map((s) => s.run).filter(Boolean);
-  for (const cmd of ["just clippy all", "just test all", "just test-e2e all"]) assert.ok(runs.includes(cmd), `release.yml test runs ${cmd}`);
+  const gates = job.steps.map((s) => s.run).filter((r) => /\bjust\b/.test(r ?? ""));
+  assert.deepEqual(gates, ["just check all"], "release.yml's test job runs exactly the gate recipe");
+  const release = run(gates[0]);
+  assert.equal(release.status, 0, release.stderr);
+  assert.equal(release.nx.length, 1);
+  const [sweep] = release.nx;
+  assert.equal(sweep.mode, "run-many");
+  assert.deepEqual(sweep.filters, ["--exclude=tag:type:live"], "the release gate narrows to no subset of projects");
+  // What the release job ran before the single gate recipe replaced it.
+  for (const old of ["just clippy all", "just test all", "just test-e2e all"]) {
+    const { status, stderr, nx } = run(old);
+    assert.equal(status, 0, stderr);
+    for (const call of nx) {
+      assert.equal(call.mode, "run-many");
+      for (const t of call.targets) assert.ok(sweep.targets.includes(t), `\`just check all\` runs ${t}, which \`${old}\` ran`);
+    }
+  }
   assert.deepEqual(workflows["release.yml"].jobs.upload.needs, "test");
 });
 
