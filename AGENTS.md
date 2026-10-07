@@ -151,9 +151,7 @@ touches an external service is a `type:live` project with no gate target.
 - CI runs the gate on Linux/macOS/Windows with least-privilege permissions; it
   must pass before any release artifact publishes. `release.yml` re-runs the
   whole gate (`just check all`) on `release: published`, kept on purpose for a
-  release cut by hand. The `test (<os>)` jobs run `just check` minus
-  `supply-chain` (its `skip` argument), which `deps & security` runs once; a
-  local `just check` still runs it.
+  release cut by hand.
 - Squash-merge makes the PR title the release input: the `pr-title` check admits
   exactly the Conventional types `release-plz.toml`'s `commit_parsers` name.
 - Releases are automated from Conventional Commits by release-plz: a merged

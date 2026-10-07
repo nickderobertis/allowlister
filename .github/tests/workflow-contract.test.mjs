@@ -261,7 +261,6 @@ test("the pull-request jobs run supply-chain once, and a local `just check` stil
         supplyChainRuns += cells * call.targets.filter((t) => t === "supply-chain").length;
       }
       if (id === "test") {
-        // Nothing but supply-chain leaves the test jobs' gate.
         assert.deepEqual(nx.map((c) => c.targets), [gateTargets.filter((t) => t !== "supply-chain")]);
       }
     }
