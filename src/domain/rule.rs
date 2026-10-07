@@ -256,6 +256,10 @@ impl Rule {
     }
 
     /// Build a rule that matches argv element-by-element.
+    // Same field set as `from_match`, differing only in the pattern's shape
+    // (`&[String]` vs `&str`); outside tests the config loader is its one caller
+    // and passes each field straight from the parsed entry, so a params struct
+    // would only restate `Rule`'s fields.
     #[allow(clippy::too_many_arguments)]
     pub fn from_argv(
         name: String,
@@ -482,6 +486,9 @@ impl ToolRule {
     /// (`read`/`write`/…/`mcp`) or, failing that, a glob over the raw tool name.
     /// Canonical `params` and raw `jsonpath` constraints both compile their globs
     /// with the rule's `kind`.
+    // One argument per tool-rule config field: the loader maps each parsed field
+    // straight through, and an intermediate params struct would duplicate
+    // `ToolRule`'s own field list for that one non-test caller.
     #[allow(clippy::too_many_arguments)]
     pub fn compile(
         name: String,

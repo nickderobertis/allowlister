@@ -1,0 +1,14 @@
+{
+  "//": "Module-boundary rules for the project graph, in Nx's depConstraints shape: a project tagged sourceTag may depend (a Cargo path dependency of any kind, or an Nx implicitDependency) only on projects carrying one of onlyDependOnTags. Enforced by tools/check-project-boundaries.mjs (workspace:lint). The contract depends on nothing it serves; the crate never depends on its test or live suites; only the coverage aggregate (type:workspace) may depend on the e2e suite; nothing outside the live tier may depend on a live project.",
+  "depConstraints": [
+    { "sourceTag": "type:app", "onlyDependOnTags": ["type:app", "type:contract"] },
+    { "sourceTag": "type:e2e", "onlyDependOnTags": ["type:app", "type:contract"] },
+    { "sourceTag": "type:contract", "onlyDependOnTags": ["type:contract"] },
+    { "sourceTag": "type:tooling", "onlyDependOnTags": ["type:tooling"] },
+    {
+      "sourceTag": "type:workspace",
+      "onlyDependOnTags": ["type:app", "type:e2e", "type:contract", "type:tooling", "type:workspace"]
+    },
+    { "sourceTag": "type:live", "onlyDependOnTags": ["type:app", "type:live"] }
+  ]
+}

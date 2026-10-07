@@ -33,19 +33,28 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "allowlister"
 version = "0.5.10"
 dependencies = [
- "assert_cmd",
  "brush-parser",
  "clap",
  "criterion",
  "fancy-regex",
  "oneharness-core",
- "predicates",
  "regex",
  "serde",
  "serde_json",
  "strum",
  "tempfile",
  "thiserror",
+]
+
+[[package]]
+name = "allowlister-e2e"
+version = "0.0.0"
+dependencies = [
+ "allowlister",
+ "assert_cmd",
+ "predicates",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -835,7 +844,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "oneharness-core"
 version = "0.2.38"
-source = "git+https://github.com/nickderobertis/oneharness?tag=v0.2.528#1e539dc0c68a2774909e04a60d7a14b9df38eb7b"
+source = "git+https://github.com/nickderobertis/oneharness?rev=1e539dc0c68a2774909e04a60d7a14b9df38eb7b#1e539dc0c68a2774909e04a60d7a14b9df38eb7b"
 dependencies = [
  "serde",
  "serde_json",

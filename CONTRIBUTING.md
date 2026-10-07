@@ -22,26 +22,31 @@ What setup wires up:
 - **direnv** (`.envrc`) layers the asdf and cargo tool paths onto your shell for
   this directory; setup runs `direnv allow` for you.
 - **`just bootstrap`** installs the cargo dev tools (nextest, llvm-cov, deny,
-  machete, audit) and the git hooks.
+  machete, audit), the git hooks, and the locked Nx toolchain (`npm ci`).
 
-Prefer to do it by hand? Install [rustup](https://rustup.rs) and
-[just](https://just.systems), run `rustup show` (installs the pinned toolchain),
-then `just bootstrap`.
+Prefer to do it by hand? Install [rustup](https://rustup.rs),
+[just](https://just.systems) and the Node version `.tool-versions` pins, run
+`rustup show` (installs the pinned toolchain), then `just bootstrap`.
 
-Then run the full quality gate before pushing:
+Then run the quality gate before pushing:
 
 ```sh
-just full-check
+just check          # the projects your change can reach
+just check all      # every project
 ```
 
 ## Quality gate
 
-`just full-check` runs, stopping at the first failing phase: format check,
-`cargo check`, clippy (`-D warnings`), unit/integration tests, end-to-end tests,
-coverage with an enforced floor, dependency/security/license checks, docs build,
-release build, and the dist plan. Run phases individually while iterating:
-`just fmt`, `just check`, `just clippy`, `just test`, `just test-e2e`,
-`just test-cov`, `just deps-check`, `just security`, `just doc`.
+`just check` (alias `just full-check`) has Nx run, per project: format check,
+`cargo check`, clippy (`-D warnings`) plus the workflow-matrix and
+project-boundary lints, every test target (unit/integration, the binary e2e
+suite, schema validation, workflow contracts), coverage with an enforced floor
+over the merged runs, docs build, release build plus the dist plan, and the
+supply-chain checks. By default it covers the projects affected since the merge
+base with `origin/main` (`NX_BASE` overrides the base); `just check all` sweeps
+every project. Run pieces individually while iterating — `just fmt`,
+`just clippy`, `just test`, `just test-e2e`, `just test-cov`,
+`just supply-chain`, `just doc` — each taking the same `affected`/`all` tier.
 
 ### No warning backlogs
 
@@ -106,13 +111,11 @@ the job reports rather than blocks — do not add it to required checks.
 ## Dependency upgrades
 
 ```sh
-just upgrade        # updates Cargo.lock; review the diff
-just full-check
+just upgrade        # cargo update, then the full sweep (just check all)
 ```
 
-`just upgrade` may change `Cargo.lock`, transitive dependency versions, and
-cargo-installed tool versions; review `git diff` before committing and re-run the
-full gate. Do not mutate dependencies outside this flow without explicit review.
+`just upgrade` may change `Cargo.lock` and transitive dependency versions, then
+re-runs the gate over every project; review `git diff` before committing. Do not mutate dependencies outside this flow without explicit review.
 
 ## Releasing
 

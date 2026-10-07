@@ -1,0 +1,100 @@
+{
+  "$schema": "./node_modules/nx/schemas/project-schema.json",
+  "name": "allowlister",
+  "//": "The released crate: lib + bin `allowlister`, its unit tests and the in-process integration tests in tests/*.rs. As the root project it also owns every file no nested project claims (the justfile, README, Cargo.lock), so a change to any of those reaches it and its dependents; agent notes, docs and dev-environment settings (agent, hook, editor) are in .nxignore, so they reach nothing; its inputs are narrowed to what the crate compiles and tests from so cached lint/typecheck results survive a docs edit. tests/schema.rs reads the published schema, hence that one config-schema file among the inputs (an input, not an edge, so the schema validator's own changes never rerun this crate).",
+  "projectType": "application",
+  "tags": [
+    "type:app",
+    "scope:engine",
+    "lang:rust",
+    "coverage:profiles"
+  ],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/src/**/*",
+      "{projectRoot}/tests/*.rs",
+      "{projectRoot}/benches/**/*",
+      "{projectRoot}/examples/**/*",
+      "{workspaceRoot}/schema/allowlister.schema.json",
+      "sharedGlobals"
+    ]
+  },
+  "targets": {
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p allowlister"
+      }
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p allowlister -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy -p allowlister --locked --all-targets --all-features -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check -p allowlister --locked --all-targets --all-features"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo build -p allowlister --locked"
+      },
+      "//": "target/debug/allowlister: what allowlister-e2e:test depends on, so a broken binary build fails here, by name, before any journey runs."
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "coverage:coverage-clear"
+      ],
+      "options": {
+        "command": "bash tools/coverage/coverage.sh test allowlister"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target"
+      ],
+      "//": "Unit + integration tests under cargo-llvm-cov --no-report: the raw profiles land in target/llvm-cov-target for coverage:coverage to merge with the e2e crate's. Uncached (nx.json): a replay could not restore a profile set that matches this build."
+    },
+    "doc": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo doc -p allowlister --locked --no-deps --all-features",
+        "env": {
+          "RUSTDOCFLAGS": "-D warnings"
+        }
+      }
+    },
+    "release-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "cargo build -p allowlister --release --locked",
+          "bash scripts/dist.sh plan"
+        ],
+        "parallel": false
+      },
+      "//": "The optimized release build plus the release plan (targets + packaging metadata) — the artifact checks, not a publish.",
+      "inputs": [
+        "default",
+        "rust",
+        "{workspaceRoot}/scripts/dist.sh"
+      ]
+    },
+    "bench": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo bench -p allowlister --locked --bench engine -- --save-baseline current"
+      },
+      "//": "Informational: never in the gate's target list (timings are noisy on shared hardware)."
+    }
+  }
+}

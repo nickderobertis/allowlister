@@ -9,3 +9,6 @@
 # gate) at a known version before any cargo tooling is installed. Bump alongside
 # the developer-tool versions in the justfile via `just upgrade`.
 just 1.40.0
+# Node runs Nx, the orchestrator every gate recipe delegates to (the Nx version
+# itself is locked in package-lock.json). CI's setup-node reads this line too.
+nodejs 24.13.0

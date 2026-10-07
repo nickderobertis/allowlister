@@ -865,18 +865,22 @@ toolchain, the cargo dev tools, and git hooks. It is idempotent:
 
 ```sh
 ./scripts/setup.sh   # or `just setup` once `just` is on PATH
-just full-check      # the complete quality gate
+just check           # the quality gate over what your change can reach
+just check all       # the same gate over every project (the release-PR sweep)
 ```
 
-asdf (`.tool-versions`) pins `just`; `rust-toolchain.toml` + rustup stay the
+asdf (`.tool-versions`) pins `just` and the Node that runs Nx (the orchestrator
+the gate recipes delegate to); `rust-toolchain.toml` + rustup stay the
 source of truth for the Rust toolchain; direnv (`.envrc`) layers the tool paths.
 `just setup-check` is the fast, install-free "is this set up?" check. Prefer to
 wire it up by hand? Install [`rustup`](https://rustup.rs) and
-[`just`](https://just.systems), then run `rustup show && just bootstrap`.
+[`just`](https://just.systems) and Node, then run `rustup show && just bootstrap`.
 
 Common recipes: `just fmt`, `just check`, `just clippy`, `just test`,
-`just test-e2e`, `just test-cov`, `just security`, `just deps-check`, `just doc`,
-`just build-release`, `just dist-plan`. Run `just` with no arguments to list all.
+`just test-e2e`, `just test-cov`, `just supply-chain`, `just doc`,
+`just build-release`, `just dist-plan`. The gate recipes take a tier — `affected`
+(the default: the projects your change can reach, from the merge base with
+`origin/main`) or `all`. Run `just` with no arguments to list all.
 
 ### Diagnostics policy
 
@@ -924,7 +928,7 @@ just test-opencode   # drives `opencode`;     writes/reads .opencode/plugin/allo
 ```
 
 Each needs its harness binary, network, and a model call, so none is part of
-`just full-check` or CI. All skip cleanly (exit 0) when their CLI is not on
+`just check` or the CI gate. All skip cleanly (exit 0) when their CLI is not on
 `PATH`. Every check additionally proves the `deny` holds even when the agent is
 running fully autonomous (no human approver) — the hook is consulted before the
 agent's own permission flow, so allowlister is the authoritative gate.

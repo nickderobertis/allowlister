@@ -3,9 +3,10 @@
 # `set -eu`. All functions assume the current directory is the repo root.
 
 # Binaries that must resolve for the dev environment to be considered ready.
-# asdf/direnv (the version + env layer), just (task runner), the Rust toolchain,
-# and the test runner installed by `just bootstrap`.
-REQUIRED_BINS="asdf direnv just rustc cargo cargo-nextest"
+# asdf/direnv (the version + env layer), just (task runner), node + npm (Nx, the
+# orchestrator the gate recipes delegate to), the Rust toolchain, and the test
+# runner installed by `just bootstrap`.
+REQUIRED_BINS="asdf direnv just node npm rustc cargo cargo-nextest"
 
 # Soft requirements: their absence is an advisory, never a "not ready" verdict.
 # lefthook is a Go binary with no cargo source fallback, so on a network where

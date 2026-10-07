@@ -4,7 +4,8 @@
 # Idempotent and safe to re-run. It:
 #   1. installs + loads asdf (version manager) if absent,
 #   2. installs direnv through asdf and wires the asdf+direnv integration,
-#   3. installs the asdf-pinned tools from .tool-versions (just),
+#   3. installs the asdf-pinned tools from .tool-versions (just, and the Node
+#      that runs Nx),
 #   4. ensures the Rust toolchain — rust-toolchain.toml stays the source of
 #      truth; rustup just realises it,
 #   5. installs the cargo dev tools + git hooks via `just bootstrap`,
@@ -94,6 +95,7 @@ ensure_rust() {
 main() {
   ensure_asdf
   ensure_plugin just
+  ensure_plugin nodejs
   ensure_direnv
   say "installing asdf tools from .tool-versions"
   asdf install

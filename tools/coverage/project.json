@@ -1,0 +1,48 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "coverage",
+  "//": "The repo-level coverage gate: clears the shared profile directory before the crates' instrumented test runs, then merges their profiles and enforces the 95% line/function/region floor over the allowlister crate's sources (src/main.rs and tests/ excluded) once, across every crate tagged coverage:profiles (today the unit and e2e projects). The tag is the one list of profile-producing crates: this project depends on and waits for exactly those, so a change elsewhere never reruns the Rust suites.",
+  "projectType": "library",
+  "tags": [
+    "type:workspace",
+    "scope:repo"
+  ],
+  "implicitDependencies": [
+    "tag:coverage:profiles"
+  ],
+  "targets": {
+    "coverage-clear": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash tools/coverage/coverage.sh clear"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        {
+          "projects": [
+            "tag:coverage:profiles"
+          ],
+          "target": "test"
+        }
+      ],
+      "options": {
+        "command": "bash tools/coverage/coverage.sh report"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target"
+      ]
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "default"
+      ],
+      "options": {
+        "command": "node --test tools/coverage/tests/*.test.mjs"
+      },
+      "//": "The coverage driver's own suite (the summary it prints); fast, and not one of the coverage:profiles crates, so the aggregate never waits on it."
+    }
+  }
+}

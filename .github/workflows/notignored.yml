@@ -1,0 +1,35 @@
+# Post one sticky comment per pull request listing the lint and type-check
+# suppressions it adds (`#[allow(...)]`, `llmlint: ignore`, ...), each with its
+# rule, stated reason and line link, so review sees every bypass.
+#
+# A review artifact, not a gate (the gate is `just check`), and deliberately not a
+# required status check: it skips fork pull requests, whose read-only token
+# cannot write the comment, and a required context that never reports would
+# block them forever.
+
+name: notignored
+
+on:
+  pull_request:
+
+# Least privilege: read the tree, write the one sticky comment, nothing else.
+permissions:
+  contents: read
+  pull-requests: write
+
+# Only the newest comment is wanted.
+concurrency:
+  group: notignored-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suppressions:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The scan diffs against the base branch, which a shallow checkout omits.
+          fetch-depth: 0
+      # Floating major tag: follows every published 0.x release.
+      - uses: nickderobertis/notignored@v0

@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "config-schema",
+  "//": "The published config JSON Schema (served from GitHub Pages at its $id) — the contract every shipped config and the loader agree on. Its test (scripts/validate-schema.py) validates the schema itself plus every config the project ships (examples/ and the dogfood .allowlister.jsonc) against it; the validator and those configs are inputs, so a change to any of them reaches this project without an edge to the crate. type:contract: it depends on nothing it serves.",
+  "projectType": "library",
+  "tags": [
+    "type:contract",
+    "scope:config"
+  ],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/scripts/validate-schema.py",
+      "{workspaceRoot}/examples/**/*",
+      "{workspaceRoot}/.allowlister.jsonc",
+      "sharedGlobals"
+    ]
+  },
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "default"
+      ],
+      "options": {
+        "command": "uv run --script scripts/validate-schema.py"
+      }
+    }
+  }
+}

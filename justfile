@@ -5,16 +5,13 @@
 #   output. Diagnostics live in explicit recipes (`doctor`, `cargo-tree`).
 # - Failing recipes preserve actionable output (paths, lints, diffs, codes).
 # - Every recipe pins dependencies with `--locked`.
+# - The gate recipes DELEGATE to Nx (`scripts/nx`): each project.json declares
+#   what its targets run; the root only chooses which projects run them, by tier
+#   (`affected`, the default, from the base scripts/nx-base.sh prints; or `all`).
+#   A mistyped tier aborts rather than quietly buying a weaker one.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
-# Minimum coverage enforced by `test-cov` — applied to lines, functions, and
-# regions alike (a miss in any fails the command). Actual coverage sits just
-# above this on all three metrics; most of what remains uncovered is defensive
-# I/O error handling that cannot fail under test (root reads everything, valid
-# JSON always serializes). New code that adds reachable branches should ship with
-# tests rather than lean on the margin.
-cov-min := "95"
 
 # Pinned developer tool versions (installed by `bootstrap`). CI installs the
 # latest of each via the install action; these pins keep local setups reproducible.
@@ -93,6 +90,9 @@ bootstrap:
     else
         echo "» skipping git hooks (lefthook missing)"
     fi
+    # Nx (the orchestrator every gate recipe delegates to) from the locked
+    # package-lock.json; scripts/nx runs `npm ci` whenever the lock moved.
+    bash scripts/nx --version >/dev/null
     echo "✓ bootstrap complete"
 
 # Fetch locked dependencies and verify the pinned toolchain is present.
@@ -104,51 +104,65 @@ sync:
 run *args:
     @cargo run --quiet --locked -- {{args}}
 
-# Format the workspace in place.
-format:
-    cargo fmt --all
+# Run Nx targets at a tier: `affected` (projects this change can reach, from an
+# explicit merge base) or `all` (every gate-eligible project). The live harness
+# suites and the skill install check declare no gate target (theirs are `live` /
+# `verify-install`), and every tiered run also excludes `tag:type:live`, so
+# neither tier can reach them.
+[private]
+nx-tier tier +args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case {{ quote(tier) }} in
+        affected) base="$(bash scripts/nx-base.sh)"; exec bash scripts/nx affected --base="$base" --exclude=tag:type:live {{ args }} ;;
+        all) exec bash scripts/nx run-many --exclude=tag:type:live {{ args }} ;;
+        *) printf "unknown tier '%s' — use 'affected' (the default) or 'all'\n" {{ quote(tier) }} >&2; exit 2 ;;
+    esac
+
+# Format in place (each project's `format` target).
+format tier="affected": (nx-tier tier "-t format")
 
 # Alias for `format` (kept for muscle memory and existing docs).
-fmt: format
+fmt tier="affected": (format tier)
 
 # Check formatting without writing (fails on any diff).
-fmt-check:
-    cargo fmt --all --check
+fmt-check tier="affected": (nx-tier tier "-t format-check")
 
-# Type-check all targets and features (a phase of the `check` gate).
-typecheck:
-    cargo check --locked --all-targets --all-features
+# llmlint: ignore-block[diagnostics_error_or_absent] every rustc warning already fails the gate: the `lint` target runs clippy with -D warnings over the same crates, --all-targets and --all-features, so a warning cargo check prints here is an error one target over; repeating -D warnings via RUSTFLAGS would make cargo rebuild the dependency graph for each flag set.
+# Type-check all targets and features of each affected crate.
+typecheck tier="affected": (nx-tier tier "-t typecheck")
+# llmlint: ignore-end[diagnostics_error_or_absent]
 
+# Covers clippy per crate, the workflow-matrix drift gate and the project
+# boundaries.
 # Lint with every warning treated as an error.
-lint:
-    cargo clippy --locked --all-targets --all-features -- -D warnings
+lint tier="affected": (nx-tier tier "-t lint")
 
-# Alias for `lint` (kept for muscle memory and existing docs).
-clippy: lint
+# Clippy (-D warnings) over the Rust crates only: their `lint` targets.
+clippy tier="affected": (nx-tier tier "-t lint --projects=tag:lang:rust")
 
-# Apply machine-applicable clippy fixes.
+# Apply machine-applicable clippy fixes across the workspace.
 clippy-fix:
-    cargo clippy --fix --allow-dirty --allow-staged --locked --all-targets --all-features
+    cargo clippy --fix --allow-dirty --allow-staged --locked --workspace --all-targets --all-features
 
-# Drift gate for the live-e2e CI matrix contract: assert every
-# .github/workflows/e2e-*.yml matches the single source in
-# scripts/check-e2e-matrix.sh (no push trigger; claude/codex keep the full PR
-# matrix, the rest Linux-only on PR; on-demand `os` dispatch). Keeps the matrix
-# duplication GitHub Actions forces from drifting. See .github/AGENTS.md.
+# The ci-workflows project's lint target (scripts/check-e2e-matrix.sh), so `lint`
+# runs it too; the contract it holds is in .github/AGENTS.md.
+# Drift gate for the live-e2e CI matrix contract.
 lint-workflows:
-    @bash scripts/check-e2e-matrix.sh
+    @bash scripts/nx run ci-workflows:lint
 
-# Run unit + integration tests (excludes the slower binary e2e suite).
-test:
-    cargo nextest run --locked --status-level fail -E 'not binary(e2e)'
+# Covers unit + integration, the schema validation, and the workflow-contract
+# and boundary-checker suites.
+# Run every test target except the binary e2e suite.
+test tier="affected": (nx-tier tier "-t test --exclude=tag:type:e2e")
 
 # Re-run tests on change (requires cargo-watch; not part of the quality gate).
 test-watch:
-    cargo watch -x 'nextest run --locked -E "not binary(e2e)"'
+    cargo watch -x 'nextest run --locked -p allowlister'
 
+# allowlister-e2e:test, after allowlister:build; `check` runs it too.
 # Run the end-to-end suite that drives the compiled binary.
-test-e2e:
-    cargo nextest run --locked --status-level fail -E 'binary(e2e)'
+test-e2e tier="affected": (nx-tier tier "-t test --projects=tag:type:e2e")
 
 # Live check against the real `claude` CLI (needs Claude Code + auth + network; opt-in, not in full-check).
 test-claude:
@@ -186,39 +200,28 @@ test-opencode:
 verify-skill:
     @bash scripts/verify-skill-install.sh
 
-# Enforce line, function, and region coverage across all tests; a miss in any
-# one fails the command.
-test-cov:
-    cargo llvm-cov nextest --locked --all-features \
-        --ignore-filename-regex '(src/main\.rs|tests/)' \
-        --fail-under-lines {{cov-min}} \
-        --fail-under-functions {{cov-min}} \
-        --fail-under-regions {{cov-min}}
+# coverage:coverage runs after both crates' instrumented `test` targets and
+# merges their profiles; the floor lives in tools/coverage/coverage.sh.
+# Enforce 95% line, function, and region coverage over the unit + e2e runs.
+test-cov tier="affected": (nx-tier tier "-t coverage")
 
 # Build the API docs (warnings are errors).
-doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --all-features
+doc tier="affected": (nx-tier tier "-t doc")
 
-# Security advisories for the dependency tree.
-security:
-    cargo deny --locked check advisories
+# Supply chain: cargo-deny (advisories, bans, licenses, sources) + cargo-machete.
+supply-chain tier="affected": (nx-tier tier "-t supply-chain")
 
-# Dependency hygiene: bans, licenses, sources, and unused dependencies.
-deps-check:
-    cargo deny --locked check bans licenses sources
-    cargo machete
-
-# Validate every shipped config against the published JSON Schema, catching a
-# schema that drifts too strict for the configs the loader accepts. Python-based
-# (needs `jsonschema`: CI installs it, locally `pip install jsonschema`), so it
-# stays out of the Rust `check` gate and runs as its own CI job.
+# Catches a schema that drifts too strict for the configs the loader accepts
+# (the config-schema project's `test`; uv resolves `jsonschema`).
+# Validate every shipped config against the published JSON Schema.
 schema-check:
-    python3 scripts/validate-schema.py
+    @bash scripts/nx run config-schema:test
 
-# Check the crate against its declared minimum supported Rust version.
-# Requires the MSRV toolchain (`rustup toolchain install 1.88.0`).
+# The version is Cargo.toml's rust-version (scripts/msrv.sh); install that
+# toolchain first (`rustup toolchain install <version>`).
+# Check the workspace against its declared minimum supported Rust version.
 msrv:
-    cargo +1.88.0 check --locked --all-targets --all-features
+    @bash scripts/nx run workspace:msrv
 
 # Install git hooks.
 hooks-install:
@@ -230,11 +233,15 @@ hooks:
 
 # Debug build.
 build:
-    cargo build --locked
+    @bash scripts/nx run allowlister:build
 
 # Optimized release build.
 build-release:
     cargo build --release --locked
+
+# Release build + release plan: the allowlister:release-check target the gate runs.
+release-check:
+    @bash scripts/nx run allowlister:release-check
 
 # Verify the release plan (targets + packaging) without publishing.
 dist-plan:
@@ -251,7 +258,7 @@ dist-build:
 
 # Engine micro-benchmarks (Criterion); saves the `current` baseline for bench-compare.
 bench:
-    cargo bench --locked --bench engine -- --save-baseline current
+    @bash scripts/nx run allowlister:bench
 
 # Save current engine benchmarks as the `base` baseline (run on the comparison point).
 bench-base:
@@ -284,31 +291,27 @@ bench-all: bench bench-cli bench-allocs
 profile *args:
     @bash scripts/profile.sh {{args}}
 
-# Full quality gate. Stops at the first failing phase; minimal output on success.
-# This is THE gate: format, type-check, lint, the full test suite (unit +
-# integration + binary e2e), enforced coverage, then dependency/security/docs/
-# release checks. `bootstrap` then `check` is what CI runs and what proves the
-# artifact; nothing here is warnings-only.
-check:
+# This is THE gate: format check, type-check, lint (clippy, the workflow-matrix
+# drift gate, project boundaries), every test target (unit + integration, binary
+# e2e, schema validation, workflow contracts), enforced coverage, docs, the
+# release build + plan, and the supply chain — over the projects this change can
+# reach, or every project with `just check all` (the release-PR sweep).
+# `bootstrap` then `check` is what CI runs; nothing here is warnings-only, and
+# any failing target fails the recipe.
+# Full quality gate (`just check all` sweeps every project).
+check tier="affected":
     #!/usr/bin/env bash
     set -euo pipefail
-    phase() { printf '\n» %s\n' "$1"; }
-    phase "format";        just fmt-check
-    phase "typecheck";     just typecheck
-    phase "lint";          just lint
-    phase "lint-workflows"; just lint-workflows
-    phase "test";          just test
-    phase "test-e2e";      just test-e2e
-    phase "coverage";      just test-cov
-    phase "deps-check";    just deps-check
-    phase "security";      just security
-    phase "docs";          just doc
-    phase "release build"; just build-release
-    phase "dist-plan";     just dist-plan
-    printf '\n✓ check passed\n'
+    case {{ quote(tier) }} in
+        # llmlint: ignore-block[diagnostics_error_or_absent] the build, test and release-check compilations are of the same sources `lint` checks with clippy -D warnings over --all-targets --all-features, so any rustc warning already fails this recipe through that target; denying again per invocation would rebuild the graph per RUSTFLAGS set.
+        affected) base="$(bash scripts/nx-base.sh)"; exec bash scripts/nx affected --base="$base" --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
+        all) exec bash scripts/nx run-many --exclude=tag:type:live -t format-check lint typecheck test build doc release-check coverage supply-chain ;;
+        # llmlint: ignore-end[diagnostics_error_or_absent]
+        *) printf "unknown tier '%s' — use 'affected' (the default) or 'all'\n" {{ quote(tier) }} >&2; exit 2 ;;
+    esac
 
 # Alias for `check` (kept so existing docs/scripts that say `full-check` work).
-full-check: check
+full-check tier="affected": (check tier)
 
 # Remove build artifacts.
 clean:
@@ -325,11 +328,13 @@ doctor:
 cargo-tree:
     cargo tree --locked --all-features
 
-# Update dependencies and the lockfile. Review the diff before committing.
-# May change Cargo.lock, transitive versions, and (re)generated release config.
+# An upgrade can reach any project, so the affected set would understate it.
+# Review `git diff Cargo.lock` before committing. The Nx toolchain is pinned
+# exactly in package.json and bumped deliberately, not here.
+# Update Cargo.lock (`cargo update`), then re-run the gate as the full sweep.
 upgrade:
     cargo update
-    @echo "✓ updated Cargo.lock — run 'just full-check' and review 'git diff'"
+    @just check all
 
 # Install/refresh the optional llmlint toolchain. Idempotent.
 setup-llmlint:

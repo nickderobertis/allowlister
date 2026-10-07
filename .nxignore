@@ -1,0 +1,17 @@
+# Files no project builds, tests or reads. Nx leaves them out of the graph, so
+# editing them affects no project; the root project would otherwise own them and
+# rerun the crate's suites for a docs or dev-environment change. README.md is not
+# here: the crate packages it. Anything a target reads must never be listed.
+**/AGENTS.md
+**/CLAUDE.md
+/CONTRIBUTING.md
+/CHANGELOG.md
+/docs/
+# Agent, hook, judged-lint and shell/editor settings: read by those tools, never
+# by an Nx target.
+/.claude/
+/lefthook.yml
+/llmlint.yml
+/oneharness.toml
+/.envrc
+/.editorconfig

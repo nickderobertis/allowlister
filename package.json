@@ -1,0 +1,12 @@
+{
+  "name": "allowlister-workspace",
+  "private": true,
+  "description": "Nx orchestration for the allowlister repository's project graph. Not a published package: Cargo owns the Rust dependencies; this lock pins only the Nx toolchain and the tooling tests' parsers.",
+  "license": "MIT",
+  "devDependencies": {
+    "conventional-changelog-conventionalcommits": "9.1.0",
+    "conventional-commits-parser": "6.2.1",
+    "nx": "23.3.0",
+    "yaml": "2.9.1"
+  }
+}

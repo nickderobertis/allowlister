@@ -1,0 +1,27 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "live-e2e-codex",
+  "//": "The live codex suite (scripts/e2e-codex.sh, with the shared scripts/e2e-lib.sh and the scripts/e2e-mcp-server.py fixture): drives the real codex CLI (network, a model call, a credential) against the release binary. Out of the gate entirely — its only target is live, which no gate recipe names — and run by .github/workflows/e2e-codex.yml through `just test-codex`. The scripts stay in scripts/ (owned by the scripts project); they are this target's inputs, so a change to them reaches this project.",
+  "projectType": "application",
+  "tags": [
+    "type:live",
+    "scope:harness"
+  ],
+  "implicitDependencies": [
+    "allowlister"
+  ],
+  "targets": {
+    "live": {
+      "executor": "nx:run-commands",
+      "inputs": [
+        "default",
+        "{workspaceRoot}/scripts/e2e-codex.sh",
+        "{workspaceRoot}/scripts/e2e-lib.sh",
+        "{workspaceRoot}/scripts/e2e-mcp-server.py"
+      ],
+      "options": {
+        "command": "bash scripts/e2e-codex.sh"
+      }
+    }
+  }
+}

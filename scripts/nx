@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Run Nx from the locked install. Every gate recipe in the justfile delegates
+# through here rather than calling `nx` directly, so:
+#
+#   * a worktree that has never run `npm ci` (or whose package-lock.json moved
+#     since) gets the locked install first, instead of "nx: command not found";
+#   * Nx runs without its daemon, cloud, or interactive TUI — every invocation is
+#     one foreground process that finishes, the same locally and in CI.
+#
+# Usage: scripts/nx <nx arguments...>
+# Exit status: Nx's own; 1 when Node is missing or the locked install fails.
+set -euo pipefail
+
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+export NX_DAEMON=false NX_NO_CLOUD=true NX_TUI=false NX_SKIP_NX_CACHE_WARNING=true
+
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  echo "nx: Nx runs on Node, and node/npm are not on PATH; install the Node version .tool-versions pins ('just setup'), then re-run." >&2
+  exit 1
+fi
+
+readonly STAMP="node_modules/.npm-ci-stamp"
+if [ ! -x node_modules/.bin/nx ] || [ ! -f "$STAMP" ] \
+  || [ package-lock.json -nt "$STAMP" ] || [ package.json -nt "$STAMP" ]; then
+  if ! out="$(npm ci --no-audit --no-fund 2>&1)"; then
+    printf '%s\n' "$out" >&2
+    echo "nx: 'npm ci' failed (above); fix it, or re-run 'just bootstrap'." >&2
+    exit 1
+  fi
+  touch "$STAMP"
+fi
+
+exec node_modules/.bin/nx "$@"

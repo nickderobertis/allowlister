@@ -1,6 +1,6 @@
 name: Publish JSON schema
 
-# Keeps the `gh-pages` branch in sync with `schema/`, so GitHub Pages (configured
+# Keeps the `gh-pages` branch in sync with the schema files in `schema/`, so GitHub Pages (configured
 # as "Deploy from a branch: gh-pages / root") serves the config JSON Schema at its
 # canonical $id:
 #   https://nickderobertis.github.io/allowlister/allowlister.schema.json
@@ -35,7 +35,9 @@ jobs:
         run: |
           set -euo pipefail
           staging="$(mktemp -d)"
-          cp -R schema/. "$staging/"
+          # Only the published artifact: schema/ also holds the config-schema
+          # project's definition and agent notes, which are not served.
+          cp schema/allowlister.schema.json schema/index.html "$staging/"
           # Serve files verbatim (no Jekyll), including any leading-underscore names.
           touch "$staging/.nojekyll"
 

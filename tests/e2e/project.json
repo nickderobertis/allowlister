@@ -1,0 +1,62 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "allowlister-e2e",
+  "//": "The offline end-to-end suite: spawns the compiled allowlister binary against temp-dir config sandboxes. Its Cargo dev-dependency on allowlister (for a few library helpers its assertions reuse) is restated as the implicit dependency, since Nx does not read Cargo manifests; nothing depends on this project except the coverage aggregate.",
+  "projectType": "application",
+  "tags": [
+    "type:e2e",
+    "scope:engine",
+    "lang:rust",
+    "coverage:profiles"
+  ],
+  "implicitDependencies": [
+    "allowlister"
+  ],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/examples/**/*",
+      "sharedGlobals"
+    ]
+  },
+  "targets": {
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p allowlister-e2e"
+      }
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p allowlister-e2e -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy -p allowlister-e2e --locked --all-targets --all-features -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check -p allowlister-e2e --locked --all-targets --all-features"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "allowlister:build",
+        "coverage:coverage-clear"
+      ],
+      "options": {
+        "command": "bash tools/coverage/coverage.sh test allowlister-e2e"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/llvm-cov-target"
+      ],
+      "//": "After allowlister:build, so a broken binary fails there by name. Under coverage the journeys drive the instrumented copy tools/coverage/coverage.sh builds into target/llvm-cov-target, so the crate lines they reach count toward coverage:coverage."
+    }
+  }
+}
