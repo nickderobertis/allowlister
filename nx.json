@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
-  "//": "Nx runs targets over the project graph (one project.json per project); Cargo resolves the Rust dependencies (one Cargo.lock). The justfile always passes an explicit --base (scripts/nx-base.sh), so defaultBase is never what the gate keys off. A {workspaceRoot}/... path in a target's inputs also makes a change to that file mark the project affected, which is how a project reads a file another project owns (e.g. config-schema reads examples/).",
+  "//": "Nx runs targets over the project graph (one project.json per project); Cargo resolves the Rust dependencies (one Cargo.lock). The justfile always passes an explicit --base (scripts/nx-base.sh), so defaultBase is never what the gate keys off. A {workspaceRoot}/... path in a target's inputs also makes a change to that file mark the project affected, which is how a project reads a file another project owns (e.g. config-schema reads examples/). Cached targets that compile a dependency (lint, typecheck, doc) also hash that dependency's inputs (^default), so a crate change can never replay a stale pass for a crate built on it.",
   "defaultBase": "main",
   "namedInputs": {
     "default": ["{projectRoot}/**/*", "sharedGlobals"],
@@ -22,9 +22,9 @@
   },
   "targetDefaults": {
     "format-check": { "cache": true, "inputs": ["default", "rust"] },
-    "lint": { "cache": true, "inputs": ["default", "rust"] },
-    "typecheck": { "cache": true, "inputs": ["default", "rust"] },
-    "doc": { "cache": true, "inputs": ["default", "rust", { "env": "RUSTDOCFLAGS" }] },
+    "lint": { "cache": true, "inputs": ["default", "^default", "rust"] },
+    "typecheck": { "cache": true, "inputs": ["default", "^default", "rust"] },
+    "doc": { "cache": true, "inputs": ["default", "^default", "rust", { "env": "RUSTDOCFLAGS" }] },
     "format": { "cache": false },
     "build": { "cache": false },
     "test": { "cache": false },
