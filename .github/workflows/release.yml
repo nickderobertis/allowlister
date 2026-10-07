@@ -32,10 +32,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      # Full history, as ci.yml's release-PR sweep checks out.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       # Node runs Nx at the .tool-versions pin (read as in ci.yml).
       - name: Read the pinned Node version
         id: node
