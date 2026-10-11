@@ -40,7 +40,7 @@ test("job pr-title runs the v6 action on the PR events that change a title, with
   assert.equal(job.name ?? "pr-title", "pr-title");
   assert.equal(step?.uses, "amannn/action-semantic-pull-request@v6");
   assert.deepEqual(workflow.on, {
-    pull_request: { types: ["opened", "edited", "synchronize", "reopened", "ready_for_review"] },
+    pull_request: { types: ["opened", "edited", "synchronize", "reopened"] },
   });
   assert.deepEqual(workflow.permissions, { "pull-requests": "read" });
   assert.equal(job.permissions, undefined, "the job must not widen the workflow's permissions");
