@@ -110,9 +110,18 @@ test('a real workflow input edit invalidates recorded telemetry through the prod
     const env={...process.env,ONEBUDGETSPEC_RESULT:join(fixture,'measurement.json')};
     const run=()=>spawnSync(process.execPath,['.github/macos-budget.mjs','--metric','jobs-per-run','--telemetry',recorded],{cwd:fixture,encoding:'utf8',env});
     const fresh=run();assert.equal(fresh.status,0,fresh.stderr);
+    const entry=()=>spawnSync(process.execPath,['.github/tooling-run.mjs','budgets'],{cwd:fixture,encoding:'utf8',env,maxBuffer:4*1024*1024});
+    const within=entry();assert.equal(within.status,0,within.stderr);assert.match(within.stdout,/allowlister-macos-jobs-per-run: within/);assert.match(within.stdout,/allowlister-macos-runs-per-change: within/);
+    const saved=readFileSync(recorded);rmSync(recorded);
+    const missing=entry();assert.notEqual(missing.status,0);assert.match(missing.stdout,/allowlister-macos-jobs-per-run:/);assert.match(missing.stderr,/ENOENT|missing/);writeFileSync(recorded,saved);
     const workflow=join(fixture,'.github/workflows/ci.yml');
     writeFileSync(workflow,readFileSync(workflow,'utf8')+'\n# changed workflow source input\n');
     const changed=run();assert.notEqual(changed.status,0);assert.match(changed.stderr,/missing\/stale Mac telemetry/);
+    const called=join(fixture,'.github/workflows/bench.yml');writeFileSync(called,readFileSync(called,'utf8').replace('runs-on: ubuntu-latest','uses: ./.github/workflows/missing.yml'));
+    const updated=spawnSync(process.execPath,['--input-type=module','-e',"import {sourceDigest} from './.github/workflow-graph.mjs'; console.log(sourceDigest());"],{cwd:fixture,encoding:'utf8'});
+    assert.equal(updated.status,0,updated.stderr);writeFileSync(recorded,JSON.stringify({...telemetry,sourceDigest:updated.stdout.trim()}));
+    const unresolved=run();assert.notEqual(unresolved.status,0);assert.match(unresolved.stderr,/unresolved telemetry coverage for reusable call/);
+
   } finally {rmSync(fixture,{recursive:true,force:true});}
 });
 
@@ -120,6 +129,8 @@ test('production reporter rejects malformed records and inconsistent lifecycle t
   const path=join(h.dir,'malformed-telemetry.json');
   const job=value=>value.scenarios[0].runs[0].jobs[0];
   const cases=[
+    [value=>{value.scenarios[0].runs[0].workflow='unknown.yml';},/unknown telemetry workflow/],
+    [value=>{job(value).state='skipped';},/unauthorized skipped telemetry job/],
     [value=>{value.scenarios[0].runs=null;},/invalid telemetry runs/],
     [value=>{value.scenarios[0].runs[0].workflow=null;},/invalid telemetry workflow/],
     [value=>{value.scenarios[0].runs[0].jobs=null;},/invalid telemetry workflow/],
@@ -158,5 +169,34 @@ test('actual workflow graphs reject unresolved interpolation, bad matrices, sche
   for(const schedule of [{cron:'* * * * *'},[{cron:1}],[{cron:'* * * * *',unsupported:true}]]) {
     const graph=structuredClone(workflows);graph['ci.yml'].on.schedule=schedule;
     assert.throws(()=>triggered(graph['ci.yml'],{...scenario,eventName:'schedule'}),/unsupported schedule trigger/);
+  }
+});
+
+
+test('production reporter refuses missing workflow, job and matrix coverage', () => {
+  const path=join(h.dir,'missing-coverage.json');
+  for(const mutate of [
+    value=>{for(const record of [...value.scenarios,...value.lifecycles]) record.runs=record.runs.filter(run=>run.workflow!=='bench.yml');},
+    value=>{value.scenarios[0].runs.find(run=>run.workflow==='ci.yml').jobs=value.scenarios[0].runs.find(run=>run.workflow==='ci.yml').jobs.filter(job=>job.job!=='coverage');},
+    value=>{value.scenarios[0].runs.find(run=>run.workflow==='ci.yml').jobs=value.scenarios[0].runs.find(run=>run.workflow==='ci.yml').jobs.filter(job=>job.matrix?.os!=='windows-latest');},
+    value=>{const run=value.lifecycles[0].runs.find(run=>run.workflow==='release.yml');run.jobs=run.jobs.filter(job=>job.matrix?.target!=='x86_64-unknown-linux-musl');},
+  ]) {
+    const value=structuredClone(telemetry);value.sourceDigest=sourceDigest();mutate(value);writeFileSync(path,JSON.stringify(value));
+    const out=spawnSync(process.execPath,[join(root,'.github/macos-budget.mjs'),'--metric','jobs-per-run','--telemetry',path],{encoding:'utf8'});
+    assert.notEqual(out.status,0);assert.match(out.stderr,/missing telemetry coverage/);assert.equal(out.stdout,'');
+  }
+});
+
+
+test('production reporter rejects a skipped required Mac proof and a forged runner', () => {
+  const path=join(h.dir,'forged-scheduling.json');
+  for(const skip of [true,false]) {
+    const value=structuredClone(telemetry);value.sourceDigest=sourceDigest();
+    const job=value.scenarios[0].runs.find(run=>run.workflow==='ci.yml').jobs.find(job=>job.job==='macos');
+    job.macos=false;
+    if(skip) job.state='skipped'; else job.runner='ubuntu-latest';
+    writeFileSync(path,JSON.stringify(value));
+    const out=spawnSync(process.execPath,[join(root,'.github/macos-budget.mjs'),'--metric','jobs-per-run','--telemetry',path],{encoding:'utf8'});
+    assert.notEqual(out.status,0);assert.match(out.stderr,skip?/unauthorized skipped telemetry job/:/inconsistent declared telemetry runner/);assert.equal(out.stdout,'');
   }
 });

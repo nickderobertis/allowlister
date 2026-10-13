@@ -44,9 +44,6 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
-      # Linux-only on PR to keep paid live runs down; workflow_dispatch widens
-      # to 'all' (Linux here; Mac diagnostics use CI) or a single OS on demand. See
-      # AGENTS.md > "Live e2e in CI".
       matrix:
         # Linux in this workflow; Mac in CI: GitHub Copilot CLI does not load its preToolUse hook
         # on Windows, so the gate cannot be enforced there (a harness limitation

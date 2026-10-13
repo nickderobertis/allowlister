@@ -16,8 +16,6 @@ budgets:
     unit: jobs
     direction: max
     threshold: 1
-  # Lifecycle entries and simultaneous slot occupancy are independent constraints;
-  # both measurements reuse the same offline telemetry.
   - id: allowlister-macos-runs-per-change
     description: >-
       Maximum distinct Mac-spending workflow runs over a single-push lifecycle:

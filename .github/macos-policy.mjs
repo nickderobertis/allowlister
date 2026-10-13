@@ -21,12 +21,12 @@ function stripVersion(value, lock) {
     const packages = (value.package ?? []).filter(pkg => pkg.name === 'allowlister' && pkg.source === undefined && pkg.checksum === undefined);
     if (packages.length !== 1) throw new Error('lockfile must identify exactly one local allowlister package');
     for (const pkg of packages) {
-      if (!version.test(pkg.version)) throw new Error('invalid package version');
+      if (typeof pkg.version !== 'string' || !version.test(pkg.version)) throw new Error('invalid package version');
       delete pkg.version;
     }
     // Dependency versions/checksums, sources and all other fields remain intact.
   } else {
-    if (value.package?.name !== 'allowlister' || !version.test(value.package.version)) throw new Error('not a versioned allowlister manifest');
+    if (value.package?.name !== 'allowlister' || typeof value.package.version !== 'string' || !version.test(value.package.version)) throw new Error('not a versioned allowlister manifest');
     delete value.package.version;
   }
   return value;
@@ -44,7 +44,7 @@ export function classify(eventName, event, base, head) {
   try {
     const pr = event.pull_request;
     const repo = event.repository?.full_name;
-    if (typeof repo !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(repo) || pr?.head?.repo?.full_name !== repo || pr?.base?.repo?.full_name !== repo || !pr?.head?.ref?.startsWith(releaseBranchPrefix())) return required('ordinary or untrusted PR branch');
+    if (typeof repo !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(repo) || pr?.head?.repo?.full_name !== repo || pr?.base?.repo?.full_name !== repo || pr?.base?.repo?.full_name !== process.env.GITHUB_REPOSITORY || !pr?.head?.ref?.startsWith(releaseBranchPrefix())) return required('ordinary or untrusted PR branch');
     if (!base || !head || base.startsWith('-') || head.startsWith('-')) return required('missing or invalid revisions');
     const mergeBase = git(['merge-base', base, head]).trim();
     const changes = git(['diff', '--name-status', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);

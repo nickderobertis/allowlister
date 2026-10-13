@@ -48,7 +48,6 @@ test('release graph preserves every platform and archive; one compiled target in
   for(const identity of ['x86-64','arm64','Mach-O','ELF','PE32+']) assert.ok(verify.includes(identity));
   const offHost=spawnSync('bash',['scripts/verify-release.sh','x86_64-apple-darwin','v0.1.0'],{cwd:root,encoding:'utf8'});
   if(process.platform==='linux') {assert.notEqual(offHost.status,0);assert.match(offHost.stderr,/Darwin execution requires macOS/);}
-  // Distribution is archive-only; both Darwin archives reuse a compiled input.
   assert.deepEqual(contract.packageForms,['archive']);
 });
 test('all former Mac harness commands keep credentials, installation paths, and strict failures',()=>{
@@ -146,4 +145,25 @@ test('verifier missing arguments explain its invocation, and valid prerelease ta
     assert.notEqual(valid.status, 0); assert.match(valid.stderr, /missing or unreadable staged asset/);
     assert.doesNotMatch(valid.stderr, /invalid release tag/);
   }
+});
+
+
+test('real verifier reports temporary-directory failure and transport rejects incompatible calls', () => {
+  const dir=mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(),'release-boundary-'));
+  try {
+    const source=readFileSync(join(root,'scripts/verify-release.sh'),'utf8');
+    const adapter=source.match(/cat > "\$stage\/bin\/curl" <<'SH'\n([\s\S]*?)\nSH/)[1];
+    const path=join(dir,'curl');writeFileSync(path,adapter);
+    for(const args of [[],['--silent','asset'],['-fsSL','-o','file']]) {
+      const out=spawnSync('bash',[path,...args],{encoding:'utf8'});assert.notEqual(out.status,0);assert.match(out.stderr,/release transport expects curl -fsSL -o FILE URL/);assert.equal(out.stdout,'');
+    }
+    writeFileSync(join(dir,'archive'),'real local asset');
+    const destination=join(dir,'download');
+    const accepted=spawnSync('bash',[path,'-fsSL','-o',destination,'https://forge.invalid/archive'],{encoding:'utf8',env:{...process.env,RELEASE_ASSET_DIR:dir}});
+    assert.equal(accepted.status,0,accepted.stderr);assert.equal(readFileSync(destination,'utf8'),'real local asset');
+    if(process.platform==='linux') {
+      const failed=spawnSync('bash',['scripts/verify-release.sh','x86_64-unknown-linux-musl','v0.1.0'],{cwd:root,encoding:'utf8',env:{...process.env,TMPDIR:join(dir,'missing')}});
+      assert.notEqual(failed.status,0);assert.match(failed.stderr,/cannot create release verification staging/);assert.match(failed.stderr,/permissions and free disk space/);assert.equal(failed.stdout,'');
+    }
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

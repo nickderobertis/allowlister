@@ -21,10 +21,13 @@ test('real classifier admits only a same-repository automation branch with parse
     malformed.repository.full_name=name;malformed.pull_request.head.repo.full_name=name;malformed.pull_request.base.repo.full_name=name;
     assert.equal(h.classify(malformed).macosRequired,true,'malformed repository identity');
   }
+  const other=h.event(false,'release-plz-test');
+  other.repository.full_name='someone/another';other.pull_request.head.repo.full_name='someone/another';other.pull_request.base.repo.full_name='someone/another';
+  assert.equal(h.classify(other).macosRequired,true,'payload repository must match Actions repository identity');
   const botOnly=h.event();botOnly.pull_request.user.login='github-actions[bot]';
   assert.equal(h.classify(botOnly).macosRequired,true,'bot identity alone authorizes no omission');
   for(const payload of [h.event(),h.event(true,'release-plz-2026'),{},'{bad',null,[]]) assert.equal(h.classify(payload).macosRequired,true);
-  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','invalidLockVersion','missingLocalPackage','duplicateLocalPackage','wrongPackageName','invalidSemver0','invalidSemver1','invalidSemver2','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
+  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','arrayManifestVersion','arrayLockVersion','invalidLockVersion','missingLocalPackage','duplicateLocalPackage','wrongPackageName','invalidSemver0','invalidSemver1','invalidSemver2','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
   assert.equal(h.classify(release,h.heads.version,'pull_request','missing-ref').macosRequired,true);
   assert.equal(h.classify(release,h.base).macosRequired,true,'empty diff');
   for (const ownership of ['missing','duplicate','renamed']) {
@@ -146,4 +149,19 @@ test('graph resolution reconciles matrix includes and event filters with the Act
   for (const pattern of ['!src/**', 'src/?.rs', 'v[0-9]+', '{main,master}']) {
     assert.throws(() => triggered({ on: { push: { tags: [pattern] } } }, tag), /unsupported Actions filter pattern/);
   }
+});
+
+
+test('real workflow graph refuses malformed matrix structures', () => {
+  const scenario={eventName:'push',event:{},ref:'refs/heads/main',head:'test'};
+  for(const matrix of [[],null,'bad',{include:'bad'},{exclude:'bad'},{include:[null]},{include:['bad']},{exclude:[null]}]) {
+    assert.throws(()=>resolveRun({'fixture.yml':{jobs:{test:{'runs-on':'ubuntu-latest',strategy:{matrix}}}}},'fixture.yml',scenario),/invalid matrix/);
+  }
+});
+
+
+test('actual graph refuses malformed job mappings and event filter declarations', () => {
+  const scenario={eventName:'push',event:{},ref:'refs/heads/main',head:'test'};
+  for(const jobs of [[],{},null,'bad',{test:null}]) assert.throws(()=>resolveRun({'fixture.yml':{jobs}},'fixture.yml',scenario),/invalid jobs/);
+  for(const config of [false,'bad',{types:'published'},{workflows:'CI'},{branches:'main'},{paths:[false]}]) assert.throws(()=>triggered({on:{push:config}},scenario),/invalid trigger/);
 });

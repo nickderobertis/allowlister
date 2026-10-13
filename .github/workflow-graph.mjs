@@ -47,6 +47,8 @@ export function resolve(value, context) {
 }
 export function expandMatrix(matrix = {}, context) {
   matrix = resolve(matrix, context);
+  const object=value=>value !== null && typeof value === 'object' && !Array.isArray(value);
+  if(!object(matrix) || ['include','exclude'].some(key=>matrix[key] !== undefined && (!Array.isArray(matrix[key]) || matrix[key].some(cell=>!object(cell))))) throw new Error('invalid matrix structure');
   const { include = [], exclude = [], ...axes } = matrix;
   let cells = [{}];
   for (const [key, values] of Object.entries(axes)) {
@@ -74,6 +76,8 @@ export function triggered(workflow, scenario) {
   const event = scenario.eventName;
   if (!on || !(event in on)) return false;
   const config = on[event] ?? {};
+  if(event !== 'schedule' && (typeof config !== 'object' || Array.isArray(config))) throw new Error('invalid trigger configuration');
+  for(const key of ['types','workflows','branches','branches-ignore','tags','tags-ignore','paths','paths-ignore']) if(config[key] !== undefined && (!Array.isArray(config[key]) || config[key].some(value=>typeof value !== 'string'))) throw new Error(`invalid trigger filter ${key}`);
   const supported = new Set(['types', 'workflows', 'branches', 'branches-ignore', 'tags', 'tags-ignore', 'paths', 'paths-ignore', 'inputs', 'secrets', 'outputs']);
   if (event === 'schedule') {
     if (!Array.isArray(config) || config.some(c => typeof c.cron !== 'string' || Object.keys(c).some(k => k !== 'cron'))) throw new Error('unsupported schedule trigger');
@@ -101,6 +105,7 @@ export function resolveRun(workflows, file, scenario, chain = []) {
   const github = { event_name: scenario.eventName, event: scenario.event, repository: 'nickderobertis/allowlister', ref: scenario.ref, sha: scenario.head, token: 'transport-double' };
   const context = { github, inputs: scenario.inputs ?? {}, vars: { PUBLISH_TO_CRATES_IO: scenario.publishCrate ? 'true' : 'false' }, needs: {} };
   const rows = [];
+  if(!workflow.jobs || typeof workflow.jobs !== 'object' || Array.isArray(workflow.jobs) || !Object.keys(workflow.jobs).length || Object.values(workflow.jobs).some(job=>!job || typeof job !== 'object' || Array.isArray(job))) throw new Error(`invalid jobs mapping ${file}`);
   const pending = new Map(Object.entries(workflow.jobs));
   while (pending.size) {
     let progressed = false;

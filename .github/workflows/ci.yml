@@ -105,8 +105,6 @@ jobs:
           # bootstrap's reinstall ("already exists in destination"). Reinstalling
           # the prebuilt each run is cheap and deterministic.
           cache-bin: false
-      # Prebuilt binaries for the cargo subcommands the gate needs; `bootstrap`
-      # below is idempotent and no-ops over anything already present.
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
@@ -482,8 +480,6 @@ jobs:
           # bootstrap's reinstall ("already exists in destination"). Reinstalling
           # the prebuilt each run is cheap and deterministic.
           cache-bin: false
-      # Prebuilt binaries for the cargo subcommands the gate needs; `bootstrap`
-      # below is idempotent and no-ops over anything already present.
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete

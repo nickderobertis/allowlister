@@ -25,6 +25,8 @@ export function history() {
   make('sameNameDependency', {'Cargo.lock':lock.replace('2.0.0','2.1.0')});
   make('mixed',{'Cargo.toml':manifest.replace('0.1.0','0.1.1'),'main.rs':'fn main() { println!("hello"); }\n'});
   make('malformed', {'Cargo.toml':'[package\n'});
+  make('arrayManifestVersion', {'Cargo.toml':manifest.replace('version = "0.1.0"','version = ["0.1.1"]')});
+  make('arrayLockVersion', {'Cargo.lock':lock.replace('version = "0.1.0"','version = ["0.1.1"]')});
   make('invalidVersion', {'Cargo.toml':manifest.replace('0.1.0','not-a-version')});
   make('prerelease', {'Cargo.toml':manifest.replace('0.1.0','0.1.1-rc.1+build.01')});
   make('missingLocalPackage', {'Cargo.lock':lock.replace('[[package]]\nname = "allowlister"\nversion = "0.1.0"\n','')});
@@ -38,7 +40,7 @@ export function history() {
   const event = (fork = false, branch = 'feature') => ({ repository:{full_name:'nickderobertis/allowlister'}, pull_request:{title:'chore: release', user:{login:'nickderobertis'}, head:{sha:heads.version,ref:branch,repo:{full_name:fork?'someone/fork':'nickderobertis/allowlister'}}, base:{sha:base,ref:'main',repo:{full_name:'nickderobertis/allowlister'}}} });
   const classify = (payload, head = heads.version, eventName = 'pull_request', ref = base) => {
     const path = join(dir,'event.json'); writeFileSync(path, typeof payload === 'string' ? payload : JSON.stringify(payload));
-    const out = spawnSync(process.execPath,[join(root,'.github/macos-policy.mjs'),'classify','--event',path,`--base=${ref}`,`--head=${head}`],{cwd:dir,encoding:'utf8',env:{...process.env,GITHUB_EVENT_NAME:eventName}});
+    const out = spawnSync(process.execPath,[join(root,'.github/macos-policy.mjs'),'classify','--event',path,`--base=${ref}`,`--head=${head}`],{cwd:dir,encoding:'utf8',env:{...process.env,GITHUB_EVENT_NAME:eventName,GITHUB_REPOSITORY:'nickderobertis/allowlister'}});
     if(out.status !== 0) throw new Error(out.stderr);
     return JSON.parse(out.stdout);
   };

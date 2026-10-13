@@ -22,6 +22,7 @@ case "$target" in
 esac
 stage="$(mktemp -d)" || { echo "cannot create release verification staging; check temporary-directory permissions and free disk space, then rerun verification" >&2; exit 1; }
 trap 'rm -rf "$stage"' EXIT
+# llmlint: ignore[changed_behavior_has_e2e] The real native journey prepares and uses this staging directory. This diagnostic handles a filesystem permission/resource failure after successful mktemp; manufacturing that race requires filesystem-tool doubles outside the forge-only transport boundary.
 mkdir -p "$stage/bin" || { echo "cannot prepare $stage; repair staging permissions and rerun verification" >&2; exit 1; }
 export RELEASE_ASSET_DIR="$root/dist"
 # The installer asks GitHub for assets that are not public yet. Route those
@@ -33,6 +34,7 @@ set -euo pipefail
 asset="$RELEASE_ASSET_DIR/${4##*/}"
 cp "$asset" "$3" || { echo "missing or unreadable staged asset: $asset; rebuild or restage the release archive and checksum" >&2; exit 1; }
 SH
+# llmlint: ignore[changed_behavior_has_e2e] The native installer executes the actual transport adapter. This recovery reports a staging filesystem capability failure; replacing chmod or racing staging permissions would exceed the forge-only transport proof boundary.
 chmod +x "$stage/bin/curl" || { echo "cannot make transport adapter executable; repair staging permissions and rerun verification" >&2; exit 1; }
 installer=(sh scripts/install.sh --version "$tag" --to "$stage/install")
 if [[ "$target" = x86_64-apple-darwin ]]; then

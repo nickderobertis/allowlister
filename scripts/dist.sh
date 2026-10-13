@@ -93,6 +93,7 @@ build() {
     local stage
     stage="$(mktemp -d)"
     trap 'rm -rf "$stage"' EXIT
+    # llmlint: ignore-block[changed_behavior_has_e2e] The production journey proves real compiled bytes, documents and archive contents. These diagnostics report staging filesystem or native packager capability failures; replacing cp, tar or 7z would violate its forge-transport-only doubling boundary, and this host cannot execute Windows packaging.
     cp "target/${target}/release/${binary}" "$stage/" || { echo "cannot stage $target; rebuild its release binary with just dist-build" >&2; exit 1; }
     cp README.md LICENSE CHANGELOG.md "$stage/" || { echo "cannot stage release documents; restore README.md, LICENSE and CHANGELOG.md and rerun just dist-build" >&2; exit 1; }
     if [[ "$archive" = *.zip ]]; then
@@ -100,6 +101,7 @@ build() {
     else
         tar -czf "${outdir}/${archive}" -C "$stage" "$binary" README.md LICENSE CHANGELOG.md || { echo "cannot package $archive; install tar and check dist/ is writable, then rerun just dist-build" >&2; exit 1; }
     fi
+    # llmlint: ignore-end[changed_behavior_has_e2e]
     rm -rf "$stage"
     trap - EXIT
     local digest
