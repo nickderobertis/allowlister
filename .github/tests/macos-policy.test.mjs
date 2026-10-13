@@ -16,12 +16,25 @@ test('real classifier admits only a same-repository automation branch with parse
     assert.equal(h.classify(release).isReleaseOnly,true,'author is not authority (release-plz uses a personal token)');
   }
   assert.equal(h.classify(release,h.heads.prerelease).isReleaseOnly,true,'valid prerelease and build identifiers remain version-only');
+  for (const name of [1,'not-a-repository',' owner/repo','owner/repo/extra']) {
+    const malformed=h.event(false,'release-plz-test');
+    malformed.repository.full_name=name;malformed.pull_request.head.repo.full_name=name;malformed.pull_request.base.repo.full_name=name;
+    assert.equal(h.classify(malformed).macosRequired,true,'malformed repository identity');
+  }
   const botOnly=h.event();botOnly.pull_request.user.login='github-actions[bot]';
   assert.equal(h.classify(botOnly).macosRequired,true,'bot identity alone authorizes no omission');
   for(const payload of [h.event(),h.event(true,'release-plz-2026'),{},'{bad',null,[]]) assert.equal(h.classify(payload).macosRequired,true);
-  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','invalidLockVersion','invalidSemver0','invalidSemver1','invalidSemver2','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
+  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','invalidLockVersion','missingLocalPackage','duplicateLocalPackage','wrongPackageName','invalidSemver0','invalidSemver1','invalidSemver2','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
   assert.equal(h.classify(release,h.heads.version,'pull_request','missing-ref').macosRequired,true);
   assert.equal(h.classify(release,h.base).macosRequired,true,'empty diff');
+  for (const ownership of ['missing','duplicate','renamed']) {
+    const classified=h.classifyOwnership(ownership);
+    assert.equal(classified.macosRequired,true,ownership);assert.equal(classified.isReleaseOnly,false,ownership);
+  }
+  for (const [base,head] of [['',h.heads.version],[h.base,''],['-invalid',h.heads.version],[h.base,'-invalid']]) {
+    const classified=h.classify(release,head,'pull_request',base);
+    assert.equal(classified.macosRequired,true);assert.match(classified.reason,/missing or invalid revisions/);
+  }
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);
   for(const event of ['unknown','pull_request_typo','','constructor']) {
     const classified=h.classify(release,h.heads.version,event);
@@ -37,6 +50,7 @@ test('real Linux carrier fails every unapproved job outcome and reports intentio
     const out=spawnSync('bash',['-eo','pipefail','-c',command],{cwd:h.dir,encoding:'utf8',env:{...process.env,NEEDS_JSON:JSON.stringify(needs)}});
     const good=policyResult==='success' && result===(required==='true'?'success':'skipped');
     assert.equal(out.status===0,good,JSON.stringify(needs));
+    if(good && required==='true') assert.match(out.stdout,/Mac lane job succeeded/);
     if(good && required==='false') assert.match(out.stdout,/no Mac tests ran/);
   }
   const path=join(h.dir,'needs.json');writeFileSync(path,JSON.stringify({policy:{result:'success',outputs:{}},macos:{result:'skipped'}}));

@@ -15,6 +15,20 @@ test('production host archive builds, installs and runs, and rejects corrupted t
   const version=readFileSync(join(root,'Cargo.toml'),'utf8').match(/^version = "([^"]+)"/m)[1];
   const tag='v'+version;
   const run=(script,args)=>spawnSync('bash',[script,...args],{cwd:root,encoding:'utf8',maxBuffer:8*1024*1024});
+  const defaultBasename=`allowlister-${tag}-${target}`;
+  const defaultArchive=join(root,'dist',defaultBasename+(target.includes('windows')?'.zip':'.tar.gz'));
+  const defaultChecksum=join(root,'dist',defaultBasename+'.sha256');
+  for (const args of [['dist-build',target],['dist-build',target,'']]) {
+    rmSync(defaultArchive,{force:true});rmSync(defaultChecksum,{force:true});
+    try {
+      const defaultBuild=spawnSync('just',args,{cwd:root,encoding:'utf8',maxBuffer:8*1024*1024});
+      assert.equal(defaultBuild.status,0,defaultBuild.stderr);
+      assert.ok(readFileSync(defaultArchive).length);
+      assert.ok(readFileSync(defaultChecksum,'utf8').includes(defaultBasename));
+      const defaultInstall=run('scripts/verify-release.sh',[target,tag]);
+      assert.equal(defaultInstall.status,0,defaultInstall.stderr);
+    } finally {rmSync(defaultArchive,{force:true});rmSync(defaultChecksum,{force:true});}
+  }
   const build=spawnSync('just',['dist-build',target,tag],{cwd:root,encoding:'utf8',maxBuffer:8*1024*1024});assert.equal(build.status,0,build.stderr);
   const basename=`allowlister-${tag}-${target}`;
   const checksum=join(root,'dist',basename+'.sha256');

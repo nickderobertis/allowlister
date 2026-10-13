@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise the production installer before publication. Only GitHub asset
-# transport and target selection are doubled; the staged binary really executes.
+# transport is doubled; host detection and the staged binary really execute.
 # Exit 0: verified install/run; 1: invalid target/tag, host or artifact failure.
 set -euo pipefail
 root="$(pwd)"
@@ -23,7 +23,7 @@ esac
 stage="$(mktemp -d)" || { echo "cannot create release verification staging; check temporary-directory permissions and free disk space, then rerun verification" >&2; exit 1; }
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" || { echo "cannot prepare $stage; repair staging permissions and rerun verification" >&2; exit 1; }
-export RELEASE_ASSET_DIR="$root/dist" RELEASE_TARGET="$target" RELEASE_UNAME="$(command -v uname)"
+export RELEASE_ASSET_DIR="$root/dist"
 # The installer asks GitHub for assets that are not public yet. Route those
 # exact asset names to this build's local files, with no network fallback.
 cat > "$stage/bin/curl" <<'SH'
@@ -33,16 +33,12 @@ set -euo pipefail
 asset="$RELEASE_ASSET_DIR/${4##*/}"
 cp "$asset" "$3" || { echo "missing or unreadable staged asset: $asset; rebuild or restage the release archive and checksum" >&2; exit 1; }
 SH
-cat > "$stage/bin/uname" <<'SH'
-#!/usr/bin/env bash
-if [[ "$1" = -m ]]; then
-    case "$RELEASE_TARGET" in aarch64-*) echo aarch64 ;; *) echo x86_64 ;; esac
-else
-    "$RELEASE_UNAME" "$@"
+chmod +x "$stage/bin/curl" || { echo "cannot make transport adapter executable; repair staging permissions and rerun verification" >&2; exit 1; }
+installer=(sh scripts/install.sh --version "$tag" --to "$stage/install")
+if [[ "$target" = x86_64-apple-darwin ]]; then
+    installer=(arch -x86_64 "${installer[@]}")
 fi
-SH
-chmod +x "$stage/bin/curl" "$stage/bin/uname" || { echo "cannot make transport adapters executable; repair staging permissions and rerun verification" >&2; exit 1; }
-if ! PATH="$stage/bin:$PATH" sh scripts/install.sh --version "$tag" --to "$stage/install" > "$stage/install.log" 2>&1; then
+if ! PATH="$stage/bin:$PATH" "${installer[@]}" > "$stage/install.log" 2>&1; then
     cat "$stage/install.log" >&2
     echo "release install failed for $target; rebuild or restage its archive and checksum, then rerun scripts/verify-release.sh" >&2
     exit 1

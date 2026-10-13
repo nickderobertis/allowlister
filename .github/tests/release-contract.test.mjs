@@ -40,6 +40,8 @@ test('release graph preserves every platform and archive; one compiled target in
   const verify=readFileSync(join(root,'scripts/verify-release.sh'),'utf8');
   assert.match(verify,/sh scripts\/install.sh --version "\$tag" --to/);
   assert.match(verify,/cmp -s "target\/\$target\/release/);
+  assert.match(verify,/installer=\(arch -x86_64 "\$\{installer\[@\]\}"\)/);
+  assert.doesNotMatch(verify,/stage\/bin\/uname|RELEASE_UNAME/);
   assert.match(verify,/arch -x86_64 "\$binary" --version/);
   assert.match(verify,/Darwin execution requires macOS/);
   for(const platform of contract.platforms) assert.ok(verify.includes(platform.target),platform.target);

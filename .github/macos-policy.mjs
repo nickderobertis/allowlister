@@ -44,7 +44,7 @@ export function classify(eventName, event, base, head) {
   try {
     const pr = event.pull_request;
     const repo = event.repository?.full_name;
-    if (!repo || pr?.head?.repo?.full_name !== repo || pr?.base?.repo?.full_name !== repo || !pr?.head?.ref?.startsWith(releaseBranchPrefix())) return required('ordinary or untrusted PR branch');
+    if (typeof repo !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(repo) || pr?.head?.repo?.full_name !== repo || pr?.base?.repo?.full_name !== repo || !pr?.head?.ref?.startsWith(releaseBranchPrefix())) return required('ordinary or untrusted PR branch');
     if (!base || !head || base.startsWith('-') || head.startsWith('-')) return required('missing or invalid revisions');
     const mergeBase = git(['merge-base', base, head]).trim();
     const changes = git(['diff', '--name-status', '-z', '--no-renames', mergeBase, head]).split('\0').filter(Boolean);

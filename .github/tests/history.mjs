@@ -27,6 +27,9 @@ export function history() {
   make('malformed', {'Cargo.toml':'[package\n'});
   make('invalidVersion', {'Cargo.toml':manifest.replace('0.1.0','not-a-version')});
   make('prerelease', {'Cargo.toml':manifest.replace('0.1.0','0.1.1-rc.1+build.01')});
+  make('missingLocalPackage', {'Cargo.lock':lock.replace('[[package]]\nname = "allowlister"\nversion = "0.1.0"\n','')});
+  make('duplicateLocalPackage', {'Cargo.lock':lock+'[[package]]\nname = "allowlister"\nversion = "0.2.0"\n'});
+  make('wrongPackageName', {'Cargo.toml':manifest.replace('name = "allowlister"','name = "another-package"')});
   make('invalidLockVersion', {'Cargo.lock':lock.replace('0.1.0','01.2.3')});
   for (const [index, invalid] of ['01.2.3','1.2.3-...','1.2.3-01'].entries()) make(`invalidSemver${index}`, {'Cargo.toml':manifest.replace('0.1.0',invalid)});
   make('changelog', {'CHANGELOG.md':'unparsed content\n'});
@@ -35,9 +38,30 @@ export function history() {
   const event = (fork = false, branch = 'feature') => ({ repository:{full_name:'nickderobertis/allowlister'}, pull_request:{title:'chore: release', user:{login:'nickderobertis'}, head:{sha:heads.version,ref:branch,repo:{full_name:fork?'someone/fork':'nickderobertis/allowlister'}}, base:{sha:base,ref:'main',repo:{full_name:'nickderobertis/allowlister'}}} });
   const classify = (payload, head = heads.version, eventName = 'pull_request', ref = base) => {
     const path = join(dir,'event.json'); writeFileSync(path, typeof payload === 'string' ? payload : JSON.stringify(payload));
-    const out = spawnSync(process.execPath,[join(root,'.github/macos-policy.mjs'),'classify','--event',path,'--base',ref,'--head',head],{cwd:dir,encoding:'utf8',env:{...process.env,GITHUB_EVENT_NAME:eventName}});
+    const out = spawnSync(process.execPath,[join(root,'.github/macos-policy.mjs'),'classify','--event',path,`--base=${ref}`,`--head=${head}`],{cwd:dir,encoding:'utf8',env:{...process.env,GITHUB_EVENT_NAME:eventName}});
     if(out.status !== 0) throw new Error(out.stderr);
     return JSON.parse(out.stdout);
   };
-  return {dir,base,heads,event,classify};
+  const classifyOwnership = variant => {
+    git('checkout','-q',base);
+    let file='Cargo.lock', before, after;
+    if (variant === 'missing') {
+      before=lock.replace('[[package]]\nname = "allowlister"\nversion = "0.1.0"\n','');
+      after=before+'\n# release metadata formatting\n';
+    } else if (variant === 'duplicate') {
+      before=lock+'[[package]]\nname = "allowlister"\nversion = "0.2.0"\n';
+      after=before.replace('0.1.0','0.1.1');
+    } else if (variant === 'renamed') {
+      file='Cargo.toml';before=manifest.replace('name = "allowlister"','name = "another-package"');
+      after=before.replace('0.1.0','0.1.1');
+    } else throw new Error('unsupported ownership fixture');
+    writeFileSync(join(dir,file),before);git('add',file);git('commit','-qm',`ownership base ${variant}`);
+    const ownershipBase=git('rev-parse','HEAD');
+    writeFileSync(join(dir,file),after);git('add',file);git('commit','-qm',`ownership version ${variant}`);
+    const ownershipHead=git('rev-parse','HEAD');
+    const payload=event(false,'release-plz-test');
+    payload.pull_request.base.sha=ownershipBase;payload.pull_request.head.sha=ownershipHead;
+    return classify(payload,ownershipHead,'pull_request',ownershipBase);
+  };
+  return {dir,base,heads,event,classify,classifyOwnership};
 }
