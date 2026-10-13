@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
-import { rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { history } from './history.mjs';
 import { root, evaluate, expandMatrix, resolveRun, loadWorkflows, triggered, followDownstream } from '../workflow-graph.mjs';
 const h = history();
+symlinkSync(join(root, '.github'), join(h.dir, '.github'), process.platform === 'win32' ? 'junction' : 'dir');
 after(() => rmSync(h.dir,{recursive:true,force:true}));
 test('real classifier admits only a same-repository automation branch with parsed release-only content', () => {
   const release = h.event(false,'release-plz-2026');
@@ -23,10 +24,12 @@ test('real classifier admits only a same-repository automation branch with parse
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);
 });
 test('real Linux carrier fails every unapproved job outcome and reports intentional omission honestly', () => {
+  const carrier = loadWorkflows()['ci.yml'].jobs['macos-result'];
+  const command = carrier.steps.find(step => step.env?.NEEDS_JSON).run;
   for(const required of ['true','false']) for(const result of ['success','failure','cancelled','skipped',undefined]) for(const policyResult of ['success','failure','cancelled','skipped',undefined]) {
     const needs={policy:{result:policyResult,outputs:{macosRequired:required}},macos:{result}};
     const path=join(h.dir,'needs.json');writeFileSync(path,JSON.stringify(needs));
-    const out=spawnSync(process.execPath,[join(root,'.github/macos-result.mjs'),path],{encoding:'utf8'});
+    const out=spawnSync('bash',['-eo','pipefail','-c',command],{cwd:h.dir,encoding:'utf8',env:{...process.env,NEEDS_JSON:JSON.stringify(needs)}});
     const good=policyResult==='success' && result===(required==='true'?'success':'skipped');
     assert.equal(out.status===0,good,JSON.stringify(needs));
     if(good && required==='false') assert.match(out.stdout,/no Mac tests ran/);
@@ -70,4 +73,28 @@ test('actual downstream triggers preserve repeated runs and exact heads; cycles 
   assert.deepEqual(rows.map(r=>r.jobs[0].state),['requested','requested','skipped']);
   workflows['parent.yml'].on={workflow_run:{workflows:['Smoke'],types:['completed']}};
   assert.throws(()=>followDownstream(workflows,parents,{ref:'refs/heads/main',files:[]}),/cyclic downstream/);
+});
+
+// Resolve the actual input choices, including single-harness diagnostics and
+// per-harness Linux/Windows dispatches, rather than only the default workload.
+test('every declared manual choice preserves its supported runner and harness routing', () => {
+  const workflows = loadWorkflows();
+  for (const [file, workflow] of Object.entries(workflows)) {
+    const dispatch = workflow.on?.workflow_dispatch;
+    if (!dispatch?.inputs?.os) continue;
+    for (const os of dispatch.inputs.os.options) {
+      const scenario = { eventName: 'workflow_dispatch', event: {}, ref: 'refs/heads/main', head: h.heads.source, inputs: { os } };
+      const jobs = resolveRun(workflows, file, scenario);
+      assert.ok(jobs.length, `${file}: ${os} resolves jobs`);
+      assert.ok(jobs.every(job => !job.macos), `${file}: ${os} reserves Mac diagnostics for CI`);
+      if (!['all', 'default'].includes(os)) assert.deepEqual(jobs.map(job => job.runner), [os], `${file}: single platform`);
+    }
+  }
+  const mac = workflows['ci.yml'].jobs.macos;
+  for (const harness of workflows['ci.yml'].on.workflow_dispatch.inputs.harness.options) {
+    const context = { github: { repository: 'nickderobertis/allowlister', event_name: 'workflow_dispatch', event: {} }, inputs: { harness } };
+    const commands = mac.steps.filter(step => step.run?.match(/just test-(codex|claude|copilot|crush|cursor|goose|opencode|qwen)\b/) && evaluate(step.if, context));
+    const names = commands.map(step => step.run.match(/just test-(\w+)/)[1]);
+    assert.deepEqual(names.sort(), (harness === 'all' ? ['codex','claude','copilot','crush','cursor','goose','opencode','qwen'] : [harness]).sort());
+  }
 });
