@@ -15,10 +15,11 @@ test('real classifier admits only a same-repository automation branch with parse
     release.pull_request.user.login=login;
     assert.equal(h.classify(release).isReleaseOnly,true,'author is not authority (release-plz uses a personal token)');
   }
+  assert.equal(h.classify(release,h.heads.prerelease).isReleaseOnly,true,'valid prerelease and build identifiers remain version-only');
   const botOnly=h.event();botOnly.pull_request.user.login='github-actions[bot]';
   assert.equal(h.classify(botOnly).macosRequired,true,'bot identity alone authorizes no omission');
   for(const payload of [h.event(),h.event(true,'release-plz-2026'),{},'{bad',null,[]]) assert.equal(h.classify(payload).macosRequired,true);
-  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
+  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','invalidLockVersion','invalidSemver0','invalidSemver1','invalidSemver2','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
   assert.equal(h.classify(release,h.heads.version,'pull_request','missing-ref').macosRequired,true);
   assert.equal(h.classify(release,h.base).macosRequired,true,'empty diff');
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);

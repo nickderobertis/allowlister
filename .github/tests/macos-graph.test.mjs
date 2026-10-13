@@ -52,7 +52,7 @@ test('budget reporters consume recorded telemetry and reject missing/stale input
   for(const metric of ['jobs-per-run','runs-per-change']) {
     const result=join(h.dir,`${metric}.json`);
     const out=spawnSync(process.execPath,[join(root,'.github/macos-budget.mjs'),'--metric',metric,'--telemetry',path],{encoding:'utf8',env:{...process.env,ONEBUDGETSPEC_RESULT:result}});
-    assert.equal(out.status,0,out.stderr);assert.equal(typeof JSON.parse(readFileSync(result,'utf8')).value,'number');
+    assert.equal(out.status,0,out.stderr);assert.equal(JSON.parse(readFileSync(result,'utf8')).value,telemetry.measurements[metric==='jobs-per-run'?'jobsPerRun':'runsPerChange']);
   }
   for(const invalid of [{...telemetry,scenarios:null},{...telemetry,measurements:{jobsPerRun:-1,runsPerChange:0}},{...telemetry,measurements:{jobsPerRun:99,runsPerChange:99}}]) {
     writeFileSync(path,JSON.stringify({...invalid,sourceDigest:sourceDigest()}));

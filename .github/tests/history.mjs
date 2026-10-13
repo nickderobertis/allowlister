@@ -26,6 +26,9 @@ export function history() {
   make('mixed',{'Cargo.toml':manifest.replace('0.1.0','0.1.1'),'main.rs':'fn main() { println!("hello"); }\n'});
   make('malformed', {'Cargo.toml':'[package\n'});
   make('invalidVersion', {'Cargo.toml':manifest.replace('0.1.0','not-a-version')});
+  make('prerelease', {'Cargo.toml':manifest.replace('0.1.0','0.1.1-rc.1+build.01')});
+  make('invalidLockVersion', {'Cargo.lock':lock.replace('0.1.0','01.2.3')});
+  for (const [index, invalid] of ['01.2.3','1.2.3-...','1.2.3-01'].entries()) make(`invalidSemver${index}`, {'Cargo.toml':manifest.replace('0.1.0',invalid)});
   make('changelog', {'CHANGELOG.md':'unparsed content\n'});
   make('added', {'extra.md':'release notes\n'});
   git('checkout','-q',base);git('rm','-q','CHANGELOG.md');git('commit','-qm','deleted');heads.deleted=git('rev-parse','HEAD');

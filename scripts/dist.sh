@@ -69,6 +69,7 @@ plan() {
             *windows*) ext="zip" ;;
             *) ext="tar.gz" ;;
         esac
+        # llmlint: ignore[tool_output_is_signal] dist-plan is the explicit platform/asset inventory diagnostic, so its intentional one-row-per-target output is the command result, not routine success chatter.
         echo "  - ${target}  ->  ${bin_name}-v${version}-${target}.${ext} + ${bin_name}-v${version}-${target}.sha256"
     done
 }
@@ -91,20 +92,24 @@ build() {
     mkdir -p "$outdir"
     local stage
     stage="$(mktemp -d)"
-    cp "target/${target}/release/${binary}" "$stage/"
-    cp README.md LICENSE CHANGELOG.md "$stage/"
+    trap 'rm -rf "$stage"' EXIT
+    cp "target/${target}/release/${binary}" "$stage/" || { echo "cannot stage $target; rebuild its release binary with just dist-build" >&2; exit 1; }
+    cp README.md LICENSE CHANGELOG.md "$stage/" || { echo "cannot stage release documents; restore README.md, LICENSE and CHANGELOG.md and rerun just dist-build" >&2; exit 1; }
     if [[ "$archive" = *.zip ]]; then
-        ( cd "$stage" && 7z a -tzip "$OLDPWD/$outdir/$archive" "$binary" README.md LICENSE CHANGELOG.md >/dev/null )
+        ( cd "$stage" && 7z a -tzip "$OLDPWD/$outdir/$archive" "$binary" README.md LICENSE CHANGELOG.md >/dev/null ) || { echo "cannot package $archive; install 7z and check dist/ is writable, then rerun just dist-build" >&2; exit 1; }
     else
-        tar -czf "${outdir}/${archive}" -C "$stage" "$binary" README.md LICENSE CHANGELOG.md
+        tar -czf "${outdir}/${archive}" -C "$stage" "$binary" README.md LICENSE CHANGELOG.md || { echo "cannot package $archive; install tar and check dist/ is writable, then rerun just dist-build" >&2; exit 1; }
     fi
     rm -rf "$stage"
+    trap - EXIT
     local digest
     # llmlint: ignore-block[changed_behavior_has_e2e] The real host-native build/install journey verifies the generated checksum and rejects corruption. Alternate system checksum tools are platform capability adapters; forcing each installed-tool combination is outside this native-host/artifact-contract proof boundary.
     if command -v sha256sum >/dev/null; then
-        digest="$(sha256sum "$outdir/$archive" | awk '{print $1}')"
+        digest="$(sha256sum "$outdir/$archive" | awk '{print $1}')" || { echo "cannot hash $archive; repair sha256sum and the staged archive, then rerun just dist-build" >&2; exit 1; }
+    elif command -v shasum >/dev/null; then
+        digest="$(shasum -a 256 "$outdir/$archive" | awk '{print $1}')" || { echo "cannot hash $archive; repair shasum and the staged archive, then rerun just dist-build" >&2; exit 1; }
     else
-        digest="$(shasum -a 256 "$outdir/$archive" | awk '{print $1}')"
+        echo "no SHA-256 tool; install sha256sum or shasum and rerun just dist-build" >&2; exit 1
     fi
     # llmlint: ignore-end[changed_behavior_has_e2e]
     printf '%s  %s\n' "$digest" "$archive" > "$outdir/${bin_name}-${tag}-${target}.sha256"

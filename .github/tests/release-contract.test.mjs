@@ -39,7 +39,7 @@ test('release graph preserves every platform and archive; one compiled target in
   for(const file of contract.contents.filter(f=>f!=='allowlister')) assert.ok(builder.includes(file));
   const verify=readFileSync(join(root,'scripts/verify-release.sh'),'utf8');
   assert.match(verify,/sh scripts\/install.sh --version "\$tag" --to/);
-  assert.match(verify,/cmp "target\/\$target\/release/);
+  assert.match(verify,/cmp -s "target\/\$target\/release/);
   assert.match(verify,/arch -x86_64 "\$binary" --version/);
   assert.match(verify,/Darwin execution requires macOS/);
   for(const platform of contract.platforms) assert.ok(verify.includes(platform.target),platform.target);
@@ -102,4 +102,36 @@ test('actual Linux publication command sends only staged exact-tag assets to for
     const failed=spawnSync('bash',['-eo','pipefail','-c',`function gh() { return 9; }; ${script}`],{cwd:directory,encoding:'utf8',env});
     assert.equal(failed.status,9);
   } finally {rmSync(directory,{recursive:true,force:true});}
+});
+
+test('all production platform declarations reconcile exactly with release targets', () => {
+  const targets = contract.platforms.map(platform => platform.target).sort();
+  const builder = readFileSync(join(root, 'scripts/dist.sh'), 'utf8');
+  const buildTargets = builder.match(/TARGETS=\(([\s\S]*?)\)/)[1].trim().split(/\s+/);
+  assert.deepEqual(buildTargets.sort(), targets);
+  const verifier = readFileSync(join(root, 'scripts/verify-release.sh'), 'utf8');
+  const verifyTargets = verifier.match(/case "\$target" in\n\s*([^\n]+)\) ;;/)[1].split('|');
+  assert.deepEqual(verifyTargets.sort(), targets);
+  const toolchain = readFileSync(join(root, 'rust-toolchain.toml'), 'utf8');
+  const toolchainTargets = [...toolchain.match(/targets\s*=\s*\[([\s\S]*?)\]/)[1].matchAll(/"([^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(toolchainTargets.sort(), [...targets, 'x86_64-unknown-linux-gnu'].sort(), 'only the documented Linux dev host is outside the release set');
+  const installer = readFileSync(join(root, 'scripts/install.sh'), 'utf8');
+  const detect = installer.match(/detect_target\(\) \{[\s\S]*?\n\}/)[0];
+  const operatingSystems = [...new Set([...detect.matchAll(/os_part="([^"]+)"/g)].map(match => match[1]))];
+  const architectures = [...new Set([...detect.matchAll(/arch_part="([^"]+)"/g)].map(match => match[1]))];
+  const names = new Map([['unknown-linux-musl', 'Linux'], ['apple-darwin', 'Darwin'], ['pc-windows-msvc', 'MINGW64_NT']]);
+  const installedTargets = [];
+  for (const os of operatingSystems) for (const architecture of architectures) {
+    assert.ok(names.has(os), `unresolved installer operating system: ${os}`);
+    const script = `err() { echo "$*" >&2; exit 1; }; uname() { if [ "$1" = -s ]; then echo "$INSTALL_OS"; else echo "$INSTALL_ARCH"; fi; }; BIN=allowlister; ${detect}; detect_target; printf '%s %s' "$TARGET" "$EXT"`;
+    const out = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', env: { ...process.env, INSTALL_OS: names.get(os), INSTALL_ARCH: architecture } });
+    if (os === 'pc-windows-msvc' && architecture === 'aarch64') {
+      assert.notEqual(out.status, 0); assert.match(out.stderr, /no prebuilt Windows binary/);
+    } else {
+      assert.equal(out.status, 0, out.stderr);
+      const [target, archive] = out.stdout.split(' '); installedTargets.push(target);
+      assert.equal(archive, contract.platforms.find(platform => platform.target === target)?.archive);
+    }
+  }
+  assert.deepEqual(installedTargets.sort(), targets, 'actual installer target selection matches the release graph');
 });

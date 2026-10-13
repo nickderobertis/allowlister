@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+const command=process.argv[2];
+if(!['test','lint','budgets'].includes(command)) throw new Error('usage: tooling-run.mjs test|lint|budgets');
 const directory=fileURLToPath(new URL('.',import.meta.url));
 const root=fileURLToPath(new URL('../',import.meta.url));
 const digest=createHash('sha256').update(readFileSync(directory+'package-lock.json')).digest('hex');
@@ -14,7 +16,6 @@ if(!existsSync(stamp) || readFileSync(stamp,'utf8')!==digest || !existsSync(dire
   if(out.status!==0) {console.error(out.stdout,out.stderr);process.exit(out.status ?? 1);}
   writeFileSync(stamp,digest);
 }
-const command=process.argv[2];
 let status=0;
 function run(args) {const out=spawnSync(process.execPath,args,{cwd:root,stdio:'inherit'});status ||= out.status ?? 1;}
 if(command==='test') run(['--test',...readdirSync(directory+'tests').filter(f=>f.endsWith('.test.mjs')).map(f=>'.github/tests/'+f)]);

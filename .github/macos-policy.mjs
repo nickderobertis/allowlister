@@ -13,7 +13,9 @@ function git(args) {
 function toml(text) {
   return JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import sys,json,tomllib; print(json.dumps(tomllib.loads(sys.stdin.read())))'], { input: text, encoding: 'utf8' }));
 }
-const version = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+// Numeric identifiers forbid leading zeroes; prerelease identifiers must be
+// numeric or contain a letter/hyphen, and every dotted identifier is nonempty.
+const version = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 function stripVersion(value, lock) {
   if (lock) {
     const packages = (value.package ?? []).filter(pkg => pkg.name === 'allowlister' && pkg.source === undefined && pkg.checksum === undefined);
