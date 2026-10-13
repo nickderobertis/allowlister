@@ -1,5 +1,5 @@
-# Git hooks. Fast checks run pre-commit; the slower full suite runs pre-push.
-# Every check fails the commit/push rather than warning — no warning backlog.
+# Git hooks. Fast checks run pre-commit; CI owns the full suite.
+# Every check fails the commit rather than warning — no warning backlog.
 
 pre-commit:
   parallel: true
@@ -10,7 +10,7 @@ pre-commit:
     clippy:
       glob: "*.rs"
       # Library + binary only here to stay fast; the full --all-targets lint
-      # runs pre-push and in CI.
+      # runs in CI.
       run: cargo clippy --locked --all-features -- -D warnings
     merge-conflicts:
       # Fails on conflict markers or whitespace errors in staged changes.
@@ -25,30 +25,3 @@ pre-commit:
           fi
         done
         exit $status
-
-pre-push:
-  parallel: false
-  commands:
-    clippy-all:
-      run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-    test:
-      # The root crate's unit + integration tests (the e2e suite is its own
-      # workspace member, run by `just check`).
-      run: cargo nextest run --locked --status-level fail -p allowlister
-    deny:
-      run: cargo deny --locked check
-    llmlint-validate:
-      # The model-free llmlint gate (config structure, ignore directives naming
-      # real rules, fragment version bumps) — the same step CI's llmlint job runs
-      # first. llmlint is an optional tool, so a machine without it skips with a
-      # notice instead of blocking the push.
-      run: |
-        if ! command -v llmlint >/dev/null 2>&1; then
-          echo "llmlint not on PATH — skipping 'llmlint validate' (install: just setup-llmlint)"
-          exit 0
-        fi
-        if git rev-parse --verify --quiet origin/main >/dev/null; then
-          llmlint validate --diff-base origin/main
-        else
-          llmlint validate
-        fi
