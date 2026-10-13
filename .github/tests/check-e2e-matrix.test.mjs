@@ -58,7 +58,7 @@ test("the gate fails when a workflow re-adds the push trigger", { skip }, () => 
 
 test("the gate fails when a dispatch option is dropped", { skip }, () => {
   const tmp = stage();
-  mutate(tmp, "e2e-goose.yml", "          - macos-latest\n", "");
+  mutate(tmp, "e2e-goose.yml", "          - ubuntu-latest\n", "");
   const out = run(tmp);
   assert.notEqual(out.status, 0, "gate should fail on a missing option");
   assert.match(out.stderr, /missing option/);

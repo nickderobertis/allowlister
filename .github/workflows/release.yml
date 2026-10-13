@@ -57,51 +57,91 @@ jobs:
         run: just check all
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit, release_does_not_regate_an_already_swept_commit]
 
-  upload:
-    name: upload (${{ matrix.target }})
+  build:
+    name: build (${{ matrix.target }})
     needs: test
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Native runners per target so no target needs cross-compilation:
-          # arm64 Linux builds on a hosted arm64 runner; macOS cross-builds
-          # x86_64<->arm64 within the Apple toolchain (no emulation/Docker).
-          #
-          # Linux ships `-musl`, not `-gnu`: the crate has zero C deps, so musl
-          # links a fully static binary (no glibc version floor — runs on any
-          # distro) that `.cargo/config.toml` also builds non-PIE for the fastest
-          # cold start. Self-contained musl needs no musl-tools on either arch.
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Build, archive, checksum, and upload
-        uses: taiki-e/upload-rust-binary-action@v1
+      - run: rustup target add "${{ matrix.target }}"
+      - uses: taiki-e/install-action@v2
         with:
-          bin: allowlister
-          target: ${{ matrix.target }}
-          # Build natively, never via `cross`. Each target has its own native
-          # runner and the crate has zero C deps, so cargo links every target
-          # (musl included) self-contained. Left to auto-detect, the action runs
-          # `cross` for the `-musl` targets — and on the arm64 runner `cross`
-          # tries to install the x86_64 toolchain on an aarch64 host and fails.
-          build-tool: cargo
-          archive: $bin-$tag-$target
-          checksum: sha256
-          include: README.md,LICENSE,CHANGELOG.md
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: just
+      - name: Build and package
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: just dist-build "$TARGET" "$TAG"
+      - name: Install and run staged artifact
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          TARGET: ${{ matrix.target }}
+        run: bash scripts/verify-release.sh "$TARGET" "$TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  darwin:
+    name: build (Darwin archives)
+    needs: test
+    # Standard macos-15 is Apple Silicon; x86_64 executes under Rosetta.
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - run: softwareupdate --install-rosetta --agree-to-license
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Build, install and run both staged Darwin archives
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            just dist-build "$target" "$TAG"
+            bash scripts/verify-release.sh "$target" "$TAG"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-darwin
+          path: dist/*
+          if-no-files-found: error
+
+  upload:
+    name: upload release assets
+    needs: [build, darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Attach exact-run assets to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY"
 
   # crates.io publishing is opt-in: set the repository variable
   # PUBLISH_TO_CRATES_IO=true and provide the CARGO_REGISTRY_TOKEN secret.

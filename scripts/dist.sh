@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 #
-# Local release helpers used by `just dist-plan` and `just dist-build`.
+# Release builder used by the workflow and `just dist-build`.
 #
 #   dist.sh plan    Verify package metadata and print the release target matrix.
 #                   Does not build or publish.
 #   dist.sh build   Build an optimized binary for the host target and package it
-#                   into a checksummed archive under dist/ (a local smoke test of
-#                   the artifact the release workflow produces).
+#                   into the published archive format under dist/.
 #
 # The authoritative cross-platform release is produced by
-# .github/workflows/release.yml; this script mirrors a single target locally.
+# .github/workflows/release.yml; this script builds one target without publishing.
 
 set -euo pipefail
 
@@ -70,33 +69,46 @@ plan() {
             *windows*) ext="zip" ;;
             *) ext="tar.gz" ;;
         esac
-        echo "  - ${target}  ->  ${bin_name}-${version}-${target}.${ext}(.sha256)"
+        echo "  - ${target}  ->  ${bin_name}-v${version}-${target}.${ext} + ${bin_name}-v${version}-${target}.sha256"
     done
 }
 
 build() {
-    local version host target outdir archive
+    local version host target outdir archive tag binary
+    # llmlint: ignore-block[boundary_inputs_validated] Cargo validates the manifest version and target before any artifact staging; the local helper deliberately retains native-host target compatibility beyond the published musl/Darwin/MSVC set.
     version="$(pkg_field version)"
     host="$(rustc -vV | sed -n 's/^host: //p')"
     target="${1:-$host}"
-
+    tag="${2:-v$version}"
+    [[ "$tag" = "v$version" ]] || { echo "error: release tag $tag does not match version $version; use v$version or omit the tag" >&2; exit 1; }
+    case "$target" in
+        *windows*) binary="${bin_name}.exe"; archive="${bin_name}-${tag}-${target}.zip" ;;
+        *) binary="$bin_name"; archive="${bin_name}-${tag}-${target}.tar.gz" ;;
+    esac
     cargo build --release --locked --target "$target"
-
+    # llmlint: ignore-end[boundary_inputs_validated]
     outdir="dist"
     mkdir -p "$outdir"
     local stage
     stage="$(mktemp -d)"
-    cp "target/${target}/release/${bin_name}" "$stage/"
-    [[ -f README.md ]] && cp README.md "$stage/"
-    [[ -f LICENSE ]] && cp LICENSE "$stage/"
-
-    archive="${bin_name}-${version}-${target}.tar.gz"
-    tar -czf "${outdir}/${archive}" -C "$stage" .
+    cp "target/${target}/release/${binary}" "$stage/"
+    cp README.md LICENSE CHANGELOG.md "$stage/"
+    if [[ "$archive" = *.zip ]]; then
+        ( cd "$stage" && 7z a -tzip "$OLDPWD/$outdir/$archive" "$binary" README.md LICENSE CHANGELOG.md >/dev/null )
+    else
+        tar -czf "${outdir}/${archive}" -C "$stage" "$binary" README.md LICENSE CHANGELOG.md
+    fi
     rm -rf "$stage"
-
-    ( cd "$outdir" && sha256sum "$archive" > "${archive}.sha256" )
+    local digest
+    # llmlint: ignore-block[changed_behavior_has_e2e] The real host-native build/install journey verifies the generated checksum and rejects corruption. Alternate system checksum tools are platform capability adapters; forcing each installed-tool combination is outside this native-host/artifact-contract proof boundary.
+    if command -v sha256sum >/dev/null; then
+        digest="$(sha256sum "$outdir/$archive" | awk '{print $1}')"
+    else
+        digest="$(shasum -a 256 "$outdir/$archive" | awk '{print $1}')"
+    fi
+    # llmlint: ignore-end[changed_behavior_has_e2e]
+    printf '%s  %s\n' "$digest" "$archive" > "$outdir/${bin_name}-${tag}-${target}.sha256"
     echo "built ${outdir}/${archive}"
-    echo "      ${outdir}/${archive}.sha256"
 }
 
 cmd="${1:-plan}"

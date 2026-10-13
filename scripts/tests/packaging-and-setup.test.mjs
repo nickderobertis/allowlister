@@ -65,11 +65,11 @@ test("the real crate's plan keeps every release asset name", { skip }, () => {
   assert.equal(out.status, 0, out.stderr);
   const version = readFileSync(join(repo, "Cargo.toml"), "utf8").match(/^\[package\][^[]*?^version = "([^"]+)"/ms)[1];
   for (const asset of [
-    `allowlister-${version}-x86_64-unknown-linux-musl.tar.gz`,
-    `allowlister-${version}-aarch64-unknown-linux-musl.tar.gz`,
-    `allowlister-${version}-x86_64-apple-darwin.tar.gz`,
-    `allowlister-${version}-aarch64-apple-darwin.tar.gz`,
-    `allowlister-${version}-x86_64-pc-windows-msvc.zip`,
+    `allowlister-v${version}-x86_64-unknown-linux-musl.tar.gz`,
+    `allowlister-v${version}-aarch64-unknown-linux-musl.tar.gz`,
+    `allowlister-v${version}-x86_64-apple-darwin.tar.gz`,
+    `allowlister-v${version}-aarch64-apple-darwin.tar.gz`,
+    `allowlister-v${version}-x86_64-pc-windows-msvc.zip`,
   ]) {
     assert.ok(out.stdout.includes(asset), `plan must still name ${asset}`);
   }

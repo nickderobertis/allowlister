@@ -1,0 +1,33 @@
+schema_version: 1
+budgets:
+  # Jobs/run bounds simultaneous slot occupancy; runs/change bounds repeated
+  # queue entries. Either can grow while the other remains within its bound.
+  - id: allowlister-macos-jobs-per-run
+    description: >-
+      Maximum Mac job instances in a resolved workflow run, including actual
+      matrix expansions and reusable calls. inner_measure_reason: one run can
+      occupy several shared Mac slots even when lifecycle run count stays within
+      its bound. The brief and manager require separate jobs/run and runs/change
+      bounds. Telemetry covers 12 event classes, source/version/dependency diffs,
+      same-repository/fork ownership, every release target and optional publishing;
+      explicit manual opt-in is included in this per-run measure.
+    measure: reported
+    command: [node, macos-budget.mjs, --metric, jobs-per-run, --telemetry, .telemetry/macos-policy.json]
+    unit: jobs
+    direction: max
+    threshold: 1
+  # Lifecycle entries and simultaneous slot occupancy are independent constraints;
+  # both measurements reuse the same offline telemetry.
+  - id: allowlister-macos-runs-per-change
+    description: >-
+      Maximum distinct Mac-spending workflow runs over a single-push lifecycle:
+      ordinary PR update, base merge, semantic release-only PR and merge, release
+      tag/publication and actual workflow_run fan-out. Telemetry includes every
+      release target and optional publishing. Explicit manual diagnostics are
+      excluded. The brief and manager require this lifecycle bound separately
+      from jobs/run; neither bound measures application data or wall-clock time.
+    measure: reported
+    command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .telemetry/macos-policy.json]
+    unit: runs
+    direction: max
+    threshold: 2

@@ -5,7 +5,6 @@
 **/AGENTS.md
 **/CLAUDE.md
 /CONTRIBUTING.md
-/CHANGELOG.md
 /docs/
 # Agent, hook, judged-lint and shell/editor settings: read by those tools, never
 # by an Nx target.

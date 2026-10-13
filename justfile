@@ -145,11 +145,11 @@ clippy tier="affected": (nx-tier tier "-t lint --projects=tag:lang:rust")
 clippy-fix:
     cargo clippy --fix --allow-dirty --allow-staged --locked --workspace --all-targets --all-features
 
-# The ci-workflows project's lint target (scripts/check-e2e-matrix.sh), so `lint`
+# The github-workflows project's lint target (scripts/check-e2e-matrix.sh), so `lint`
 # runs it too; the contract it holds is in .github/AGENTS.md.
 # Drift gate for the live-e2e CI matrix contract.
 lint-workflows:
-    @bash scripts/nx run ci-workflows:lint
+    @bash scripts/nx run github-workflows:lint
 
 # Covers unit + integration, the schema validation, and the workflow-contract
 # and boundary-checker suites.
@@ -248,8 +248,8 @@ dist-plan:
     @bash scripts/dist.sh plan
 
 # Build and package a release archive for the host target locally.
-dist-build:
-    @bash scripts/dist.sh build
+dist-build target="" tag="":
+    @bash scripts/dist.sh build {{ quote(target) }} {{ quote(tag) }}
 
 # --- Performance suite (informational; never part of `full-check`) -----------
 # Benchmarks are non-deterministic on shared hardware, so they measure rather
@@ -306,7 +306,7 @@ profile *args:
 check tier="affected" skip="":
     #!/usr/bin/env bash
     set -euo pipefail
-    targets=(format-check lint typecheck test build doc release-check coverage supply-chain)
+    targets=(format-check lint typecheck test build doc release-check coverage supply-chain budgets)
     # `-d ''` reads every line of `skip`, so a newline cannot hide a name from the check below.
     read -r -d '' -a skips <<< {{ quote(skip) }} || true
     # The `${a[@]+...}` form keeps an empty array legal under `set -u` on bash 3.2 (macOS).
