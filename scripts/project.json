@@ -22,6 +22,7 @@
         "{workspaceRoot}/clippy.toml",
         "{workspaceRoot}/rust-toolchain.toml",
         "{workspaceRoot}/justfile",
+        "{workspaceRoot}/lefthook.yml",
         "{workspaceRoot}/schema/allowlister.schema.json",
         "{workspaceRoot}/examples/user-config.json"
       ],

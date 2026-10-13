@@ -225,7 +225,7 @@ msrv:
 
 # Install git hooks.
 hooks-install:
-    lefthook install
+    bash scripts/hooks-install.sh
 
 # Run the pre-commit hook set against the working tree.
 hooks:

@@ -28,7 +28,8 @@ Prefer to do it by hand? Install [rustup](https://rustup.rs),
 [just](https://just.systems) and the Node version `.tool-versions` pins, run
 `rustup show` (installs the pinned toolchain), then `just bootstrap`.
 
-Then run the quality gate before pushing:
+Hooks run the fast pre-commit checks. Ordinary pushes run no checks; CI verifies
+the full suite on the merge path. Run the manual quality gate while iterating:
 
 ```sh
 just check          # the projects your change can reach
