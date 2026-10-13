@@ -16,8 +16,9 @@ function toml(text) {
 const version = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 function stripVersion(value, lock) {
   if (lock) {
-    for (const pkg of value.package ?? []) {
-      if (pkg.name !== 'allowlister') continue;
+    const packages = (value.package ?? []).filter(pkg => pkg.name === 'allowlister' && pkg.source === undefined && pkg.checksum === undefined);
+    if (packages.length !== 1) throw new Error('lockfile must identify exactly one local allowlister package');
+    for (const pkg of packages) {
       if (!version.test(pkg.version)) throw new Error('invalid package version');
       delete pkg.version;
     }

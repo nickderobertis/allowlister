@@ -18,7 +18,7 @@ test('real classifier admits only a same-repository automation branch with parse
   const botOnly=h.event();botOnly.pull_request.user.login='github-actions[bot]';
   assert.equal(h.classify(botOnly).macosRequired,true,'bot identity alone authorizes no omission');
   for(const payload of [h.event(),h.event(true,'release-plz-2026'),{},'{bad',null,[]]) assert.equal(h.classify(payload).macosRequired,true);
-  for(const key of ['source','dependency','lockDependency','mixed','malformed','invalidVersion','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
+  for(const key of ['source','dependency','lockDependency','sameNameDependency','mixed','malformed','invalidVersion','changelog','added','deleted']) assert.equal(h.classify(release,h.heads[key]).macosRequired,true,key);
   assert.equal(h.classify(release,h.heads.version,'pull_request','missing-ref').macosRequired,true);
   assert.equal(h.classify(release,h.base).macosRequired,true,'empty diff');
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);

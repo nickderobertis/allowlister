@@ -8,7 +8,7 @@ export function history() {
   const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   git('init', '-q'); git('config','user.email','test@example.invalid'); git('config','user.name','Contract');
   const manifest = '[package]\nname = "allowlister"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nserde = "1"\n';
-  const lock = 'version = 4\n[[package]]\nname = "allowlister"\nversion = "0.1.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\nchecksum = "abc"\n';
+  const lock = 'version = 4\n[[package]]\nname = "allowlister"\nversion = "0.1.0"\n[[package]]\nname = "serde"\nversion = "1.0.0"\nchecksum = "abc"\n[[package]]\nname = "allowlister"\nversion = "2.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "def"\n';
   const source = 'fn main() {}\n';
   for (const [file, text] of Object.entries({'Cargo.toml':manifest, 'Cargo.lock':lock, 'CHANGELOG.md':'# Changelog\n\n## 0.1.0\nFirst release.\n', 'main.rs':source})) writeFileSync(join(dir,file), text);
   git('add','.'); git('commit','-qm','initial'); const base = git('rev-parse','HEAD');
@@ -22,6 +22,7 @@ export function history() {
   make('source',{'main.rs':'fn main() { println!("hello"); }\n'});
   make('dependency',{'Cargo.toml':manifest.replace('0.1.0','0.1.1').replace('serde = "1"','serde = "2"')});
   make('lockDependency',{'Cargo.lock':lock.replace('1.0.0','2.0.0')});
+  make('sameNameDependency', {'Cargo.lock':lock.replace('2.0.0','2.1.0')});
   make('mixed',{'Cargo.toml':manifest.replace('0.1.0','0.1.1'),'main.rs':'fn main() { println!("hello"); }\n'});
   make('malformed', {'Cargo.toml':'[package\n'});
   make('invalidVersion', {'Cargo.toml':manifest.replace('0.1.0','not-a-version')});
