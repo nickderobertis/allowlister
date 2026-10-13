@@ -36,9 +36,11 @@ function canonical(value) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]));
   return value;
 }
+const nonPrEvents = new Set(['push','release','workflow_run','repository_dispatch','schedule','workflow_dispatch']);
 export function classify(eventName, event, base, head) {
-  if (eventName !== 'pull_request') return { isReleaseOnly: false, macosRequired: false, reason: 'non-PR event' };
   const required = reason => ({ isReleaseOnly: false, macosRequired: true, reason });
+  if (nonPrEvents.has(eventName)) return { isReleaseOnly: false, macosRequired: false, reason: 'non-PR event' };
+  if (eventName !== 'pull_request') return required('unknown event name; Mac coverage required');
   try {
     const pr = event.pull_request;
     const repo = event.repository?.full_name;

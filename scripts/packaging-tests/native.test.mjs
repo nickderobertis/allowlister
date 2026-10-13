@@ -57,6 +57,21 @@ test('production host archive builds, installs and runs, and rejects corrupted t
         writeFileSync(checksum, originalChecksum);
       }
     }
+    const wrongTag = 'v999.0.0';
+    const wrongBasename = `allowlister-${wrongTag}-${target}`;
+    const wrongArchive = join(root, 'dist', wrongBasename + '.' + ext);
+    const wrongChecksum = join(root, 'dist', wrongBasename + '.sha256');
+    try {
+      writeFileSync(wrongArchive, originalArchive);
+      writeFileSync(wrongChecksum, createHash('sha256').update(originalArchive).digest('hex') + '  ' + wrongBasename + '.' + ext + '\n');
+      const wrongVersion = run('scripts/verify-release.sh', [target, wrongTag]);
+      assert.notEqual(wrongVersion.status, 0);
+      assert.match(wrongVersion.stderr, /incorrect installed version/);
+      assert.match(wrongVersion.stderr, /rebuild artifacts/);
+      assert.equal(wrongVersion.stdout, '', 'failed version verification reports no success evidence');
+    } finally {
+      rmSync(wrongArchive, { force: true }); rmSync(wrongChecksum, { force: true });
+    }
     writeFileSync(checksum,'0'.repeat(64)+'  '+basename+'.tar.gz\n');
     const corrupt=run('scripts/verify-release.sh',[target,tag]);assert.notEqual(corrupt.status,0);assert.match(corrupt.stderr,/checksum mismatch/);
     const mismatch=spawnSync('just',['dist-build',target,'v999.0.0'],{cwd:root,encoding:'utf8'});assert.notEqual(mismatch.status,0);assert.match(mismatch.stderr,/does not match/);

@@ -82,7 +82,7 @@ test('all former Mac harness commands keep credentials, installation paths, and 
   }
 });
 test('real verifier rejects unsupported targets and unsafe/unversioned tags',()=>{
-  for(const [target,tag,reason] of [['unsupported','v0.1.0',/unsupported target/],['x86_64-unknown-linux-musl','../bad',/invalid release tag/]]) {
+  for(const [target,tag,reason] of [['unsupported','v0.1.0',/unsupported target/],...['../bad','v01.2.3','v1.2.3-01','v1.2.3-...'].map(tag=>['x86_64-unknown-linux-musl',tag,/invalid release tag/])]) {
     const out=spawnSync('bash',['scripts/verify-release.sh',target,tag],{cwd:root,encoding:'utf8'});
     assert.notEqual(out.status,0);assert.match(out.stderr,reason);
   }
@@ -134,4 +134,14 @@ test('all production platform declarations reconcile exactly with release target
     }
   }
   assert.deepEqual(installedTargets.sort(), targets, 'actual installer target selection matches the release graph');
+});
+
+test('verifier missing arguments explain its invocation, and valid prerelease tags reach staged transport', () => {
+  const missing = spawnSync('bash', ['scripts/verify-release.sh'], { cwd: root, encoding: 'utf8' });
+  assert.notEqual(missing.status, 0); assert.match(missing.stderr, /usage: scripts\/verify-release.sh TARGET TAG; for example/);
+  if (process.platform === 'linux') {
+    const valid = spawnSync('bash', ['scripts/verify-release.sh', 'x86_64-unknown-linux-musl', 'v999.0.0-rc.1+build.01'], { cwd: root, encoding: 'utf8' });
+    assert.notEqual(valid.status, 0); assert.match(valid.stderr, /missing or unreadable staged asset/);
+    assert.doesNotMatch(valid.stderr, /invalid release tag/);
+  }
 });

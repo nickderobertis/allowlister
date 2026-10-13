@@ -7,7 +7,7 @@ import { root, resolve } from './workflow-graph.mjs';
 export function runPolicy(workflow, scenario, history) {
   if(!existsSync(join(history.dir,'.github'))) symlinkSync(join(root,'.github'),join(history.dir,'.github'),process.platform==='win32'?'junction':'dir');
   const event=join(history.dir,'route-event.json'),output=join(history.dir,'route-output');
-  writeFileSync(event,JSON.stringify(scenario.event));writeFileSync(output,'');
+  writeFileSync(event,scenario.rawEvent ?? JSON.stringify(scenario.event));writeFileSync(output,'');
   const step=workflow.jobs.policy.steps.find(s=>s.id==='policy');
   const context={github:{event_name:scenario.eventName,event:scenario.event},inputs:scenario.inputs};
   const env=resolve(step.env,context);

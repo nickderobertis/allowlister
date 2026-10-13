@@ -23,6 +23,10 @@ test('real classifier admits only a same-repository automation branch with parse
   assert.equal(h.classify(release,h.heads.version,'pull_request','missing-ref').macosRequired,true);
   assert.equal(h.classify(release,h.base).macosRequired,true,'empty diff');
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);
+  for(const event of ['unknown','pull_request_typo','','constructor']) {
+    const classified=h.classify(release,h.heads.version,event);
+    assert.equal(classified.macosRequired,true,event);assert.equal(classified.isReleaseOnly,false,event);assert.match(classified.reason,/unknown event name/);
+  }
 });
 test('real Linux carrier fails every unapproved job outcome and reports intentional omission honestly', () => {
   const carrier = loadWorkflows()['ci.yml'].jobs['macos-result'];
@@ -97,5 +101,35 @@ test('every declared manual choice preserves its supported runner and harness ro
     const commands = mac.steps.filter(step => step.run?.match(/just test-(codex|claude|copilot|crush|cursor|goose|opencode|qwen)\b/) && evaluate(step.if, context));
     const names = commands.map(step => step.run.match(/just test-(\w+)/)[1]);
     assert.deepEqual(names.sort(), (harness === 'all' ? ['codex','claude','copilot','crush','cursor','goose','opencode','qwen'] : [harness]).sort());
+  }
+});
+
+// Authoritative Actions examples and event rules:
+// https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs#expanding-or-adding-matrix-configurations
+// https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore
+// https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request
+test('graph resolution reconciles matrix includes and event filters with the Actions contract', () => {
+  const matrix = { fruit: ['apple', 'pear'], animal: ['cat', 'dog'], include: [
+    { color: 'green' }, { color: 'pink', animal: 'cat' },
+    { fruit: 'apple', shape: 'circle' }, { fruit: 'banana' }, { fruit: 'banana', animal: 'cat' },
+  ] };
+  assert.deepEqual(expandMatrix(matrix, {}), [
+    { fruit: 'apple', animal: 'cat', color: 'pink', shape: 'circle' },
+    { fruit: 'apple', animal: 'dog', color: 'green', shape: 'circle' },
+    { fruit: 'pear', animal: 'cat', color: 'pink' }, { fruit: 'pear', animal: 'dog', color: 'green' },
+    { fruit: 'banana' }, { fruit: 'banana', animal: 'cat' },
+  ]);
+  assert.deepEqual(expandMatrix({ include: [{ os: 'macos-15', target: 'a' }, { os: 'macos-15', target: 'b' }] }, {}), [{ os: 'macos-15', target: 'a' }, { os: 'macos-15', target: 'b' }]);
+  assert.deepEqual(expandMatrix({ os: ['ubuntu-latest'], include: [{ os: 'macos-15', target: 'a' }, { os: 'macos-15', target: 'b' }] }, {}), [{ os: 'ubuntu-latest' }, { os: 'macos-15', target: 'a' }, { os: 'macos-15', target: 'b' }], 'new includes are separate jobs, never candidates for later merges');
+  const event = h.event(); event.action = 'edited';
+  const pr = { eventName: 'pull_request', event, ref: 'refs/pull/1/merge', files: ['src/lib.rs'] };
+  for (const on of ['pull_request', ['pull_request'], { pull_request: null }]) assert.equal(triggered({ on }, pr), false);
+  assert.equal(triggered({ on: { pull_request: { types: ['edited'] } } }, pr), true);
+  for (const action of ['opened', 'synchronize', 'reopened']) assert.equal(triggered({ on: 'pull_request' }, { ...pr, event: { ...event, action } }), true);
+  const tag = { ...pr, eventName: 'push', ref: 'refs/tags/v0.1.1' };
+  assert.equal(triggered({ on: { push: { tags: ['v*'], paths: ['docs/**'] } } }, tag), true);
+  assert.equal(triggered({ on: { push: { tags: ['v*'], 'paths-ignore': ['src/**'] } } }, tag), true);
+  for (const pattern of ['!src/**', 'src/?.rs', 'v[0-9]+', '{main,master}']) {
+    assert.throws(() => triggered({ on: { push: { tags: [pattern] } } }, tag), /unsupported Actions filter pattern/);
   }
 });

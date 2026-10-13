@@ -54,30 +54,32 @@ export function expandMatrix(matrix = {}, context) {
     cells = cells.flatMap(cell => values.map(value => ({ ...cell, [key]: value })));
   }
   cells = cells.filter(cell => !exclude.some(ex => Object.entries(ex).every(([k,v]) => cell[k] === v)));
-  if (!Object.keys(axes).length && include.length) return include.filter(cell => !exclude.some(ex => Object.entries(ex).every(([k,v]) => cell[k] === v)));
+  const originalCells = [...cells];
+  if (!Object.keys(axes).length && include.length) return include.map(cell => ({...cell}));
   for (const extra of include) {
-    const compatible = cells.filter(cell => Object.keys(axes).every(k => !(k in extra) || cell[k] === extra[k]));
+    const compatible = originalCells.filter(cell => Object.keys(axes).every(k => !(k in extra) || cell[k] === extra[k]));
     if (compatible.length) compatible.forEach(cell => Object.assign(cell, extra));
     else cells.push(extra);
   }
   return cells;
 }
 function glob(pattern, value) {
+  if (typeof pattern !== 'string' || !pattern.length || /[!?+\[\]{}\\]/.test(pattern)) throw new Error(`unsupported Actions filter pattern: ${pattern}`);
   const regex = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*');
   return new RegExp(`^${regex}$`).test(value);
 }
 export function triggered(workflow, scenario) {
-  const on = workflow.on;
+  const declaration = workflow.on;
+  const on = typeof declaration === 'string' ? {[declaration]: null} : Array.isArray(declaration) ? Object.fromEntries(declaration.map(event => [event, null])) : declaration;
   const event = scenario.eventName;
-  if (typeof on === 'string') return on === event;
-  if (Array.isArray(on)) return on.includes(event);
   if (!on || !(event in on)) return false;
   const config = on[event] ?? {};
   const supported = new Set(['types', 'workflows', 'branches', 'branches-ignore', 'tags', 'tags-ignore', 'paths', 'paths-ignore', 'inputs', 'secrets', 'outputs']);
   if (event === 'schedule') {
     if (!Array.isArray(config) || config.some(c => typeof c.cron !== 'string' || Object.keys(c).some(k => k !== 'cron'))) throw new Error('unsupported schedule trigger');
   } else if (Object.keys(config).some(key => !supported.has(key))) throw new Error(`unsupported trigger field for ${event}`);
-  if (config.types && !config.types.includes(scenario.event.action)) return false;
+  const types = config.types ?? (event === 'pull_request' ? ['opened', 'synchronize', 'reopened'] : undefined);
+  if (types && !types.includes(scenario.event.action)) return false;
   if (config.workflows && !config.workflows.includes(scenario.event.workflow_run?.name)) return false;
   const tagPush = event === 'push' && scenario.ref.startsWith('refs/tags/');
   if (tagPush && (config.branches || config['branches-ignore']) && !config.tags && !config['tags-ignore']) return false;
@@ -88,8 +90,8 @@ export function triggered(workflow, scenario) {
   const branch = event === 'pull_request' ? scenario.event.pull_request.base.ref : scenario.ref.replace(/^refs\/heads\//, '');
   if (!tagPush && config.branches && !config.branches.some(p => glob(p, branch))) return false;
   if (!tagPush && config['branches-ignore']?.some(p => glob(p, branch))) return false;
-  if (config.paths && !scenario.files.some(f => config.paths.some(p => glob(p, f)))) return false;
-  if (config['paths-ignore'] && scenario.files.every(f => config['paths-ignore'].some(p => glob(p, f)))) return false;
+  if (!tagPush && config.paths && !scenario.files.some(f => config.paths.some(p => glob(p, f)))) return false;
+  if (!tagPush && config['paths-ignore'] && scenario.files.every(f => config['paths-ignore'].some(p => glob(p, f)))) return false;
   return true;
 }
 export function resolveRun(workflows, file, scenario, chain = []) {

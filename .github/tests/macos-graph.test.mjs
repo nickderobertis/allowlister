@@ -33,6 +33,8 @@ test('forged/mixed/unknown PRs request the real Mac lane, including forks', () =
   for(const [payload,head] of [[h.event(),h.heads.version],[h.event(false,'release-plz-test'),h.heads.mixed],[h.event(true,'release-plz-test'),h.heads.version],['{bad',h.heads.version]]) {
     const classification=h.classify(payload,head);
     const scenario={eventName:'pull_request',event:typeof payload==='object'?payload:h.event(),ref:'refs/pull/1/merge',head,classification,files:['Cargo.toml'],inputs:{}};
+    scenario.event.action='synchronize';
+    scenario.rawEvent=typeof payload==='string'?payload:undefined;
     scenario.event.pull_request.head.sha=head;
     scenario.policyOutputs=runPolicy(workflows['ci.yml'],scenario,h);
     assert.ok(resolveRun(workflows,'ci.yml',scenario).some(j=>j.job==='macos' && j.macos));
