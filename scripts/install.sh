@@ -13,8 +13,8 @@
 # Equivalent environment variables: ALLOWLISTER_VERSION, ALLOWLISTER_INSTALL_DIR.
 # Set GITHUB_TOKEN to lift the GitHub API rate limit when resolving "latest".
 #
-# Covers Linux and macOS (x86_64, arm64) and Windows x86_64 under a POSIX shell
-# (Git Bash / MSYS / WSL). For native Windows PowerShell or unpublished targets,
+# Covers Linux (x86_64, arm64), Apple Silicon macOS (arm64) and Windows x86_64
+# under a POSIX shell (Git Bash / MSYS / WSL). For native Windows PowerShell or unpublished targets,
 # use `cargo install allowlister --locked`.
 #
 # Like the engine it installs, this script never weakens silently: it aborts
@@ -64,6 +64,12 @@ detect_target() {
         arm64 | aarch64) arch_part="aarch64" ;;
         *) err "unsupported architecture: $arch" ;;
     esac
+
+    # Releases publish Apple Silicon macOS only; refuse rather than fetch a
+    # missing Intel asset.
+    if [ "$os_part" = "apple-darwin" ] && [ "$arch_part" != "aarch64" ]; then
+        err "Intel macOS is no longer supported; prebuilt binaries are Apple Silicon (arm64) only. Install with 'cargo install $BIN --locked'"
+    fi
 
     # The release matrix publishes Windows for x86_64 only.
     if [ "$ext" = "zip" ] && [ "$arch_part" != "x86_64" ]; then

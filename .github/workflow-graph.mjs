@@ -133,7 +133,7 @@ export function resolveRun(workflows, file, scenario, chain = []) {
         const runner = resolve(job['runs-on'], cell);
         const labels = [runner].flat();
         if (!labels.length || labels.some(label => typeof label !== 'string' || !/^(ubuntu|windows|macos)-[\w.-]+$/.test(label))) throw new Error(`${file}:${id}: unresolved runner ${JSON.stringify(runner)}`);
-        rows.push({ workflow: file, job: id, name: resolve(job.name ?? id, cell), runner, target: matrix.target ?? null, targets: job.steps?.map(s => s.run?.match(/for target in ([^;]+);/)?.[1]).filter(Boolean).flatMap(s => s.split(/\s+/)) ?? [], state: 'requested', macos: labels.some(l => l.startsWith('macos-')), matrix });
+        rows.push({ workflow: file, job: id, name: resolve(job.name ?? id, cell), runner, target: matrix.target ?? job.env?.TARGET ?? null, targets: [matrix.target ?? job.env?.TARGET].filter(Boolean), state: 'requested', macos: labels.some(l => l.startsWith('macos-')), matrix });
       }
     }
     if (!progressed) throw new Error(`${file}: cyclic job dependencies`);

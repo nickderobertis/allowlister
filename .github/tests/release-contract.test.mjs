@@ -10,17 +10,22 @@ const contract=JSON.parse(readFileSync(join(root,'.github/tests/fixtures/release
 // llmlint: ignore[changed_behavior_has_e2e] The production host-native journey builds, installs and executes a real artifact. Darwin/Windows compatibility is proved by the artifact contract here and native install/run commands before release upload; this Linux host cannot execute those binaries and runs no extra paid platform probes.
 test('release graph preserves every platform and archive; one compiled target input precedes Linux publication',()=>{
   const release=workflows['release.yml'];const jobs=release.jobs;
-  const darwin=jobs.darwin.steps.find(s=>s.run?.includes('for target in')).run;
-  const targets=[...jobs.build.strategy.matrix.include.map(c=>c.target),...darwin.match(/for target in ([^;]+);/)[1].split(' ')].sort();
+  const darwin=jobs.darwin;
+  const targets=[...jobs.build.strategy.matrix.include.map(c=>c.target),darwin.env.TARGET].sort();
   assert.equal(contract.schemaVersion,1);
   assert.deepEqual(targets,contract.platforms.map(p=>p.target).sort());
   for(const platform of contract.platforms) assert.equal(platform.architecture,platform.target.split('-')[0]);
   assert.equal(contract.archiveName,'allowlister-{tag}-{target}.{archive}');
   assert.equal(contract.checksumName,'allowlister-{tag}-{target}.sha256');
-  assert.match(darwin,/just dist-build "\$target" "\$TAG"\n\s+bash scripts\/verify-release.sh "\$target" "\$TAG"/);
-  assert.equal(jobs.darwin['runs-on'],'macos-15');
-  assert.ok(jobs.darwin.steps.some(s=>s.run==='rustup target add x86_64-apple-darwin aarch64-apple-darwin'));
-  assert.ok(jobs.darwin.steps.some(s=>s.run==='softwareupdate --install-rosetta --agree-to-license'));
+  // The one Mac release job builds, installs and runs only the native Apple
+  // Silicon archive, with the same commands as every other release builder.
+  assert.equal(darwin.env.TARGET,'aarch64-apple-darwin');
+  assert.equal(darwin['runs-on'],'macos-15');
+  const commands=job=>job.steps.map(s=>s.run).filter(Boolean);
+  assert.deepEqual(commands(darwin),['rustup target add "$TARGET"','just dist-build "$TARGET" "$TAG"','bash scripts/verify-release.sh "$TARGET" "$TAG"']);
+  assert.deepEqual(commands(darwin).slice(1),commands(jobs.build).slice(1));
+  assert.doesNotMatch(JSON.stringify(workflows),/x86_64-apple-darwin|rosetta|arch -x86_64/i);
+  for(const platform of contract.platforms.filter(p=>p.target.includes('apple-darwin'))) assert.equal(platform.architecture,'aarch64');
   assert.deepEqual(jobs.upload.needs,['build','darwin']);assert.equal(jobs.upload['runs-on'],'ubuntu-latest');
   const download=jobs.upload.steps.find(s=>s.uses?.startsWith('actions/download-artifact@'));
   assert.equal(download.with['run-id'],undefined,'download is scoped to this exact workflow run');
@@ -40,13 +45,12 @@ test('release graph preserves every platform and archive; one compiled target in
   const verify=readFileSync(join(root,'scripts/verify-release.sh'),'utf8');
   assert.match(verify,/sh scripts\/install.sh --version "\$tag" --to/);
   assert.match(verify,/cmp -s "target\/\$target\/release/);
-  assert.match(verify,/installer=\(arch -x86_64 "\$\{installer\[@\]\}"\)/);
   assert.doesNotMatch(verify,/stage\/bin\/uname|RELEASE_UNAME/);
-  assert.match(verify,/arch -x86_64 "\$binary" --version/);
+  assert.doesNotMatch(verify,/x86_64-apple-darwin|arch -x86_64|Rosetta/);
   assert.match(verify,/Darwin execution requires macOS/);
   for(const platform of contract.platforms) assert.ok(verify.includes(platform.target),platform.target);
   for(const identity of ['x86-64','arm64','Mach-O','ELF','PE32+']) assert.ok(verify.includes(identity));
-  const offHost=spawnSync('bash',['scripts/verify-release.sh','x86_64-apple-darwin','v0.1.0'],{cwd:root,encoding:'utf8'});
+  const offHost=spawnSync('bash',['scripts/verify-release.sh','aarch64-apple-darwin','v0.1.0'],{cwd:root,encoding:'utf8'});
   if(process.platform==='linux') {assert.notEqual(offHost.status,0);assert.match(offHost.stderr,/Darwin execution requires macOS/);}
   assert.deepEqual(contract.packageForms,['archive']);
 });
@@ -72,7 +76,7 @@ test('all former Mac harness commands keep credentials, installation paths, and 
     const out=spawnSync('bash',['-eo','pipefail','-c',script],{encoding:'utf8',env:{...process.env,...Object.fromEntries(Object.keys(copied.env).map(k=>[k,'']))}});
     assert.notEqual(out.status,0,`${harness} must fail without its required credential`);
     const executable=text=>text?.split('\n').filter(line=>!line.trim().startsWith('#')).join('\n');
-    for(const step of old.steps.filter(s=>s.name?.startsWith('Install ') || s.name?.startsWith('Show cursor'))) {
+    for(const step of old.steps.filter(s=>s.name?.startsWith('Install ') || s.name?.startsWith('Set up ') || s.name?.startsWith('Show cursor'))) {
       if(step.run?.includes('cargo install')) {
         const install=step.run.split('\n').find(line=>line.includes('cargo install')).trim();
         assert.ok(mac.steps.some(m=>m.run?.includes(install)),`${harness}: shared oneharness pin`);
@@ -128,6 +132,8 @@ test('all production platform declarations reconcile exactly with release target
     const out = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', env: { ...process.env, INSTALL_OS: names.get(os), INSTALL_ARCH: architecture } });
     if (os === 'pc-windows-msvc' && architecture === 'aarch64') {
       assert.notEqual(out.status, 0); assert.match(out.stderr, /no prebuilt Windows binary/);
+    } else if (os === 'apple-darwin' && architecture === 'x86_64') {
+      assert.notEqual(out.status, 0); assert.match(out.stderr, /Intel macOS is no longer supported/);
     } else {
       assert.equal(out.status, 0, out.stderr);
       const [target, archive] = out.stdout.split(' '); installedTargets.push(target);

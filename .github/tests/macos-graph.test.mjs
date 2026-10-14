@@ -63,7 +63,7 @@ test('budget reporters consume recorded telemetry and reject missing/stale input
       assert.deepEqual(diagnostic.breakdown.map(row=>row.event),telemetry.scenarios.map(scenario=>scenario.id));
       const published=diagnostic.breakdown.find(row=>row.event==='published:version:same:archives');
       const darwin=published.runs.find(run=>run.workflow==='release.yml').jobs.find(job=>job.job==='darwin');
-      const declared=loadWorkflows()['release.yml'].jobs.darwin.steps.find(step=>step.run?.includes('for target in')).run.match(/for target in ([^;]+);/)[1].split(' ');
+      const declared=[loadWorkflows()['release.yml'].jobs.darwin.env.TARGET];
       assert.deepEqual(darwin.targets,declared);assert.equal(darwin.runner,'macos-15');
       const pr=diagnostic.breakdown.find(row=>row.event==='pr-synchronize:source:same:archives');
       assert.equal(pr.runs.find(run=>run.workflow==='ci.yml').jobs.find(job=>job.job==='macos').name,'Mac proofs');

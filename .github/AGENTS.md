@@ -4,8 +4,9 @@
   carrier; only the semantic classifier authorizes omitting its prerequisite.
   Failed, cancelled or missing required work must fail the carrier.
 - Automatic Mac work belongs only in CI's ordinary-PR lane and release's
-  pre-upload Darwin lane. One job runs each lane's assertions sequentially.
-  Manual Mac diagnostics opt in through CI, default off.
+  pre-upload Darwin lane, which releases Apple Silicon (`aarch64-apple-darwin`)
+  only; the installer refuses Intel macOS. One job runs each lane's assertions
+  sequentially. Manual Mac diagnostics opt in through CI, default off.
 - Pin actions to a stable major version (or a SHA) and grant least-privilege
   `permissions`.
 - Release artifacts publish only after the gate passes; never publish untested

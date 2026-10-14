@@ -199,12 +199,12 @@ jobs:
           fi
           oneharness --version
 
-      - name: Install Copilot CLI
+      - name: Set up Node for the Copilot CLI install
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-      - name: Install Copilot binary
+      - name: Install Copilot CLI
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
         run: |
           npm install -g @github/copilot

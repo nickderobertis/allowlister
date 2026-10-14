@@ -16,6 +16,7 @@
       "sharedGlobals",
       "{workspaceRoot}/scripts/dist.sh",
       "{workspaceRoot}/scripts/verify-release.sh",
+      "{workspaceRoot}/scripts/install.sh",
       "{workspaceRoot}/rust-toolchain.toml"
     ]
   },

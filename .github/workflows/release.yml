@@ -99,26 +99,28 @@ jobs:
   darwin:
     name: build (Darwin archives)
     needs: test
-    # Standard macos-15 is Apple Silicon; x86_64 executes under Rosetta.
+    # Standard macos-15 is Apple Silicon. Intel macOS is not released, so the one
+    # Mac job builds, installs and runs only the native arm64 archive.
     runs-on: macos-15
     defaults:
       run:
         shell: bash
+    env:
+      TARGET: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
-      - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
-      - run: softwareupdate --install-rosetta --agree-to-license
+      - run: rustup target add "$TARGET"
       - uses: taiki-e/install-action@v2
         with:
           tool: just
-      - name: Build, install and run both staged Darwin archives
+      - name: Build and package
         env:
           TAG: ${{ github.event.release.tag_name }}
-        run: |
-          for target in x86_64-apple-darwin aarch64-apple-darwin; do
-            just dist-build "$target" "$TAG"
-            bash scripts/verify-release.sh "$target" "$TAG"
-          done
+        run: just dist-build "$TARGET" "$TAG"
+      - name: Install and run staged artifact
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: bash scripts/verify-release.sh "$TARGET" "$TAG"
       - uses: actions/upload-artifact@v4
         with:
           name: release-darwin

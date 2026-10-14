@@ -8,7 +8,7 @@ root="$(pwd)"
 target="$1"
 tag="$2"
 case "$target" in
-    x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|x86_64-apple-darwin|aarch64-apple-darwin|x86_64-pc-windows-msvc) ;;
+    x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|aarch64-apple-darwin|x86_64-pc-windows-msvc) ;;
     *) echo "unsupported target: $target; see just dist-plan for supported triples" >&2; exit 1 ;;
 esac
 numeric='(0|[1-9][0-9]*)'
@@ -36,11 +36,7 @@ cp "$asset" "$3" || { echo "missing or unreadable staged asset: $asset; rebuild 
 SH
 # llmlint: ignore[changed_behavior_has_e2e] The native installer executes the actual transport adapter. This recovery reports a staging filesystem capability failure; replacing chmod or racing staging permissions would exceed the forge-only transport proof boundary.
 chmod +x "$stage/bin/curl" || { echo "cannot make transport adapter executable; repair staging permissions and rerun verification" >&2; exit 1; }
-installer=(sh scripts/install.sh --version "$tag" --to "$stage/install")
-if [[ "$target" = x86_64-apple-darwin ]]; then
-    installer=(arch -x86_64 "${installer[@]}")
-fi
-if ! PATH="$stage/bin:$PATH" "${installer[@]}" > "$stage/install.log" 2>&1; then
+if ! PATH="$stage/bin:$PATH" sh scripts/install.sh --version "$tag" --to "$stage/install" > "$stage/install.log" 2>&1; then
     cat "$stage/install.log" >&2
     echo "release install failed for $target; rebuild or restage its archive and checksum, then rerun scripts/verify-release.sh" >&2
     exit 1
@@ -54,7 +50,6 @@ identity="$(file "$binary")"
 case "$target" in
     x86_64-unknown-linux-musl) [[ "$identity" = *ELF* && "$identity" = *x86-64* && "$identity" = *statically\ linked* ]] ;;
     aarch64-unknown-linux-musl) [[ "$identity" = *ELF* && "$identity" = *ARM\ aarch64* && "$identity" = *statically\ linked* ]] ;;
-    x86_64-apple-darwin) [[ "$identity" = *Mach-O* && "$identity" = *x86_64* ]] ;;
     aarch64-apple-darwin) [[ "$identity" = *Mach-O* && "$identity" = *arm64* ]] ;;
     x86_64-pc-windows-msvc) [[ "$identity" = *PE32+* && "$identity" = *x86-64* ]] ;;
 esac || { echo "wrong binary architecture or linkage: $identity; rebuild the declared target" >&2; exit 1; }
@@ -68,13 +63,8 @@ else
     echo "no SHA-256 tool; install sha256sum or shasum and rerun verification" >&2; exit 1
 fi
 # llmlint: ignore-end[changed_behavior_has_e2e]
-# llmlint: ignore-block[changed_behavior_has_e2e] The native journey executes the real compiled product and rejects wrong staged versions; the contract checks the Rosetta invocation. These recovery branches handle runner execution capabilities; alternate fixture binaries would be rejected first by compiled-byte equality and cannot prove this staged product.
-if [[ "$target" = x86_64-apple-darwin ]]; then
-    actual="$(arch -x86_64 "$binary" --version)" || { echo "cannot execute $target; install Rosetta and rebuild the declared target" >&2; exit 1; }
-else
-    actual="$("$binary" --version)" || { echo "cannot execute $target; rebuild it for this runner and rerun verification" >&2; exit 1; }
-fi
-# llmlint: ignore-end[changed_behavior_has_e2e]
+# llmlint: ignore[changed_behavior_has_e2e] The native journey executes the real compiled product and rejects wrong staged versions. This recovery handles a runner execution-capability failure; an alternate fixture binary would be rejected first by compiled-byte equality and cannot prove this staged product.
+actual="$("$binary" --version)" || { echo "cannot execute $target; rebuild it for this runner and rerun verification" >&2; exit 1; }
 [[ "$actual" = "allowlister ${tag#v}" ]] || { echo "incorrect installed version: $actual; rebuild artifacts for $tag" >&2; exit 1; }
 # llmlint: ignore[changed_behavior_has_e2e] The native journey drives real installed help; this recovery handles an unexpected runner/process failure of those same bytes, rather than a replacement fixture executable.
 "$binary" --help >/dev/null || { echo "installed help failed for $target; rebuild the declared target and rerun verification" >&2; exit 1; }

@@ -67,13 +67,50 @@ test("the real crate's plan keeps every release asset name", { skip }, () => {
   for (const asset of [
     `allowlister-v${version}-x86_64-unknown-linux-musl.tar.gz`,
     `allowlister-v${version}-aarch64-unknown-linux-musl.tar.gz`,
-    `allowlister-v${version}-x86_64-apple-darwin.tar.gz`,
     `allowlister-v${version}-aarch64-apple-darwin.tar.gz`,
     `allowlister-v${version}-x86_64-pc-windows-msvc.zip`,
   ]) {
     assert.ok(out.stdout.includes(asset), `plan must still name ${asset}`);
   }
   assert.match(out.stdout, /^license: {4}MIT$/m);
+});
+
+/** Run the real installer with `uname` reporting `os`/`arch`; `curl` records any download it is asked for. */
+function runInstaller(os, arch) {
+  const dir = mkdtempSync(join(tmpdir(), "install-host-"));
+  scratch.push(dir);
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  const log = join(dir, "downloads.log");
+  writeFileSync(join(bin, "uname"), `#!/bin/sh\nif [ "$1" = -s ]; then echo ${os}; else echo ${arch}; fi\n`);
+  writeFileSync(join(bin, "curl"), `#!/bin/sh\necho "$*" >> "${log}"\nexit 22\n`);
+  chmodSync(join(bin, "uname"), 0o755);
+  chmodSync(join(bin, "curl"), 0o755);
+  const out = spawnSync("sh", [join(repo, "scripts/install.sh"), "--version", "v0.1.0", "--to", join(dir, "install")], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+  let downloads = "";
+  try {
+    downloads = readFileSync(log, "utf8");
+  } catch {
+    // Nothing was fetched.
+  }
+  return { ...out, downloads };
+}
+
+test("the installer refuses Intel macOS instead of fetching a missing asset", { skip }, () => {
+  const out = runInstaller("Darwin", "x86_64");
+  assert.notEqual(out.status, 0);
+  assert.match(out.stderr, /Intel macOS is no longer supported/);
+  assert.equal(out.downloads, "", "no release asset is requested for Intel macOS");
+});
+
+test("the installer still requests the Apple Silicon macOS archive", { skip }, () => {
+  const out = runInstaller("Darwin", "arm64");
+  assert.notEqual(out.status, 0, "the doubled transport refuses every download");
+  assert.match(out.downloads, /allowlister-v0\.1\.0-aarch64-apple-darwin\.tar\.gz/);
+  assert.doesNotMatch(out.stderr, /no longer supported/);
 });
 
 /** A copy of the setup scripts plus a bin dir of stand-ins for every required tool except `missing`. */

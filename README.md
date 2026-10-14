@@ -185,7 +185,7 @@ asdf install allowlister latest
 asdf set allowlister latest          # or pin a specific version, e.g. 0.1.0
 ```
 
-Linux and macOS only (`x86_64`/`arm64`); see the plugin's README for version
+Linux (`x86_64`/`arm64`) and Apple Silicon macOS (`arm64`) only; see the plugin's README for version
 pinning and troubleshooting.
 
 ### Prebuilt binaries
@@ -193,7 +193,9 @@ pinning and troubleshooting.
 Download the archive for your platform from the
 [latest release](https://github.com/nickderobertis/allowlister/releases/latest),
 verify its `.sha256`, extract, and put `allowlister` on your `PATH`. Binaries are
-published for Linux (x86_64, arm64), macOS (x86_64, arm64), and Windows (x86_64).
+published for Linux (x86_64, arm64), Apple Silicon macOS (arm64), and Windows
+(x86_64). Intel (x86_64) macOS binaries are no longer published; build from
+source with `cargo install allowlister --locked` there.
 The Linux binaries are statically linked (musl), so they run on any distribution
 regardless of its glibc version — including minimal container images such as
 Alpine, `distroless`, and `scratch`, with no extra runtime packages. The Windows

@@ -81,11 +81,12 @@ jobs:
           cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
           oneharness --version
 
-      - name: Install Copilot CLI
+      - name: Set up Node for the Copilot CLI install
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-      - run: |
+      - name: Install Copilot CLI
+        run: |
           npm install -g @github/copilot
           copilot --version
 
