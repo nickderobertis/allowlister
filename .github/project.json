@@ -13,6 +13,7 @@
       "{workspaceRoot}/scripts/check-e2e-matrix.sh",
       "{workspaceRoot}/release-plz.toml",
       "{workspaceRoot}/justfile",
+      "{workspaceRoot}/.claude/settings.json",
       "sharedGlobals",
       "{workspaceRoot}/scripts/dist.sh",
       "{workspaceRoot}/scripts/verify-release.sh",

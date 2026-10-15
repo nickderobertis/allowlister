@@ -443,6 +443,8 @@ jobs:
   # The gate: a clean checkout runs `just bootstrap` then `just check` at the
   # routed tier, on every platform the binary ships to.
   test:
+    outputs:
+      gate-tier: ${{ steps.tier.outputs.tier }}
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -496,6 +498,36 @@ jobs:
           TIER: ${{ steps.tier.outputs.tier }}
           NX_BASE: ${{ steps.tier.outputs.base }}
         run: just check "$TIER" supply-chain
+
+  pool-maintenance:
+    name: pool maintenance budget
+    needs: [test]
+    if: github.event_name == 'pull_request' && needs.test.outputs.gate-tier == 'all'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Check steady-state maintenance budget
+        run: just budgets-host
 
   # Dedicated coverage job: a standalone required context and a fast path to the
   # report on Linux. The same 95% floor is also enforced inside `just check`.

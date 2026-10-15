@@ -20,6 +20,8 @@ llvmcov-version := "0.8.7"
 deny-version := "0.19.8"
 machete-version := "0.9.2"
 audit-version := "0.22.1"
+prune-superseded-version := "0.1.1"
+prune-superseded-toolchain := "1.97.1"
 
 # Tools for the informational performance suite (`bench*`, `profile`). Not part
 # of the quality gate; CI installs the latest via the install action.
@@ -63,6 +65,12 @@ bootstrap:
         cargo binstall --no-confirm --disable-telemetry --force "$1" \
             || { echo "» no prebuilt binary reachable for $1 — building from source"; cargo install --locked --force "$1"; }
     }
+    if [ "$(cargo-prune-superseded --version 2>/dev/null || true)" != "cargo-prune-superseded {{prune-superseded-version}}" ]; then
+        # The pruner requires Rust >=1.97; keep its installer compiler separate
+        # from the repository's pinned product compiler (including on Windows).
+        rustup toolchain install {{prune-superseded-toolchain}} --profile minimal --no-self-update
+        cargo +{{prune-superseded-toolchain}} install --locked cargo-prune-superseded --version {{prune-superseded-version}}
+    fi
     echo "» installing pinned dev tools"
     for tool in \
         cargo-nextest@{{nextest-version}} \
@@ -365,3 +373,14 @@ lint-llm-validate *args:
 # llmlint scoped to changed files since the merge-base with main.
 lint-llm-diff base="origin/main" *args:
     llmlint --diff --diff-base "{{base}}" {{args}}
+
+# Keep the newest build of each unit and all builds modified within two days.
+pool-maintenance:
+    cargo-prune-superseded --keep-within 2d target
+
+budgets:
+    @bash scripts/nx run-many --exclude=tag:type:live -t budgets
+
+# Expensive host budgets run only explicitly and on release preparation.
+budgets-host:
+    @bash scripts/nx run pool-maintenance:budgets-host

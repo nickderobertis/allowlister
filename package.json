@@ -7,6 +7,7 @@
     "conventional-changelog-conventionalcommits": "9.1.0",
     "conventional-commits-parser": "6.2.1",
     "nx": "23.3.0",
-    "yaml": "2.9.1"
+    "yaml": "2.9.1",
+    "@onebudgetspec/cli": "0.1.3"
   }
 }

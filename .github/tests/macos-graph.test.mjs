@@ -100,7 +100,7 @@ test('a real workflow input edit invalidates recorded telemetry through the prod
   try {
     cpSync(join(root,'.github'),join(fixture,'.github'),{recursive:true,filter:path=>!['node_modules','.telemetry'].includes(basename(path))});
     symlinkSync(join(root,'.github/node_modules'),join(fixture,'.github/node_modules'),process.platform==='win32'?'junction':'dir');
-    for(const file of ['scripts/check-e2e-matrix.sh','scripts/dist.sh','scripts/verify-release.sh','scripts/install.sh','nx.json','package.json','package-lock.json','release-plz.toml','rust-toolchain.toml','justfile','.tool-versions']) {
+    for(const file of ['.claude/settings.json','scripts/check-e2e-matrix.sh','scripts/dist.sh','scripts/verify-release.sh','scripts/install.sh','nx.json','package.json','package-lock.json','release-plz.toml','rust-toolchain.toml','justfile','.tool-versions']) {
       mkdirSync(dirname(join(fixture,file)),{recursive:true});copyFileSync(join(root,file),join(fixture,file));
     }
     const digest=spawnSync(process.execPath,['--input-type=module','-e',"import {sourceDigest} from './.github/workflow-graph.mjs'; console.log(sourceDigest());"],{cwd:fixture,encoding:'utf8'});

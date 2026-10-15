@@ -77,3 +77,32 @@ test("setup-llmlint asks uv for the declared llmlint floor and never fails the s
     assert.deepEqual(calls(), [`uv tool install --upgrade llmlint-cli>=${floor}`]);
   }
 });
+
+test("bootstrap installs the pinned pruner with its own compiler once and propagates install failures", { skip }, () => {
+  const { dir, calls } = stage({
+    "cargo-binstall": ok,
+    lefthook: ok,
+    rustup: ok,
+    cargo: `case "$*" in
+      *"install --locked cargo-prune-superseded"*)
+        [ "\${FAIL_INSTALL:-0}" = 0 ] || exit 42
+        [[ "$1" == +1.97.1 ]] || exit 43
+        touch "\$PRUNER_MARKER" ;;
+    esac`,
+    "cargo-prune-superseded": '[ -f "$PRUNER_MARKER" ] && echo "cargo-prune-superseded 0.1.1"',
+  });
+  writeFileSync(join(dir, "repo/scripts/nx"), "exit 0\n");
+  writeFileSync(join(dir, "repo/scripts/hooks-install.sh"), "exit 0\n");
+  const env = { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, PRUNER_MARKER: join(dir, "installed") };
+  const run = extra => spawnSync("just", ["bootstrap"], { cwd: join(dir, "repo"), env: { ...env, ...extra }, encoding: "utf8" });
+  const failed = run({ FAIL_INSTALL: "1" });
+  assert.equal(failed.status, 42, failed.stdout + failed.stderr);
+  const first = run({});
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.ok(calls().includes("rustup toolchain install 1.97.1 --profile minimal --no-self-update"));
+  const installs = () => calls().filter(call => call.includes("install --locked cargo-prune-superseded"));
+  assert.equal(installs().length, 2);
+  const second = run({});
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.equal(installs().length, 2, "the installed release must not be reinstalled");
+});

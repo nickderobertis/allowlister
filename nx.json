@@ -35,6 +35,8 @@
     "msrv": { "cache": false },
     "bench": { "cache": false },
     "live": { "cache": false },
-    "verify-install": { "cache": false }
+    "verify-install": { "cache": false },
+    "budgets": { "cache": true, "inputs": ["default", "^default", { "externalDependencies": ["@onebudgetspec/cli"] }] },
+    "budgets-host": { "cache": false }
   }
 }

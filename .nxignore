@@ -7,8 +7,9 @@
 /CONTRIBUTING.md
 /docs/
 # Agent, hook, judged-lint and shell/editor settings: read by those tools, never
-# by an Nx target.
-/.claude/
+# by an Nx target, except the repository settings covered by workflow tests.
+/.claude/*
+!/.claude/settings.json
 /lefthook.yml
 /llmlint.yml
 /oneharness.toml
