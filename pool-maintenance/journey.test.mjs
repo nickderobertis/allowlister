@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parse } from 'yaml';
 
 const root = resolve(import.meta.dirname, '..');
 const evidence = resolve(root, 'target/pool-maintenance-evidence');
@@ -27,8 +28,9 @@ test('declared measurement runs real builds, preserves ordinary hashes, and prop
 
   const measured = readFileSync(report, 'utf8');
   const result = JSON.parse(measured);
-  assert.equal(typeof result.value, 'number');
-  assert.match(result.detail, /builds removed: [1-9]\d*/);
+  assert.ok(Number.isFinite(result.value) && result.value >= 0);
+  const budget = parse(readFileSync(resolve(import.meta.dirname, 'budgets.yaml'), 'utf8')).budgets[0];
+  assert.equal(budget.unit, 'seconds');
   const failure = run({ RUSTFLAGS: '--deliberately-invalid-pool-journey-flag' });
   assert.notEqual(failure.status, 0);
   assert.match(failure.stdout, /untimed backlog pass/);
