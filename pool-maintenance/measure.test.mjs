@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, symlinkSync, readFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -52,14 +52,13 @@ test('measurement compilation agrees with the coverage gate', () => {
 test('a failed maintenance subprocess aborts measurement without replacing its report', () => {
   const temporary = mkdtempSync(join(tmpdir(), 'pool-maintenance-failure-'));
   try {
-    const command = join(temporary, 'just');
-    writeFileSync(command, '#!/bin/sh\necho maintenance-unavailable >&2\nexit 17\n');
-    chmodSync(command, 0o755);
+    const recipe = join(temporary, 'justfile');
+    writeFileSync(recipe, 'pool-maintenance:\n    @echo maintenance-unavailable >&2; exit 17\n');
     const report = join(temporary, 'result.json');
     writeFileSync(report, 'previous-result');
     const result = spawnSync(process.execPath, [resolve(import.meta.dirname, 'measure.mjs')], {
       cwd: resolve(import.meta.dirname, '..'), encoding: 'utf8',
-      env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ONEBUDGETSPEC_RESULT: report },
+      env: { ...process.env, JUST_JUSTFILE: recipe, ONEBUDGETSPEC_RESULT: report },
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /maintenance-unavailable/);
