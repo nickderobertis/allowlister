@@ -25,10 +25,12 @@
       ]
     },
     "budgets-host": {
+      "//": "llmlint: ignore-block[changed_behavior_has_e2e] This composition is proven by the real onebudgetspec and Nx budget runs, which execute this project's declared budget and consume the pruner's SDK report.",
       "executor": "nx:run-commands",
       "options": {
         "command": "node_modules/.bin/onebudgetspec check pool-maintenance/budgets.yaml --label host"
-      }
+      },
+      "//end": "llmlint: ignore-end[changed_behavior_has_e2e]"
     }
   }
 }

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, symlinkSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, symlinkSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { entries, backdate, verify } from './measure.mjs';
 
 test('real pruner removes an old alternative and preserves the ordinary build', () => {
@@ -47,4 +47,24 @@ test('measurement compilation agrees with the coverage gate', () => {
   assert.match(gate, /cargo llvm-cov --no-report run -p allowlister --bin allowlister --locked -- --version/);
   assert.match(measurement, /cargo build --target-dir target\/llvm-cov-target -p allowlister --bin allowlister --locked/);
   assert.match(measurement, /CARGO_TARGET_DIR=target\/llvm-cov-target cargo llvm-cov show-env --sh/);
+});
+
+test('a failed maintenance subprocess aborts measurement without replacing its report', () => {
+  const temporary = mkdtempSync(join(tmpdir(), 'pool-maintenance-failure-'));
+  try {
+    const command = join(temporary, 'just');
+    writeFileSync(command, '#!/bin/sh\necho maintenance-unavailable >&2\nexit 17\n');
+    chmodSync(command, 0o755);
+    const report = join(temporary, 'result.json');
+    writeFileSync(report, 'previous-result');
+    const result = spawnSync(process.execPath, [resolve(import.meta.dirname, 'measure.mjs')], {
+      cwd: resolve(import.meta.dirname, '..'), encoding: 'utf8',
+      env: { ...process.env, PATH: `${temporary}:${process.env.PATH}`, ONEBUDGETSPEC_RESULT: report },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /maintenance-unavailable/);
+    assert.match(result.stderr, /Command failed: just pool-maintenance/);
+    assert.doesNotMatch(result.stdout, /untimed backlog pass|maintenance proof/);
+    assert.equal(readFileSync(report, 'utf8'), 'previous-result');
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
 });

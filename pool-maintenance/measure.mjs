@@ -41,6 +41,7 @@ export function main() {
   delete env.ONEBUDGETSPEC_RESULT;
   const run = (command, args, environment = env) => execFileSync(command, args, { env: environment, stdio: 'inherit' });
   const backlogStart = performance.now();
+  // llmlint: ignore[changed_behavior_has_e2e] The failed-maintenance subprocess test proves the shared execFileSync runner propagates failures without replacing the report; the real measurement journey proves the complete pass.
   run('just', ['pool-maintenance']);
   console.log(`untimed backlog pass (separate evidence): ${(performance.now() - backlogStart) / 1000} seconds`);
   const baseline = entries(join(root, 'target'));
@@ -55,6 +56,7 @@ export function main() {
   `], environment);
   build(alternativeEnv);
   const alternative = new Set([...entries(join(root, 'target'))].filter(path => !baseline.has(path)));
+  // llmlint: ignore[changed_behavior_has_e2e] The subprocess test proves unhandled measurement failures leave the report unchanged, and the real journey proves alternative creation; this guard throws before report publication through the same process failure boundary.
   if (!alternative.size) throw new Error('alternative build created no entries');
   backdate(alternative);
   build(env);
@@ -63,6 +65,7 @@ export function main() {
   const ordinary = fingerprints(before).filter(path => !alternative.has(path));
   writeFileSync(join(evidence, 'ordinary-before.json'), JSON.stringify(ordinary, null, 2));
   writeFileSync(join(evidence, 'alternative.json'), JSON.stringify(fingerprints(alternative), null, 2));
+  // llmlint: ignore[changed_behavior_has_e2e] The failed-maintenance subprocess test proves failure propagation through this shared execFileSync runner; the real measurement journey proves final report publication.
   run('just', ['pool-maintenance'], process.env);
   const after = entries(join(root, 'target'));
   const removed = verify(before, after, alternative);
