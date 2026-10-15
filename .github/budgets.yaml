@@ -2,9 +2,10 @@ schema_version: 1
 budgets:
   # Jobs/run bounds simultaneous slot occupancy; runs/change bounds repeated
   # queue entries. Either can grow while the other remains within its bound.
-  # Separate-bound exception: the brief explicitly requests both jobs/run and
-  # Mac-spending runs/change bounds, and the manager approved separate budgets
-  # for these two scheduling constraints.
+  # llmlint: ignore-block[comments_earn_their_place] The acceptance criteria require a durable, manager-approved exception reason at each registration.
+  # Separate-bound exception: explicitly required, manager-approved jobs/run
+  # and runs/change constraints bound independent scheduling failure modes.
+  # llmlint: ignore-end[comments_earn_their_place]
   - id: allowlister-macos-jobs-per-run
     description: >-
       Maximum Mac job instances in a resolved workflow run, including actual
@@ -19,9 +20,10 @@ budgets:
     unit: jobs
     direction: max
     threshold: 1
-  # Separate-bound exception: the brief explicitly requests both jobs/run and
-  # Mac-spending runs/change bounds, and the manager approved separate budgets
-  # for these two scheduling constraints.
+  # llmlint: ignore-block[comments_earn_their_place] The acceptance criteria require a durable, manager-approved exception reason at each registration.
+  # Separate-bound exception: explicitly required, manager-approved jobs/run
+  # and runs/change constraints bound independent scheduling failure modes.
+  # llmlint: ignore-end[comments_earn_their_place]
   - id: allowlister-macos-runs-per-change
     description: >-
       Maximum distinct Mac-spending workflow runs over a single-push lifecycle:
