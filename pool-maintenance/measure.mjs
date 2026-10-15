@@ -47,10 +47,12 @@ export function main() {
   // The gate's test compilation uses llvm-cov + nextest for both workspace crates.
   // A distinct metadata salt creates one new configuration, without source edits.
   const alternativeEnv = { ...env, RUSTFLAGS: `${env.RUSTFLAGS ?? ''} -C metadata=pool-${randomUUID()}`.trim() };
-  const build = environment => {
-    run('cargo', ['llvm-cov', '--no-report', 'run', '-p', 'allowlister', '--bin', 'allowlister', '--locked', '--', '--version'], environment);
-    run('cargo', ['llvm-cov', '--no-report', 'nextest', '--workspace', '--locked', '--all-features', '--status-level', 'fail'], environment);
-  };
+  const build = environment => run('bash', ['-euo', 'pipefail', '-c', `
+    coverage_env="$(CARGO_TARGET_DIR=target/llvm-cov-target cargo llvm-cov show-env --sh)"
+    eval "$coverage_env"
+    cargo build --target-dir target/llvm-cov-target -p allowlister --bin allowlister --locked
+    cargo nextest run --target-dir target/llvm-cov-target --workspace --locked --all-features --no-run
+  `], environment);
   build(alternativeEnv);
   const alternative = new Set([...entries(join(root, 'target'))].filter(path => !baseline.has(path)));
   if (!alternative.size) throw new Error('alternative build created no entries');

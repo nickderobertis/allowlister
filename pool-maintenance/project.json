@@ -20,7 +20,8 @@
       },
       "inputs": [
         "default",
-        "{workspaceRoot}/justfile"
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/tools/coverage/coverage.sh"
       ]
     },
     "budgets-host": {
