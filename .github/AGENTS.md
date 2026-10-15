@@ -1,10 +1,12 @@
 # AGENTS — .github
 
-- CI runs the same `just` recipes developers do, at the tier
-  `.github/scripts/gate-tier.mjs` picks for the event: a check that gates locally
-  must gate in CI too. The `test (<os>)`, `coverage` and `deps & security`
-  contexts are fixed — no `if`, `needs` or path filter on those jobs
-  (`.github/tests/` enforces the workflow contract).
+- Required context names are fixed. The Mac context is a Linux `always()`
+  carrier; only the semantic classifier authorizes omitting its prerequisite.
+  Failed, cancelled or missing required work must fail the carrier.
+- Automatic Mac work belongs only in CI's ordinary-PR lane and release's
+  pre-upload Darwin lane, which releases Apple Silicon (`aarch64-apple-darwin`)
+  only; the installer refuses Intel macOS. One job runs each lane's assertions
+  sequentially. Manual Mac diagnostics opt in through CI, default off.
 - Pin actions to a stable major version (or a SHA) and grant least-privilege
   `permissions`.
 - Release artifacts publish only after the gate passes; never publish untested
@@ -18,15 +20,15 @@
   they report results and must never be required to merge. A step that needs
   write scope (e.g. posting PR comments) runs only for same-repo, non-fork
   events, since fork pull requests get a read-only token.
-- Live e2e (`e2e-*.yml`) triggers on `pull_request` + `workflow_dispatch` only,
-  never `push: main` (the release-plz release PR re-runs the suite as the
-  pre-release gate). The PR matrix is slim: claude and codex run the full matrix,
-  every other harness Linux-only on PR, with a `workflow_dispatch` `os` input
-  widening the rest on demand. This contract is duplicated across the `e2e-*.yml`
-  files (GitHub Actions can't centralize it); `scripts/check-e2e-matrix.sh` (the
-  ci-workflows project's `lint` target, run by `just lint-workflows` and `just
-  check`) is its drift gate — add a row there when you add a harness, Linux-only on PR unless it
-  is a primary.
+- Live harness workflows keep Linux/Windows coverage; CI owns their formerly
+  automatic Mac proofs and optional Mac diagnostics. Keep credential validation
+  strict and fork guards intact. `scripts/check-e2e-matrix.sh` checks the matrix
+  contract; `.github/tests/` resolves workflow routing and reusable calls.
+- Mac policy compares parsed manifest/lockfile non-version fields; author login
+  is not authority because release-plz uses a personal token. Only a canonical
+  repository release branch with semantic release-only content may omit Mac.
+- Workflow test telemetry is uncached and tied to its source digest. Budgets
+  consume it without re-running scenarios or embedding limits in graph tests.
 - Every matrix cell that runs is strict (`fail-fast: false`, no soft pass). The
   checks are bash scripts, so force `bash` on every OS and keep harness installs
   per-OS (`$RUNNER_OS` case) — Windows uses Git Bash and has no Unix

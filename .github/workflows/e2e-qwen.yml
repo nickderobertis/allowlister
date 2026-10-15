@@ -16,14 +16,13 @@ on:
   workflow_dispatch:
     inputs:
       os:
-        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Check one harness/platform without a full rerun."
+        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Mac diagnostics use CI workflow_dispatch; check Linux/Windows here."
         type: choice
         default: default
         options:
           - default
           - all
           - ubuntu-latest
-          - macos-latest
           - windows-latest
 
 permissions:
@@ -50,7 +49,7 @@ jobs:
       # to 'all' (every supported OS) or a single OS on demand. See AGENTS.md >
       # "Live e2e in CI".
       matrix:
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest","windows-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","windows-latest"]' || inputs.os == 'ubuntu-latest' && '["ubuntu-latest"]' || inputs.os == 'windows-latest' && '["windows-latest"]') || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),

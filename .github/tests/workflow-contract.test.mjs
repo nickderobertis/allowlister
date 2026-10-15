@@ -1,8 +1,8 @@
 // The CI workflow contract, read from the parsed workflow files:
 //
 //   * the fixed status-check contexts branch protection names are each reported
-//     by exactly one job, in ci.yml, on every pull request — no `if`, `needs`,
-//     path filter or skippable step can leave one unreported;
+//     by exactly one job on every pull request. Linux/Windows run directly;
+//     the Linux Mac carrier uses always() and verifies classified omissions;
 //   * each of those jobs runs its `just` recipe at the tier the router chose, and
 //     the step's real script, run the way Actions runs it, propagates a failing
 //     sweep as the job's failure;
@@ -169,7 +169,7 @@ test("notignored is its own workflow and job, reports no contract context, and s
   assert.equal(job.if, "github.event.pull_request.head.repo.full_name == github.repository");
   assert.equal(job.steps.find((s) => s.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"], 0);
   assert.ok(job.steps.some((s) => s.uses === "nickderobertis/notignored@v0"));
-  for (const ciJob of Object.values(workflows["ci.yml"].jobs)) assert.equal(ciJob.needs, undefined);
+  assert.deepEqual(workflows["ci.yml"].jobs["macos-result"].needs, ["policy", "macos"]);
 });
 
 test("the live harness suites stay informational, fork-guarded, and outside the contract", () => {
@@ -302,7 +302,7 @@ test("release.yml gates on the single gate recipe, covering every stage its old 
       for (const t of call.targets) assert.ok(sweep.targets.includes(t), `\`just check all\` runs ${t}, which \`${old}\` ran`);
     }
   }
-  assert.deepEqual(workflows["release.yml"].jobs.upload.needs, "test");
+  assert.deepEqual(workflows["release.yml"].jobs.upload.needs, ["build", "darwin"]);
 });
 
 /** Run a Node-pin step's script in a directory holding `toolVersions`; returns its exit status and GITHUB_OUTPUT. */

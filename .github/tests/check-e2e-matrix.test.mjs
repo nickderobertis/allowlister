@@ -58,8 +58,16 @@ test("the gate fails when a workflow re-adds the push trigger", { skip }, () => 
 
 test("the gate fails when a dispatch option is dropped", { skip }, () => {
   const tmp = stage();
-  mutate(tmp, "e2e-goose.yml", "          - macos-latest\n", "");
+  mutate(tmp, "e2e-goose.yml", "          - ubuntu-latest\n", "");
   const out = run(tmp);
   assert.notEqual(out.status, 0, "gate should fail on a missing option");
   assert.match(out.stderr, /missing option/);
+});
+
+test("the gate rejects a restored per-harness Mac diagnostic", { skip }, () => {
+  const tmp = stage();
+  mutate(tmp, "e2e-goose.yml", "          - ubuntu-latest\n", "          - ubuntu-latest\n          - macos-latest\n");
+  const out = run(tmp);
+  assert.notEqual(out.status, 0, "gate should reject a Mac declaration outside CI");
+  assert.match(out.stderr, /must route Mac diagnostics through CI/);
 });

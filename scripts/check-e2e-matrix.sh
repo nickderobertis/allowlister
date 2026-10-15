@@ -15,16 +15,15 @@
 #     redundant paid model calls).
 #   - Every workflow exposes a workflow_dispatch `os` input for on-demand single
 #     harness/platform runs.
-#   - claude and codex are the primary harnesses and keep their full PR matrix;
+#   - claude keeps Linux/Windows and codex keeps Linux; Mac is consolidated in CI;
 #     every other harness runs Linux-only on PR and widens only on demand.
 #   - codex and copilot never offer/use windows (their hooks do not load there);
-#     their on-demand `all` is ubuntu+macos.
+#     their on-demand `all` is Linux only; CI owns Mac diagnostics.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-FULL='["ubuntu-latest","macos-latest","windows-latest"]'
-UM='["ubuntu-latest","macos-latest"]'
+FULL='["ubuntu-latest","windows-latest"]'
 LINUX='["ubuntu-latest"]'
 
 # One row per workflow: "<id> <pr-default-json> <all-json> <offers-windows>".
@@ -32,8 +31,8 @@ LINUX='["ubuntu-latest"]'
 # expands to; offers-windows is whether windows-latest is a dispatch option.
 CONTRACT="
 claude   $FULL  $FULL  yes
-codex    $UM    $UM    no
-copilot  $LINUX $UM    no
+codex    $LINUX    $LINUX    no
+copilot  $LINUX $LINUX    no
 crush    $LINUX $FULL  yes
 cursor   $LINUX $FULL  yes
 goose    $LINUX $FULL  yes
@@ -63,13 +62,16 @@ check_one() {
 	# list, so the dispatch half of the contract can't drift per workflow either
 	# (windows-latest is gated separately below, by capability).
 	grep -qE '^[[:space:]]+default: default$' "$f" || fail "$f 'os' input default is not 'default'"
-	for opt in default all ubuntu-latest macos-latest; do
+	for opt in default all ubuntu-latest; do
 		grep -qE "^[[:space:]]+- ${opt}$" "$f" || fail "$f 'os' input missing option: $opt"
 	done
 
 	# The matrix is a single fromJSON expression; match its PR-default and 'all'
 	# arms as literals.
-	local line
+	if grep -q 'macos-latest' "$f"; then
+        fail "$f must route Mac diagnostics through CI"
+    fi
+    local line
 	# shellcheck disable=SC2016 -- single quotes are intentional: the GitHub Actions ${{ }} expression is grepped as a literal, not shell-expanded
 	line="$(grep -F 'os: ${{ fromJSON(' "$f" || true)"
 	[ -n "$line" ] || { fail "$f has no fromJSON matrix expression"; return; }

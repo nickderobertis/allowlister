@@ -16,14 +16,13 @@ on:
   workflow_dispatch:
     inputs:
       os:
-        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Check one harness/platform without a full rerun."
+        description: "Platform(s): 'default' = this workflow's PR matrix, 'all' = every supported OS, or a single OS. Mac diagnostics use CI workflow_dispatch; check Linux/Windows here."
         type: choice
         default: default
         options:
           - default
           - all
           - ubuntu-latest
-          - macos-latest
 
 permissions:
   contents: read
@@ -45,14 +44,11 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     strategy:
       fail-fast: false
-      # Linux-only on PR to keep paid live runs down; workflow_dispatch widens
-      # to 'all' (ubuntu+macos -- see below) or a single OS on demand. See
-      # AGENTS.md > "Live e2e in CI".
       matrix:
-        # Linux/macOS only: GitHub Copilot CLI does not load its preToolUse hook
+        # Linux in this workflow; Mac in CI: GitHub Copilot CLI does not load its preToolUse hook
         # on Windows, so the gate cannot be enforced there (a harness limitation
         # oneharness documents and excludes too). See the README support matrix.
-        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest","macos-latest"]' || format('["{0}"]', inputs.os)) || '["ubuntu-latest"]') }}
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.os != 'default' && (inputs.os == 'all' && '["ubuntu-latest"]' || inputs.os == 'ubuntu-latest' && '["ubuntu-latest"]') || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     # Bash on every platform: the live checks are bash scripts (scripts/e2e-*.sh),
@@ -85,11 +81,12 @@ jobs:
           cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
           oneharness --version
 
-      - name: Install Copilot CLI
+      - name: Set up Node for the Copilot CLI install
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-      - run: |
+      - name: Install Copilot CLI
+        run: |
           npm install -g @github/copilot
           copilot --version
 

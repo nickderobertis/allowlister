@@ -90,7 +90,7 @@ test("every project carries one known type tag, and every Cargo member a project
   execFileSync("git", ["rm", "-q", "-f", "tests/e2e/project.json"], { cwd: dir });
   const out = check(dir);
   assert.equal(out.status, 1);
-  assert.match(out.stderr, /ci-workflows must carry exactly one type:\* tag/);
+  assert.match(out.stderr, /github-workflows must carry exactly one type:\* tag/);
   assert.match(out.stderr, /Cargo member allowlister-e2e \(tests\/e2e\/Cargo.toml\) has no project.json beside it/);
 });
 

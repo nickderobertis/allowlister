@@ -4,17 +4,24 @@ name: CI
 # .github/scripts/gate-tier.mjs picks for the event (the placement is recorded in
 # AGENTS.md "Commits, releases, and merging").
 #
-# Fixed status-check contexts (branch protection names them): `test
-# (ubuntu-latest)`, `test (macos-latest)`, `test (windows-latest)`, `coverage`,
-# `deps & security`. Keep these job names and matrix values. None of these jobs
-# carries an `if`, a `needs`, or a path filter, so each reports on every pull
-# request — including one whose targets are all unaffected, where Nx runs nothing
-# and the job passes. .github/tests/workflow-contract.test.mjs enforces this.
+# Protected Mac context is carried on Linux; the explicit classifier alone
+# authorizes omission. Linux/Windows gates report their existing names directly.
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      macos_diagnostic:
+        description: Run the single Mac diagnostic lane (outside automatic lifecycle)
+        type: boolean
+        default: false
+      harness:
+        description: Mac harness diagnostic
+        type: choice
+        default: all
+        options: [all, codex, claude, copilot, crush, cursor, goose, opencode, qwen]
 
 # Least privilege: CI only needs to read the repository.
 permissions:
@@ -32,15 +39,41 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
-  # The gate: a clean checkout runs `just bootstrap` then `just check` at the
-  # routed tier, on every platform the binary ships to.
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  policy:
+    runs-on: ubuntu-latest
+    outputs:
+      macosRequired: ${{ steps.policy.outputs.macosRequired }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+      - name: Classify Mac coverage
+        id: policy
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          DIAGNOSTIC: ${{ github.event_name == 'workflow_dispatch' && inputs.macos_diagnostic }}
+        run: |
+          node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD" > policy.json
+          # JavaScript template literals expand in Node, not bash.
+          # shellcheck disable=SC2016
+          node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("policy.json")); console.log(p.reason); fs.appendFileSync(process.env.GITHUB_OUTPUT, `macosRequired=${p.macosRequired || process.env.DIAGNOSTIC === "true"}\n`);'
+
+  macos:
+    name: Mac proofs
+    needs: policy
+    if: needs.policy.outputs.macosRequired == 'true'
+    runs-on: macos-latest
     defaults:
       run:
         shell: bash
@@ -72,8 +105,381 @@ jobs:
           # bootstrap's reinstall ("already exists in destination"). Reinstalling
           # the prebuilt each run is cheap and deterministic.
           cache-bin: false
-      # Prebuilt binaries for the cargo subcommands the gate needs; `bootstrap`
-      # below is idempotent and no-ops over anything already present.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete
+      - name: Bootstrap
+        run: just bootstrap
+      - name: Choose the gate tier
+        id: tier
+        run: node .github/scripts/gate-tier.mjs
+      # Every gate target but `supply-chain`: platform-independent, it runs once,
+      # in `deps & security`, rather than again in each OS cell. A local `just
+      # check` still runs it.
+      - name: Gate (just check)
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          NX_BASE: ${{ steps.tier.outputs.base }}
+        run: just check "$TIER" supply-chain
+
+      - name: Verify the API key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'codex')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set. Create a key at https://platform.openai.com/api-keys and add it: gh secret set OPENAI_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'codex')
+        with:
+          node-version: lts/*
+
+      - name: Install Codex CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'codex')
+        run: |
+          npm install -g @openai/codex
+          codex --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'codex')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This required Mac lane consolidates the existing platform proofs; its carrier must fail when a Mac proof fails, including the credentialed harness proofs.
+        run: just test-codex
+
+      - name: Verify the auth token is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'claude')
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not set. Mint one locally with 'claude setup-token' and add it: gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'claude')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - name: Install Claude Code CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'claude')
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'claude')
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This required Mac lane consolidates the existing platform proofs; its carrier must fail when a Mac proof fails, including the credentialed harness proofs.
+        run: just test-claude
+
+      - name: Verify the API token is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
+            echo "::error::COPILOT_GITHUB_TOKEN secret is not set. Create a fine-grained PAT with the 'Copilot Requests' permission at https://github.com/settings/personal-access-tokens/new and add it: gh secret set COPILOT_GITHUB_TOKEN --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - name: Set up Node for the Copilot CLI install
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install Copilot CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
+        run: |
+          npm install -g @github/copilot
+          copilot --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: just test-copilot
+
+      - name: Verify the provider key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set. Create a key at https://console.anthropic.com/ and add it: gh secret set ANTHROPIC_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - uses: actions/setup-node@v4
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
+        with:
+          node-version: lts/*
+
+      - name: Install Crush CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
+        run: |
+          npm install -g @charmland/crush
+          crush --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: just test-crush
+
+      - name: Verify the API key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "${CURSOR_API_KEY:-}" ]; then
+            echo "::error::CURSOR_API_KEY secret is not set. Generate a user key at https://cursor.com/dashboard/api and add it: gh secret set CURSOR_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - name: Install Cursor CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
+        run: |
+          case "$RUNNER_OS" in
+            Linux | macOS)
+              curl https://cursor.com/install -fsS | bash
+              ;;
+            Windows)
+              powershell -NoProfile -Command "irm 'https://cursor.com/install?win32=true' | iex"
+              ;;
+          esac
+          echo "post-install agent candidates:"
+          find "$HOME" -type f \( -iname 'cursor-agent*' -o -iname 'agent.exe' \) 2>/dev/null | sed 's/^/  /' | head -20 || true
+          bin="$(command -v cursor-agent 2>/dev/null || true)"
+          if [ -z "$bin" ]; then
+            bin="$(find "$HOME" -type f -ipath '*cursor-agent/versions/*' -iname 'cursor-agent.cmd' 2>/dev/null \
+              | grep -iv svc | sort | tail -1)"
+          fi
+          [ -z "$bin" ] && bin="$(find "$HOME" -type f \( -iname 'cursor-agent' -o -iname 'cursor-agent.exe' -o -iname 'cursor-agent.cmd' \) 2>/dev/null | grep -iv svc | head -1)"
+          if [ -n "$bin" ]; then
+            dirname "$bin" >> "$GITHUB_PATH"
+            echo "CURSOR_AGENT_BIN=$bin" >> "$GITHUB_ENV"
+            echo "resolved cursor agent binary: $bin"
+          else
+            echo "::warning::cursor agent binary not found after install"
+          fi
+
+      # Fails the job (rather than letting the script skip) if the install did not
+      # produce an agent binary — a missing CLI must not read as a silent pass.
+      - name: Show cursor-agent version
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
+        run: '"${CURSOR_AGENT_BIN:-cursor-agent}" --version'
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: just test-cursor
+
+      - name: Verify the provider key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'goose')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set. Add a provider key (and set the GOOSE_E2E_MODEL repo variable) and set it: gh secret set OPENAI_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'goose')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - name: Install Goose CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'goose')
+        run: |
+          curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/goose" >> "$GITHUB_PATH"
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'goose')
+        env:
+          GOOSE_PROVIDER: openai
+          GOOSE_MODEL: ${{ vars.GOOSE_E2E_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          goose --version
+          just test-goose
+
+      - name: Verify the provider key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set (or set ALLOWLISTER_E2E_MODEL + its provider key). Add it: gh secret set ANTHROPIC_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - uses: actions/setup-node@v4
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
+        with:
+          node-version: lts/*
+
+      - name: Install OpenCode CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
+        run: |
+          npm install -g opencode-ai
+          opencode --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ALLOWLISTER_E2E_MODEL: ${{ vars.OPENCODE_E2E_MODEL }}
+        run: just test-opencode
+
+      - name: Verify the provider key is present
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set. Add an OpenAI-compatible key (with OPENAI_BASE_URL / OPENAI_MODEL as needed for Qwen) and set it: gh secret set OPENAI_API_KEY --repo ${{ github.repository }}"
+            exit 1
+          fi
+
+      - name: Install oneharness (drives the live check)
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
+        run: |
+          if ! command -v oneharness >/dev/null; then
+            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
+          fi
+          oneharness --version
+
+      - uses: actions/setup-node@v4
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
+        with:
+          node-version: "22"
+
+      - name: Install Qwen Code CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
+        run: |
+          npm install -g @qwen-code/qwen-code
+          qwen --version
+
+      - name: Live hook e2e against the real CLI
+        if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.QWEN_E2E_MODEL }}
+        run: just test-qwen
+
+  macos-result:
+    name: test (macos-latest)
+    runs-on: ubuntu-latest
+    needs: [policy, macos]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+      - name: Report Mac proof result
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          printf '%s' "$NEEDS_JSON" > needs.json
+          node .github/macos-result.mjs needs.json
+
+  # The gate: a clean checkout runs `just bootstrap` then `just check` at the
+  # routed tier, on every platform the binary ships to.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Full history: the affected tier resolves its base from it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Node runs Nx; the version is the .tool-versions `nodejs` pin, read by its
+      # own step because setup-node's node-version-file parser takes the first
+      # lone-token line (a bare `#` comment) as the version.
+      - name: Read the pinned Node version
+        id: node
+        shell: bash
+        run: |
+          v="$(awk '$1 == "nodejs" { print $2 }' .tool-versions)"
+          [ -n "$v" ] || { echo "::error::.tool-versions pins no nodejs version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+      # uv runs the schema validator (config-schema:test).
+      - uses: astral-sh/setup-uv@v6
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Don't cache ~/.cargo/bin: a stale cached tool binary collides with
+          # bootstrap's reinstall ("already exists in destination"). Reinstalling
+          # the prebuilt each run is cheap and deterministic.
+          cache-bin: false
       - uses: taiki-e/install-action@v2
         with:
           tool: just,cargo-nextest,cargo-llvm-cov,cargo-deny,cargo-machete

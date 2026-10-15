@@ -75,18 +75,25 @@
     },
     "release-check": {
       "executor": "nx:run-commands",
+      "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The production packaging journey stays on this existing release-check edge, which already performs the optimized Cargo build; moving it to an unrelated project would broaden the task's packaging boundary.",
       "options": {
         "commands": [
-          "cargo build -p allowlister --release --locked",
+          "node --test scripts/packaging-tests/native.test.mjs",
           "bash scripts/dist.sh plan"
         ],
         "parallel": false
       },
-      "//": "The optimized release build plus the release plan (targets + packaging metadata) — the artifact checks, not a publish.",
+      "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
       "inputs": [
         "default",
         "rust",
-        "{workspaceRoot}/scripts/dist.sh"
+        "{workspaceRoot}/scripts/dist.sh",
+        "{workspaceRoot}/scripts/verify-release.sh",
+        "{workspaceRoot}/scripts/install.sh",
+        "{workspaceRoot}/scripts/packaging-tests/**/*",
+        "{workspaceRoot}/README.md",
+        "{workspaceRoot}/LICENSE",
+        "{workspaceRoot}/CHANGELOG.md"
       ]
     },
     "bench": {

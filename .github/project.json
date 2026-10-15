@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/nx/schemas/project-schema.json",
-  "name": "ci-workflows",
-  "//": "The GitHub Actions workflows and their contract checks: lint is the live-e2e matrix drift gate (scripts/check-e2e-matrix.sh, an input here) and test is the workflow-contract suite (.github/tests) — the gate's fixed status-check contexts, the per-event tier routing (.github/scripts/gate-tier.mjs), the pr-title rules, and the drift gate's own pass/fail journeys. release-plz.toml is an input because the pr-title types must match its changelog parsers.",
+  "name": "github-workflows",
+  "//": "Repository-local workflow routing, required contexts and Mac scheduling contracts. Test records uncached source-digested telemetry; budgets consumes that output.",
   "projectType": "library",
   "tags": [
     "type:tooling",
@@ -13,14 +13,18 @@
       "{workspaceRoot}/scripts/check-e2e-matrix.sh",
       "{workspaceRoot}/release-plz.toml",
       "{workspaceRoot}/justfile",
-      "sharedGlobals"
+      "sharedGlobals",
+      "{workspaceRoot}/scripts/dist.sh",
+      "{workspaceRoot}/scripts/verify-release.sh",
+      "{workspaceRoot}/scripts/install.sh",
+      "{workspaceRoot}/rust-toolchain.toml"
     ]
   },
   "targets": {
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash scripts/check-e2e-matrix.sh"
+        "command": "node .github/tooling-run.mjs lint"
       },
       "inputs": [
         "default"
@@ -32,7 +36,21 @@
         "default"
       ],
       "options": {
-        "command": "node --test .github/tests/*.test.mjs"
+        "command": "node .github/tooling-run.mjs test"
+      },
+      "cache": false
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "test"
+      ],
+      "cache": false,
+      "inputs": [
+        "{projectRoot}/**/*"
+      ],
+      "options": {
+        "command": "node .github/tooling-run.mjs budgets"
       }
     }
   }
