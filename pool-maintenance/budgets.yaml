@@ -1,0 +1,13 @@
+schema_version: 1
+budgets:
+  - id: allowlister-pool-maintenance-seconds
+    description: >-
+      Wall-clock seconds a steady-state pool maintenance pass holds a warm slot
+      out of service after one run's worth of superseded Cargo builds.
+    labels: [host]
+    measure: reported
+    command: [./measure.sh]
+    unit: seconds
+    direction: max
+    threshold: 20
+    timeout_seconds: 1800

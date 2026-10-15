@@ -1,0 +1,9 @@
+# Repository-owned warm-pool maintenance: onevcs reads this declaration from the
+# publication checkout's base branch and runs the command in idle slot worktrees.
+# The recipe removes superseded Cargo builds, keeping each unit's newest build
+# and every build modified within two days.
+schema_version = 1
+
+[pool.maintain]
+command = ["just", "pool-maintenance"]
+timeout = "30m"

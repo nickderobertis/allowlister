@@ -1,0 +1,33 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "pool-maintenance",
+  "projectType": "library",
+  "tags": [
+    "type:tooling",
+    "scope:repo"
+  ],
+  "targets": {
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash -n pool-maintenance/measure.sh && node --check pool-maintenance/measure.mjs && node --check pool-maintenance/measure.test.mjs"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --test pool-maintenance/measure.test.mjs"
+      },
+      "inputs": [
+        "default",
+        "{workspaceRoot}/justfile"
+      ]
+    },
+    "budgets-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node_modules/.bin/onebudgetspec check pool-maintenance/budgets.yaml --label host"
+      }
+    }
+  }
+}
