@@ -527,7 +527,7 @@ jobs:
       - name: Bootstrap
         run: just bootstrap
       - name: Check steady-state maintenance budget
-        run: just budgets
+        run: just budgets-host
 
   # Dedicated coverage job: a standalone required context and a fast path to the
   # report on Linux. The same 95% floor is also enforced inside `just check`.

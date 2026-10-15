@@ -378,6 +378,9 @@ lint-llm-diff base="origin/main" *args:
 pool-maintenance:
     cargo-prune-superseded --keep-within 2d target
 
-# Expensive host budgets run only explicitly and on release preparation.
 budgets:
+    @bash scripts/nx run-many --exclude=tag:type:live -t budgets
+
+# Expensive host budgets run only explicitly and on release preparation.
+budgets-host:
     @bash scripts/nx run pool-maintenance:budgets-host

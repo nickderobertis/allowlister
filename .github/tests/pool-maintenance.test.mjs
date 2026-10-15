@@ -8,7 +8,7 @@ test('maintenance budget follows a successful release-PR gate only', () => {
   const job = ci.jobs['pool-maintenance'];
   assert.deepEqual(job.needs, ['test']);
   assert.equal(ci.jobs.test.outputs['gate-tier'], '${{ steps.tier.outputs.tier }}');
-  assert.equal(job.steps.at(-1).run, 'just budgets');
+  assert.equal(job.steps.at(-1).run, 'just budgets-host');
   for (const [event, tier, result, expected] of [
     ['pull_request', 'all', 'success', true],
     ['pull_request', 'affected', 'success', false],
