@@ -40,7 +40,7 @@ const nonPrEvents = new Set(['push','release','workflow_run','repository_dispatc
 export function classify(eventName, event, base, head) {
   const required = reason => ({ isReleaseOnly: false, macosRequired: true, reason });
   if (nonPrEvents.has(eventName)) return { isReleaseOnly: false, macosRequired: false, reason: 'non-PR event' };
-  if (eventName !== 'pull_request') return required('unknown event name; Mac coverage required');
+  if (eventName !== 'pull_request') return required(`unknown event name ${JSON.stringify(eventName)}; Mac coverage required`);
   try {
     const pr = event.pull_request;
     const repo = event.repository?.full_name;

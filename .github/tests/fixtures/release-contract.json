@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "platforms": [
     {"target":"x86_64-unknown-linux-musl","archive":"tar.gz","architecture":"x86_64"},
     {"target":"aarch64-unknown-linux-musl","archive":"tar.gz","architecture":"aarch64"},

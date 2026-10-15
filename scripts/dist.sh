@@ -113,7 +113,7 @@ build() {
         echo "no SHA-256 tool; install sha256sum or shasum and rerun just dist-build" >&2; exit 1
     fi
     # llmlint: ignore-end[changed_behavior_has_e2e]
-    printf '%s  %s\n' "$digest" "$archive" > "$outdir/${bin_name}-${tag}-${target}.sha256"
+    printf '%s  %s\n' "$digest" "$archive" > "$outdir/${bin_name}-${tag}-${target}.sha256" || { echo "cannot write checksum at $outdir/${bin_name}-${tag}-${target}.sha256; repair dist/ permissions or free space, then rerun just dist-build" >&2; exit 1; }
     echo "built ${outdir}/${archive}"
 }
 

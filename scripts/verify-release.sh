@@ -27,13 +27,17 @@ mkdir -p "$stage/bin" || { echo "cannot prepare $stage; repair staging permissio
 export RELEASE_ASSET_DIR="$root/dist"
 # The installer asks GitHub for assets that are not public yet. Route those
 # exact asset names to this build's local files, with no network fallback.
-cat > "$stage/bin/curl" <<'SH'
+if ! cat > "$stage/bin/curl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$#" = 4 && "$1" = -fsSL && "$2" = -o ]] || { echo "release transport expects curl -fsSL -o FILE URL; update the adapter to match the installer download contract" >&2; exit 1; }
 asset="$RELEASE_ASSET_DIR/${4##*/}"
 cp "$asset" "$3" || { echo "missing or unreadable staged asset: $asset; rebuild or restage the release archive and checksum" >&2; exit 1; }
 SH
+then
+    echo "cannot create transport adapter at $stage/bin/curl; repair temporary-directory permissions or free space, then rerun verification" >&2
+    exit 1
+fi
 # llmlint: ignore[changed_behavior_has_e2e] The native installer executes the actual transport adapter. This recovery reports a staging filesystem capability failure; replacing chmod or racing staging permissions would exceed the forge-only transport proof boundary.
 chmod +x "$stage/bin/curl" || { echo "cannot make transport adapter executable; repair staging permissions and rerun verification" >&2; exit 1; }
 if ! PATH="$stage/bin:$PATH" sh scripts/install.sh --version "$tag" --to "$stage/install" > "$stage/install.log" 2>&1; then
@@ -46,7 +50,7 @@ binary="$stage/install/allowlister"
 # Installed bytes must be the one compiled input, not a second build.
 cmp -s "target/$target/release/${binary##*/}" "$binary" || { echo "installed bytes differ from the compiled target; rebuild or restage $target" >&2; exit 1; }
 # llmlint: ignore-block[changed_behavior_has_e2e] The real host-native artifact is installed and executed; non-native identity is an artifact contract checked on its native release runner. Extra manufactured architecture/linkage mutations are outside this proof boundary.
-identity="$(file "$binary")"
+identity="$(file "$binary")" || { echo "cannot inspect release binary: file utility failed; install or repair the file utility, then rerun scripts/verify-release.sh" >&2; exit 1; }
 case "$target" in
     x86_64-unknown-linux-musl) [[ "$identity" = *ELF* && "$identity" = *x86-64* && "$identity" = *statically\ linked* ]] ;;
     aarch64-unknown-linux-musl) [[ "$identity" = *ELF* && "$identity" = *ARM\ aarch64* && "$identity" = *statically\ linked* ]] ;;

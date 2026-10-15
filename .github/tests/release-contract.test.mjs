@@ -12,7 +12,7 @@ test('release graph preserves every platform and archive; one compiled target in
   const release=workflows['release.yml'];const jobs=release.jobs;
   const darwin=jobs.darwin;
   const targets=[...jobs.build.strategy.matrix.include.map(c=>c.target),darwin.env.TARGET].sort();
-  assert.equal(contract.schemaVersion,1);
+  assert.equal(contract.schemaVersion,2);
   assert.deepEqual(targets,contract.platforms.map(p=>p.target).sort());
   for(const platform of contract.platforms) assert.equal(platform.architecture,platform.target.split('-')[0]);
   assert.equal(contract.archiveName,'allowlister-{tag}-{target}.{archive}');
@@ -168,6 +168,8 @@ test('real verifier reports temporary-directory failure and transport rejects in
     const accepted=spawnSync('bash',[path,'-fsSL','-o',destination,'https://forge.invalid/archive'],{encoding:'utf8',env:{...process.env,RELEASE_ASSET_DIR:dir}});
     assert.equal(accepted.status,0,accepted.stderr);assert.equal(readFileSync(destination,'utf8'),'real local asset');
     if(process.platform==='linux') {
+      const full=spawnSync('bash',['-c','ulimit -c 0; ulimit -f 0; exec bash scripts/verify-release.sh x86_64-unknown-linux-musl v0.1.0'],{cwd:root,encoding:'utf8'});
+      assert.notEqual(full.status,0);assert.match(full.stderr,/cannot create transport adapter/);assert.match(full.stderr,/permissions or free space/);
       const failed=spawnSync('bash',['scripts/verify-release.sh','x86_64-unknown-linux-musl','v0.1.0'],{cwd:root,encoding:'utf8',env:{...process.env,TMPDIR:join(dir,'missing')}});
       assert.notEqual(failed.status,0);assert.match(failed.stderr,/cannot create release verification staging/);assert.match(failed.stderr,/permissions and free disk space/);assert.equal(failed.stdout,'');
     }

@@ -41,7 +41,7 @@ test('real classifier admits only a same-repository automation branch with parse
   for(const event of ['push','release','schedule','workflow_run','repository_dispatch','workflow_dispatch']) assert.equal(h.classify('{bad',h.heads.version,event).macosRequired,false,event);
   for(const event of ['unknown','pull_request_typo','','constructor']) {
     const classified=h.classify(release,h.heads.version,event);
-    assert.equal(classified.macosRequired,true,event);assert.equal(classified.isReleaseOnly,false,event);assert.match(classified.reason,/unknown event name/);
+    assert.equal(classified.macosRequired,true,event);assert.equal(classified.isReleaseOnly,false,event);assert.match(classified.reason,/unknown event name/);assert.ok(classified.reason.includes(JSON.stringify(event)),'reason names the unrecognised event');
   }
 });
 test('real Linux carrier fails every unapproved job outcome and reports intentional omission honestly', () => {

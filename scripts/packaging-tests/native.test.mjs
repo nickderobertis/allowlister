@@ -2,7 +2,7 @@
 // behind the release-check edge rather than every workflow graph test run.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, rmSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -86,6 +86,12 @@ test('production host archive builds, installs and runs, and rejects corrupted t
     } finally {
       rmSync(wrongArchive, { force: true }); rmSync(wrongChecksum, { force: true });
     }
+    rmSync(checksum);
+    mkdirSync(checksum);
+    try {
+      const unwritable=spawnSync('just',['dist-build',target,tag],{cwd:root,encoding:'utf8'});
+      assert.notEqual(unwritable.status,0);assert.match(unwritable.stderr,/cannot write checksum/);assert.match(unwritable.stderr,/permissions or free space/);
+    } finally {rmSync(checksum,{recursive:true,force:true});}
     writeFileSync(checksum,'0'.repeat(64)+'  '+basename+'.tar.gz\n');
     const corrupt=run('scripts/verify-release.sh',[target,tag]);assert.notEqual(corrupt.status,0);assert.match(corrupt.stderr,/checksum mismatch/);
     const mismatch=spawnSync('just',['dist-build',target,'v999.0.0'],{cwd:root,encoding:'utf8'});assert.notEqual(mismatch.status,0);assert.match(mismatch.stderr,/does not match/);
