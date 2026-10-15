@@ -165,3 +165,15 @@ test('actual graph refuses malformed job mappings and event filter declarations'
   for(const jobs of [[],{},null,'bad',{test:null}]) assert.throws(()=>resolveRun({'fixture.yml':{jobs}},'fixture.yml',scenario),/invalid jobs/);
   for(const config of [false,'bad',{types:'published'},{workflows:'CI'},{branches:'main'},{paths:[false]}]) assert.throws(()=>triggered({on:{push:config}},scenario),/invalid trigger/);
 });
+
+test('policy rejects surplus invocation arguments', () => {
+  const policy=spawnSync(process.execPath,[join(root,'.github/macos-policy.mjs'),'classify','surplus'],{encoding:'utf8'});
+  assert.notEqual(policy.status,0);assert.match(policy.stderr,/usage: macos-policy/);
+});
+test('carrier rejects missing and surplus invocation arguments', () => {
+  const path=join(h.dir,'valid-needs.json');writeFileSync(path,JSON.stringify({policy:{result:'success',outputs:{macosRequired:'false'}},macos:{result:'skipped'}}));
+  for(const args of [[path,'surplus'],[]]) {
+    const carrier=spawnSync(process.execPath,[join(root,'.github/macos-result.mjs'),...args],{encoding:'utf8'});
+    assert.notEqual(carrier.status,0);assert.match(carrier.stderr,/usage: macos-result/);
+  }
+});

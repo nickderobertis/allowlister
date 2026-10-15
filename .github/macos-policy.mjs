@@ -24,7 +24,6 @@ function stripVersion(value, lock) {
       if (typeof pkg.version !== 'string' || !version.test(pkg.version)) throw new Error('invalid package version');
       delete pkg.version;
     }
-    // Dependency versions/checksums, sources and all other fields remain intact.
   } else {
     if (value.package?.name !== 'allowlister' || typeof value.package.version !== 'string' || !version.test(value.package.version)) throw new Error('not a versioned allowlister manifest');
     delete value.package.version;
@@ -69,7 +68,7 @@ export function classify(eventName, event, base, head) {
 }
 if (import.meta.main) {
   const { values, positionals } = parseArgs({ options: { event: { type: 'string' }, base: { type: 'string' }, head: { type: 'string' } }, allowPositionals: true });
-  if (positionals[0] !== 'classify') throw new Error('usage: macos-policy.mjs classify --event JSON --base REF --head REF');
+  if (positionals.length !== 1 || positionals[0] !== 'classify') throw new Error('usage: macos-policy.mjs classify --event JSON --base REF --head REF');
   let event = {};
   let unreadable = false;
   try { event = JSON.parse(readFileSync(values.event, 'utf8')); if (!event || Array.isArray(event) || typeof event !== 'object') throw new Error('not an object'); } catch { unreadable = true; }

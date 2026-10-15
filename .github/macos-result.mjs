@@ -2,6 +2,7 @@
 // classifier result; missing, cancelled and failed prerequisites never pass.
 // Exit 0: proven success or authorized omission; 1: invalid/failed prerequisites.
 import { readFileSync } from 'node:fs';
+if (process.argv.length !== 3) throw new Error('usage: macos-result.mjs NEEDS_JSON_PATH');
 const [needsPath] = process.argv.slice(2);
 const needs = JSON.parse(readFileSync(needsPath, 'utf8'));
 if (needs.policy?.result !== 'success') throw new Error('Mac policy prerequisite did not succeed');

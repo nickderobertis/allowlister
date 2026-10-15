@@ -151,7 +151,15 @@ export function sourceDigest() {
     }
   }
   walk(join(root, '.github'));
-  for (const file of ['scripts/check-e2e-matrix.sh', 'scripts/dist.sh', 'scripts/verify-release.sh', 'release-plz.toml', 'rust-toolchain.toml', 'justfile', '.tool-versions']) { hash.update(file); hash.update(readFileSync(join(root,file))); }
+  const project=JSON.parse(readFileSync(join(root,'.github/project.json'),'utf8'));
+  const workspace=JSON.parse(readFileSync(join(root,'nx.json'),'utf8'));
+  const inputs=project.namedInputs.default.flatMap(input=>input==='sharedGlobals'?workspace.namedInputs.sharedGlobals:[input]);
+  for(const input of inputs) {
+    if(input==='{projectRoot}/**/*') continue;
+    if(typeof input!=='string' || !input.startsWith('{workspaceRoot}/') || /[*?]/.test(input)) throw new Error(`unresolved workflow digest input: ${JSON.stringify(input)}`);
+    const file=input.slice('{workspaceRoot}/'.length);
+    hash.update(file);hash.update(readFileSync(join(root,file)));
+  }
   return hash.digest('hex');
 }
 

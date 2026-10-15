@@ -100,7 +100,7 @@ test('a real workflow input edit invalidates recorded telemetry through the prod
   try {
     cpSync(join(root,'.github'),join(fixture,'.github'),{recursive:true,filter:path=>!['node_modules','.telemetry'].includes(basename(path))});
     symlinkSync(join(root,'.github/node_modules'),join(fixture,'.github/node_modules'),process.platform==='win32'?'junction':'dir');
-    for(const file of ['scripts/check-e2e-matrix.sh','scripts/dist.sh','scripts/verify-release.sh','release-plz.toml','rust-toolchain.toml','justfile','.tool-versions']) {
+    for(const file of ['scripts/check-e2e-matrix.sh','scripts/dist.sh','scripts/verify-release.sh','scripts/install.sh','nx.json','package.json','package-lock.json','release-plz.toml','rust-toolchain.toml','justfile','.tool-versions']) {
       mkdirSync(dirname(join(fixture,file)),{recursive:true});copyFileSync(join(root,file),join(fixture,file));
     }
     const digest=spawnSync(process.execPath,['--input-type=module','-e',"import {sourceDigest} from './.github/workflow-graph.mjs'; console.log(sourceDigest());"],{cwd:fixture,encoding:'utf8'});
@@ -114,6 +114,11 @@ test('a real workflow input edit invalidates recorded telemetry through the prod
     const within=entry();assert.equal(within.status,0,within.stderr);assert.match(within.stdout,/allowlister-macos-jobs-per-run: within/);assert.match(within.stdout,/allowlister-macos-runs-per-change: within/);
     const saved=readFileSync(recorded);rmSync(recorded);
     const missing=entry();assert.notEqual(missing.status,0);assert.match(missing.stdout,/allowlister-macos-jobs-per-run:/);assert.match(missing.stderr,/ENOENT|missing/);writeFileSync(recorded,saved);
+    const installer=join(fixture,'scripts/install.sh');const originalInstaller=readFileSync(installer);
+    try {
+      writeFileSync(installer,originalInstaller+'\n# changed installer input\n');
+      const staleInstaller=run();assert.notEqual(staleInstaller.status,0);assert.match(staleInstaller.stderr,/missing\/stale Mac telemetry/);
+    } finally {writeFileSync(installer,originalInstaller);}
     const workflow=join(fixture,'.github/workflows/ci.yml');
     writeFileSync(workflow,readFileSync(workflow,'utf8')+'\n# changed workflow source input\n');
     const changed=run();assert.notEqual(changed.status,0);assert.match(changed.stderr,/missing\/stale Mac telemetry/);
@@ -121,6 +126,18 @@ test('a real workflow input edit invalidates recorded telemetry through the prod
     const updated=spawnSync(process.execPath,['--input-type=module','-e',"import {sourceDigest} from './.github/workflow-graph.mjs'; console.log(sourceDigest());"],{cwd:fixture,encoding:'utf8'});
     assert.equal(updated.status,0,updated.stderr);writeFileSync(recorded,JSON.stringify({...telemetry,sourceDigest:updated.stdout.trim()}));
     const unresolved=run();assert.notEqual(unresolved.status,0);assert.match(unresolved.stderr,/unresolved telemetry coverage for reusable call/);
+    const projectPath=join(fixture,'.github/project.json');const project=JSON.parse(readFileSync(projectPath,'utf8'));
+    project.namedInputs.default.push('{workspaceRoot}/scripts/new-policy-input.txt');
+    writeFileSync(projectPath,JSON.stringify(project));
+    const addedInput=join(fixture,'scripts/new-policy-input.txt');writeFileSync(addedInput,'first');
+    const measure=()=>spawnSync(process.execPath,['--input-type=module','-e',"import {sourceDigest} from './.github/workflow-graph.mjs'; console.log(sourceDigest());"],{cwd:fixture,encoding:'utf8'});
+    const first=measure();assert.equal(first.status,0,first.stderr);writeFileSync(addedInput,'second');
+    const second=measure();assert.equal(second.status,0,second.stderr);assert.notEqual(second.stdout,first.stdout,'new authoritative Nx inputs participate without a second list');
+    for(const invalid of ['{workspaceRoot}/scripts/*.sh','unrecognisedNamedInput',{}]) {
+      project.namedInputs.default=[invalid];writeFileSync(projectPath,JSON.stringify(project));
+      const unknown=measure();assert.notEqual(unknown.status,0);assert.match(unknown.stderr,/unresolved workflow digest input/);
+    }
+
 
   } finally {rmSync(fixture,{recursive:true,force:true});}
 });

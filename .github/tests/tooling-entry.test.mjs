@@ -11,7 +11,7 @@ test('invalid tooling commands fail before reading an install lock or provisioni
   try {
     const entry = join(directory, 'tooling-run.mjs');
     copyFileSync(join(root, '.github/tooling-run.mjs'), entry);
-    for (const args of [[], ['unsupported']]) {
+    for (const args of [[], ['unsupported'], ['lint', 'surplus']]) {
       const out = spawnSync(process.execPath, [entry, ...args], { encoding: 'utf8' });
       assert.notEqual(out.status, 0);
       assert.match(out.stderr, /usage: tooling-run.mjs test\|lint\|budgets/);

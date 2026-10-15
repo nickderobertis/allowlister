@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 const command=process.argv[2];
-if(!['test','lint','budgets'].includes(command)) throw new Error('usage: tooling-run.mjs test|lint|budgets');
+if(process.argv.length!==3 || !['test','lint','budgets'].includes(command)) throw new Error('usage: tooling-run.mjs test|lint|budgets');
 const directory=fileURLToPath(new URL('.',import.meta.url));
 const root=fileURLToPath(new URL('../',import.meta.url));
 const digest=createHash('sha256').update(readFileSync(directory+'package-lock.json')).digest('hex');
