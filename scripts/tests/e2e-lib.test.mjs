@@ -5,7 +5,7 @@
 // ones rather than a fixture's copy of them.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -122,6 +122,94 @@ test("al_run's bypass default reaches every harness the live scripts drive", { s
       for (const flag of flags) assert.ok(run.argv.includes(flag), `${harness}: ${run.argv.join(" ")}`);
       assert.match(run.stdout, /"result":"allowlister: denied"/, harness);
       assert.match(run.stderr, /oneharness-report: "exit_code":3/, harness);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Each live script's own run function, read from its source rather than restated
+// here, replayed through al_run against the pinned release with every argument it
+// passes (verbatim harness flags after `--` included). The only addition is
+// --mock-harness, so the provider stand-in records the argv the harness receives.
+const SCRIPTS = [
+  // [script, run function, harness id, call mode, argv the harness must receive]
+  ["claude", "run_claude", "claude-code", "",
+    ["--permission-mode", "bypassPermissions", "--model", "haiku", "--output-format", "stream-json",
+      "--max-turns", "6", "--verbose", "--mcp-config", "MCP_CONFIG", "--strict-mcp-config"]],
+  ["copilot", "run_agent", "copilot", "", ["--allow-all-tools"]],
+  ["crush", "run_agent", "crush", "", ["run"]],
+  ["cursor", "run_agent", "cursor", "", ["--force", "--output-format", "stream-json"]],
+  ["cursor", "run_agent", "cursor", "trust", ["--trust", "--output-format", "stream-json"]],
+  ["goose", "run_agent", "goose", "", ["--with-extension", "GOOSE_EXT"]],
+  ["opencode", "run_agent", "opencode", "",
+    ["--dangerously-skip-permissions", "-m", "anthropic/claude-haiku-4-5", "--format", "json"]],
+  ["qwen", "run_agent", "qwen", "", ["--yolo", "-m", "gpt-4.1-mini", "--auth-type", "openai"]],
+];
+
+// The script's last assignment to a variable (Goose's populated extension list
+// follows its empty default).
+function scriptLine(source, name) {
+  return source.split("\n").findLast((line) => new RegExp(`^\\s*${name}=`).test(line)) ?? "";
+}
+
+test("each live script's run function reaches the pinned oneharness with its exact arguments", { skip }, () => {
+  const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+  try {
+    for (const [script, fn, harness, callMode, wants] of SCRIPTS) {
+      const source = readFileSync(join(repo, `scripts/e2e-${script}.sh`), "utf8");
+      const body = source.match(new RegExp(`^${fn}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, "m"))?.[0];
+      assert.ok(body, `${script}: ${fn} not found`);
+      const dir = join(root, `${script}-${callMode || "bypass"}`);
+      const proj = join(dir, "proj");
+      mkdirSync(join(dir, "home"), { recursive: true });
+      mkdirSync(proj, { recursive: true });
+      const mcpConfig = join(proj, ".mcp.json");
+      writeFileSync(mcpConfig, "{}");
+      const stream = join(dir, "run.stream");
+      const argvFile = join(dir, "argv");
+      // The script's own definitions: its run function, and the top-level model
+      // and Goose extension assignments that function reads.
+      const defs = [scriptLine(source, "model"), "mcp_server=/srv/mcp.py",
+        scriptLine(source, "goose_ext_args").trim(), body].join("\n");
+      const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh
+eval "$(declare -f al_run | sed '1s/^al_run/al_run_real/')"
+al_run() { local id="$1" p="$2" s="$3"; shift 3; al_run_real "$id" "$p" "$s" --mock-harness "$id" "$@"; }
+${defs}
+${fn} 'run it' "$STREAM" ${callMode}`], {
+        cwd: repo,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: join(dir, "home"),
+          XDG_CONFIG_HOME: join(dir, "home/.config"),
+          ALLOWLISTER_E2E_MODEL: "",
+          OPENAI_MODEL: "",
+          STREAM: stream,
+          proj,
+          sandbox: dir,
+          mcp_config: mcpConfig,
+          agent_bin: `/opt/${harness}`,
+          claude_bin: "/opt/claude",
+          mcp_sentinel: "/tmp/s",
+          mcp_token: "TOKEN",
+          mcp_log: "/tmp/l",
+          MOCK_ARGV_FILE: argvFile,
+          MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
+          MOCK_EXIT: "0",
+        },
+      });
+      const label = `${script} ${callMode || "bypass"}`;
+      assert.equal(out.status, 0, `${label}: ${out.stderr}`);
+      const err = readFileSync(`${stream}.err`, "utf8");
+      assert.match(err, /oneharness-report: "status":"ok"/, `${label}: ${err}`);
+      assert.match(readFileSync(stream, "utf8"), /"result":"allowlister: denied"/, label);
+      const argv = readFileSync(argvFile, "utf8").trimEnd().split("\n");
+      for (const want of wants) {
+        const value = { MCP_CONFIG: mcpConfig, GOOSE_EXT: "python3 /srv/mcp.py /tmp/s TOKEN /tmp/l" }[want] ?? want;
+        assert.ok(argv.includes(value), `${label}: wants ${value} in ${argv.join(" ")}`);
+      }
+      if (callMode) assert.ok(!argv.some((a) => ["--force", "bypassPermissions"].includes(a)), `${label}: ${argv.join(" ")}`);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
