@@ -136,8 +136,8 @@ fi
 #    cases we assert.
 #  * The ask case ("trust" mode) needs --trust WITHOUT --force: --force
 #    auto-approves an `ask` (turning it into a yes), so an ask can only be shown to
-#    HOLD when the confirmation flow is left intact. oneharness has no --trust flag,
-#    so trust mode drops --force via --no-bypass and adds --trust verbatim after `--`.
+#    HOLD when the confirmation flow is left intact. Trust mode drops --force via
+#    --no-bypass, whose `default` mode oneharness renders as --trust.
 #  * --env XDG_CONFIG_HOME points at an empty dir so no ambient allowlister user
 #    config leaks in; HOME is left intact (inherited) so `cursor-agent` keeps its
 #    credentials.
@@ -147,7 +147,7 @@ run_agent() {
     local prompt="$1" stream="$2"
     local approve=()
     case "${3:-}" in
-        trust) approve=(--no-bypass -- --trust) ;;
+        trust) approve=(--no-bypass) ;;
     esac
     local model_args=()
     [ -n "${ALLOWLISTER_E2E_MODEL:-}" ] && model_args=(--model "$ALLOWLISTER_E2E_MODEL")
