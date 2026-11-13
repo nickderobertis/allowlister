@@ -131,20 +131,23 @@ test("al_run's bypass default reaches every harness the live scripts drive", { s
 // Each live script's own run function, read from its source rather than restated
 // here, replayed through al_run against the pinned release with every argument it
 // passes (verbatim harness flags after `--` included). The only addition is
-// --mock-harness, so the provider stand-in records the argv the harness receives.
+// --mock-harness, so the provider stand-in records the argv the harness receives,
+// which must be exactly the one below.
 const SCRIPTS = [
-  // [script, run function, harness id, call mode, argv the harness must receive]
+  // [script, run function, harness id, call mode, the harness's whole argv]
   ["claude", "run_claude", "claude-code", "",
-    ["--permission-mode", "bypassPermissions", "--model", "haiku", "--output-format", "stream-json",
-      "--max-turns", "6", "--verbose", "--mcp-config", "MCP_CONFIG", "--strict-mcp-config"]],
-  ["copilot", "run_agent", "copilot", "", ["--allow-all-tools"]],
-  ["crush", "run_agent", "crush", "", ["run"]],
-  ["cursor", "run_agent", "cursor", "", ["--force", "--output-format", "stream-json"]],
-  ["cursor", "run_agent", "cursor", "trust", ["--trust", "--output-format", "stream-json"]],
-  ["goose", "run_agent", "goose", "", ["--with-extension", "GOOSE_EXT"]],
+    ["-p", "run it", "--permission-mode", "bypassPermissions", "--model", "haiku", "--output-format", "stream-json",
+      "--verbose", "--max-turns", "6", "--verbose", "--mcp-config", "MCP_CONFIG", "--strict-mcp-config"]],
+  ["copilot", "run_agent", "copilot", "", ["-p", "run it", "--allow-all-tools", "--allow-all-paths", "--no-ask-user"]],
+  ["crush", "run_agent", "crush", "", ["run", "-q", "run it"]],
+  ["cursor", "run_agent", "cursor", "", ["-p", "run it", "--force", "--output-format", "stream-json"]],
+  ["cursor", "run_agent", "cursor", "trust", ["-p", "run it", "--trust", "--output-format", "stream-json"]],
+  ["goose", "run_agent", "goose", "",
+    ["run", "--with-builtin", "developer", "-t", "run it", "--with-extension", "python3 /srv/mcp.py /tmp/s TOKEN /tmp/l"]],
   ["opencode", "run_agent", "opencode", "",
-    ["--dangerously-skip-permissions", "-m", "anthropic/claude-haiku-4-5", "--format", "json"]],
-  ["qwen", "run_agent", "qwen", "", ["--yolo", "-m", "gpt-4.1-mini", "--auth-type", "openai"]],
+    ["run", "--dangerously-skip-permissions", "--format", "json", "-m", "anthropic/claude-haiku-4-5", "run it"]],
+  ["qwen", "run_agent", "qwen", "",
+    ["--yolo", "-m", "gpt-4.1-mini", "--output-format", "stream-json", "-p", "run it", "--auth-type", "openai"]],
 ];
 
 // The script's last assignment to a variable (Goose's populated extension list
@@ -153,6 +156,7 @@ function scriptLine(source, name) {
   return source.split("\n").findLast((line) => new RegExp(`^\\s*${name}=`).test(line)) ?? "";
 }
 
+// llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Each script's own run function is replayed, not its whole entry point, because the script's assertions need a real model to attempt tool calls and that needs a harness credential this test does not hold; the al_run wrapper only appends the pinned release's --mock-harness and calls the real al_run and oneharness. The whole scripts run unmocked in the live e2e jobs (`just test-<harness>`), the Claude one in the required macOS job.
 test("each live script's run function reaches the pinned oneharness with its exact arguments", { skip }, () => {
   const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
   try {
@@ -205,13 +209,10 @@ ${fn} 'run it' "$STREAM" ${callMode}`], {
       assert.match(err, /oneharness-report: "status":"ok"/, `${label}: ${err}`);
       assert.match(readFileSync(stream, "utf8"), /"result":"allowlister: denied"/, label);
       const argv = readFileSync(argvFile, "utf8").trimEnd().split("\n");
-      for (const want of wants) {
-        const value = { MCP_CONFIG: mcpConfig, GOOSE_EXT: "python3 /srv/mcp.py /tmp/s TOKEN /tmp/l" }[want] ?? want;
-        assert.ok(argv.includes(value), `${label}: wants ${value} in ${argv.join(" ")}`);
-      }
-      if (callMode) assert.ok(!argv.some((a) => ["--force", "bypassPermissions"].includes(a)), `${label}: ${argv.join(" ")}`);
+      assert.deepEqual(argv, wants.map((a) => (a === "MCP_CONFIG" ? mcpConfig : a)), label);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
+// llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
