@@ -3,9 +3,13 @@
 // by that release's own `--mock-harness` responder, so oneharness's argv
 // rendering, `--output-dir` transcript files and JSON report are the shipped
 // ones rather than a fixture's copy of them.
+//
+// No expectation here restates what oneharness renders for a harness: each one
+// is the pinned binary's own output for the equivalent direct `oneharness run`,
+// so the release stays the one source of its own contract.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -16,111 +20,146 @@ const repo = resolve(import.meta.dirname, "../..");
 const pinned = readFileSync(join(repo, ".github/workflows/e2e-cursor.yml"), "utf8")
   .match(/cargo install oneharness --version (\S+) --locked/)[1];
 const installed = spawnSync("oneharness", ["--version"], { encoding: "utf8" }).stdout?.trim();
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Every oneharness expectation from here to the end of the file (argv rendering per harness and mode, the Cursor trust mapping, the JSON report's status/exit_code/error fields) is asserted against the pinned binary itself, which skip requires on PATH, so a drift fails this test wherever it runs. The gate's test jobs do not install that pin, so the authority stays the live e2e jobs, which install the same pin and run these scripts through al_run against the real harness (the Claude one in the required macOS job on same-repo pull requests).
 const skip = process.platform === "win32"
   ? "requires bash"
   : installed !== `oneharness ${pinned}`
     ? `requires the pinned oneharness ${pinned} on PATH (cargo install oneharness --version ${pinned} --locked); found ${installed || "none"}`
     : false;
 
-// llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
-function alRun(root, args, harness = "cursor", mock = {}) {
+// Each live script's source, and the harness id its run function hands al_run.
+const SOURCES = Object.fromEntries(readdirSync(join(repo, "scripts"))
+  .filter((f) => /^e2e-.+\.sh$/.test(f) && f !== "e2e-lib.sh")
+  .map((f) => [f.slice(4, -3), readFileSync(join(repo, "scripts", f), "utf8")]));
+const HARNESSES = Object.fromEntries(Object.entries(SOURCES)
+  .map(([script, source]) => [script, source.match(/^\s*al_run (\S+) "\$prompt"/m)?.[1]])
+  .filter(([, id]) => id));
+
+const PROVIDER = {
+  MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
+  MOCK_STDERR: "harness stderr",
+  MOCK_EXIT: "3",
+};
+
+function sandbox(root) {
   mkdirSync(join(root, "proj"), { recursive: true });
   mkdirSync(join(root, "home"), { recursive: true });
+  // No ambient user config or mode default: CI runners have neither.
+  const env = { ...process.env, HOME: join(root, "home"), XDG_CONFIG_HOME: join(root, "home/.config") };
+  delete env.ONEHARNESS_MODE;
+  return env;
+}
+
+const lines = (file) => readFileSync(file, "utf8").trimEnd().split("\n");
+// The provider stand-in re-serializes the JSON it is given, so a transcript is
+// compared as data.
+const json = (text) => JSON.parse(text);
+
+// The project directory a pair of compared runs share.
+function project(dir) {
+  mkdirSync(join(dir, "proj"), { recursive: true });
+  return join(dir, "proj");
+}
+
+// The pinned release called directly, with no al_run in between: what it hands
+// the harness, and its own JSON report.
+function direct(root, harness, args, extraEnv = {}) {
+  const env = sandbox(root);
+  const argvFile = join(root, "argv");
+  const out = spawnSync("oneharness", ["run", "--harness", harness, "--prompt", "run it",
+    "--output-dir", join(root, "out"), "--compact", "--mock-harness", harness, ...args], {
+    encoding: "utf8",
+    env: { ...env, ...PROVIDER, MOCK_ARGV_FILE: argvFile, ...extraEnv },
+  });
+  return { argv: lines(argvFile), report: out.stdout };
+}
+
+// llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
+function alRun(root, harness, args, mock = {}) {
+  const env = sandbox(root);
   const stream = join(root, "run.stream");
   const argvFile = join(root, "argv");
   const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh && al_run "$HARNESS" 'run it' "$STREAM" "$@"`, "al_run",
-    "--mock-harness", harness, "--cwd", join(root, "proj"), "--timeout", "60", ...args], {
+    "--mock-harness", harness, ...args], {
     cwd: repo,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      // No ambient user config: CI runners have none.
-      HOME: join(root, "home"),
-      XDG_CONFIG_HOME: join(root, "home/.config"),
-      HARNESS: harness,
-      STREAM: stream,
-      MOCK_ARGV_FILE: argvFile,
-      MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
-      MOCK_STDERR: "harness stderr",
-      MOCK_EXIT: "3",
-      ...mock,
-    },
+    env: { ...env, ...PROVIDER, HARNESS: harness, STREAM: stream, MOCK_ARGV_FILE: argvFile, ...mock },
   });
   assert.equal(out.status, 0, out.stderr);
   return {
-    argv: readFileSync(argvFile, "utf8").trimEnd().split("\n"),
+    argv: lines(argvFile),
     stdout: readFileSync(stream, "utf8"),
     stderr: readFileSync(`${stream}.err`, "utf8"),
   };
 }
 // llmlint: ignore-end[e2e_not_mocked]
 
-test("al_run drives the pinned oneharness bypass-by-default and captures the transcript", { skip }, () => {
-  const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+function scratch() {
+  return mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+}
+
+test("al_run runs every live script's harness in the pinned release's bypass mode by default", { skip }, () => {
+  const root = scratch();
   try {
-    // No mode chosen: the headless run bypasses Cursor's own confirmation.
-    const plain = alRun(join(root, "plain"), []);
-    assert.ok(plain.argv.includes("--force"), plain.argv.join(" "));
-    // A failed harness run is not fatal: its transcript and the report's status
-    // fields still reach the files the e2e assertions read.
-    assert.match(plain.stdout, /"result":"allowlister: denied"/);
-    assert.match(plain.stderr, /harness stderr/);
-    assert.match(plain.stderr, /oneharness-report: "exit_code":3/);
-    assert.match(plain.stderr, /oneharness-report: "status":"nonzero"/);
-
-    const ok = alRun(join(root, "ok"), [], "cursor",
-      { MOCK_STDOUT: '{"type":"result","result":"all done"}', MOCK_STDERR: "harness note", MOCK_EXIT: "0" });
-    assert.ok(ok.argv.includes("--force"), ok.argv.join(" "));
-    assert.match(ok.stdout, /"result":"all done"/);
-    assert.match(ok.stderr, /^harness note/);
-    assert.match(ok.stderr, /oneharness-report: "status":"ok"/);
-    assert.match(ok.stderr, /oneharness-report: "exit_code":0/);
-    assert.match(ok.stderr, /oneharness-report: "error":null/);
-
-    // A caller's mode choice replaces the default (oneharness refuses --bypass
-    // beside --no-bypass, so a doubled flag would fail the run outright).
-    for (const [chosen, wants, refuses] of [
-      [["--no-bypass"], "--trust", "--force"],
-      [["--mode", "read-only"], "ask", "--force"],
-      [["--mode=read-only"], "ask", "--force"],
-      [["--bypass"], "--force", "--trust"],
-    ]) {
-      const run = alRun(join(root, chosen.join("")), chosen);
-      assert.ok(run.argv.includes(wants), `${chosen}: ${run.argv.join(" ")}`);
-      assert.ok(!run.argv.includes(refuses), `${chosen}: ${run.argv.join(" ")}`);
+    assert.ok(Object.keys(HARNESSES).length >= 7, JSON.stringify(HARNESSES));
+    let distinguished = 0;
+    for (const harness of new Set(Object.values(HARNESSES))) {
+      const common = ["--cwd", project(join(root, harness))];
+      const run = alRun(join(root, harness, "al_run"), harness, common);
+      const bypass = direct(join(root, harness, "bypass"), harness, [...common, "--mode", "bypass"]);
+      assert.deepEqual(run.argv, bypass.argv, harness);
+      const fallback = direct(join(root, harness, "default"), harness, common);
+      if (fallback.argv.join("\n") !== bypass.argv.join("\n")) distinguished += 1;
     }
-
-    // A verbatim harness argument after `--` is not an oneharness mode choice.
-    const verbatim = alRun(join(root, "verbatim"), ["--", "--no-bypass"]);
-    assert.ok(verbatim.argv.includes("--force"), verbatim.argv.join(" "));
-    assert.equal(verbatim.argv.at(-1), "--no-bypass");
+    // Some harness renders bypass and the release's own default differently, so
+    // the equality above cannot hold merely because no mode reached any harness.
+    assert.ok(distinguished > 0, "no harness distinguishes bypass from the default mode");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-// Every harness a scripts/e2e-*.sh drives through al_run, with the approval argv
-// the pinned release renders for the bypass default. Crush and Goose render no
-// approval flag in any mode, so for them the run itself is what is checked.
-const BYPASS = {
-  "claude-code": ["--permission-mode", "bypassPermissions"],
-  copilot: ["--allow-all-tools"],
-  crush: [],
-  cursor: ["--force"],
-  goose: [],
-  opencode: ["--dangerously-skip-permissions"],
-  qwen: ["--yolo"],
-};
-
-test("al_run's bypass default reaches every harness the live scripts drive", { skip }, () => {
-  const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+test("a caller's own mode choice and verbatim harness arguments reach oneharness unaltered", { skip }, () => {
+  const root = scratch();
   try {
-    for (const [harness, flags] of Object.entries(BYPASS)) {
-      const run = alRun(join(root, harness), [], harness);
-      for (const flag of flags) assert.ok(run.argv.includes(flag), `${harness}: ${run.argv.join(" ")}`);
-      assert.match(run.stdout, /"result":"allowlister: denied"/, harness);
-      assert.match(run.stderr, /oneharness-report: "exit_code":3/, harness);
+    for (const [i, [chosen, equivalent]] of [
+      [["--no-bypass"], ["--no-bypass"]],
+      [["--mode", "read-only"], ["--mode", "read-only"]],
+      [["--mode=read-only"], ["--mode=read-only"]],
+      [["--bypass"], ["--bypass"]],
+      // A verbatim argument after `--` is the harness's, not an oneharness mode
+      // choice, so the bypass default still applies.
+      [["--", "--no-bypass"], ["--mode", "bypass", "--", "--no-bypass"]],
+    ].entries()) {
+      const common = ["--cwd", project(join(root, `${i}`))];
+      const run = alRun(join(root, `${i}`, "al_run"), "cursor", [...common, ...chosen]);
+      const wants = direct(join(root, `${i}`, "direct"), "cursor", [...common, ...equivalent]);
+      assert.deepEqual(run.argv, wants.argv, chosen.join(" "));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("al_run captures the transcript and surfaces the release's own report for failed and successful runs", { skip }, () => {
+  const root = scratch();
+  try {
+    for (const [name, mock] of [
+      ["failed", {}],
+      ["ok", { MOCK_STDOUT: '{"type":"result","result":"all done"}', MOCK_STDERR: "harness note", MOCK_EXIT: "0" }],
+    ]) {
+      const common = ["--cwd", project(join(root, name))];
+      // A failed harness run is not fatal (alRun asserts al_run exits 0): its
+      // transcript and the report's status fields still reach the stream files.
+      const run = alRun(join(root, name, "al_run"), "cursor", common, mock);
+      const { report } = direct(join(root, name, "direct"), "cursor", [...common, "--mode", "bypass"], mock);
+      assert.deepEqual(json(run.stdout), json(mock.MOCK_STDOUT ?? PROVIDER.MOCK_STDOUT), name);
+      assert.ok(run.stderr.startsWith(mock.MOCK_STDERR ?? PROVIDER.MOCK_STDERR), `${name}: ${run.stderr}`);
+      const surfaced = run.stderr.split("\n").filter((l) => l.startsWith("oneharness-report: "))
+        .map((l) => l.slice("oneharness-report: ".length));
+      assert.ok(surfaced.length > 0, `${name}: ${run.stderr}`);
+      for (const field of surfaced) assert.ok(report.includes(field), `${name}: ${field} not in ${report}`);
+      const exit = mock.MOCK_EXIT ?? PROVIDER.MOCK_EXIT;
+      assert.ok(surfaced.some((field) => field.endsWith(`:${exit}`)), `${name}: exit ${exit} in ${surfaced}`);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -128,25 +167,16 @@ test("al_run's bypass default reaches every harness the live scripts drive", { s
 });
 
 // Each live script's own run function, read from its source rather than restated
-// here, replayed through al_run against the pinned release with every argument it
-// passes (verbatim harness flags after `--` included). The only addition is
-// --mock-harness, so the provider stand-in records the argv the harness receives,
-// which must be exactly the one below.
+// here, with the call mode its cases use.
 const SCRIPTS = [
-  // [script, run function, harness id, call mode, the harness's whole argv]
-  ["claude", "run_claude", "claude-code", "",
-    ["-p", "run it", "--permission-mode", "bypassPermissions", "--model", "haiku", "--output-format", "stream-json",
-      "--verbose", "--max-turns", "6", "--verbose", "--mcp-config", "MCP_CONFIG", "--strict-mcp-config"]],
-  ["copilot", "run_agent", "copilot", "", ["-p", "run it", "--allow-all-tools", "--allow-all-paths", "--no-ask-user"]],
-  ["crush", "run_agent", "crush", "", ["run", "-q", "run it"]],
-  ["cursor", "run_agent", "cursor", "", ["-p", "run it", "--force", "--output-format", "stream-json"]],
-  ["cursor", "run_agent", "cursor", "trust", ["-p", "run it", "--trust", "--output-format", "stream-json"]],
-  ["goose", "run_agent", "goose", "",
-    ["run", "--with-builtin", "developer", "-t", "run it", "--with-extension", "python3 /srv/mcp.py /tmp/s TOKEN /tmp/l"]],
-  ["opencode", "run_agent", "opencode", "",
-    ["run", "--dangerously-skip-permissions", "--format", "json", "-m", "anthropic/claude-haiku-4-5", "run it"]],
-  ["qwen", "run_agent", "qwen", "",
-    ["--yolo", "-m", "gpt-4.1-mini", "--output-format", "stream-json", "-p", "run it", "--auth-type", "openai"]],
+  ["claude", "run_claude", ""],
+  ["copilot", "run_agent", ""],
+  ["crush", "run_agent", ""],
+  ["cursor", "run_agent", ""],
+  ["cursor", "run_agent", "trust"],
+  ["goose", "run_agent", ""],
+  ["opencode", "run_agent", ""],
+  ["qwen", "run_agent", ""],
 ];
 
 // The script's last assignment to a variable (Goose's populated extension list
@@ -155,40 +185,42 @@ function scriptLine(source, name) {
   return source.split("\n").findLast((line) => new RegExp(`^\\s*${name}=`).test(line)) ?? "";
 }
 
-// llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Each script's own run function is replayed, not its whole entry point, because the script's assertions need a real model to attempt tool calls and that needs a harness credential this test does not hold; the al_run wrapper only appends the pinned release's --mock-harness and calls the real al_run and oneharness. The whole scripts run unmocked in the live e2e jobs (`just test-<harness>`), the Claude one in the required macOS job.
+// llmlint: ignore-block[e2e_not_mocked, tests_mirror_real_usage] Each script's own run function is replayed, not its whole entry point, because the script's assertions need a real model to attempt tool calls and that needs a harness credential this test does not hold; the al_run wrapper only records its arguments, appends the pinned release's --mock-harness and calls the real al_run and oneharness. The whole scripts run unmocked in the live e2e jobs (`just test-<harness>`), the Claude one in the required macOS job.
 test("each live script's run function reaches the pinned oneharness with its exact arguments", { skip }, () => {
-  const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+  const root = scratch();
   try {
-    for (const [script, fn, harness, callMode, wants] of SCRIPTS) {
-      const source = readFileSync(join(repo, `scripts/e2e-${script}.sh`), "utf8");
+    const rendered = {};
+    for (const [script, fn, callMode] of SCRIPTS) {
+      const source = SOURCES[script];
+      const harness = HARNESSES[script];
       const body = source.match(new RegExp(`^${fn}\\(\\) \\{\\n[\\s\\S]*?^\\}$`, "m"))?.[0];
-      assert.ok(body, `${script}: ${fn} not found`);
+      assert.ok(harness && body, `${script}: ${fn} not found`);
+      const label = `${script} ${callMode || "bypass"}`;
       const dir = join(root, `${script}-${callMode || "bypass"}`);
+      const env = sandbox(dir);
       const proj = join(dir, "proj");
-      mkdirSync(join(dir, "home"), { recursive: true });
-      mkdirSync(proj, { recursive: true });
       const mcpConfig = join(proj, ".mcp.json");
       writeFileSync(mcpConfig, "{}");
       const stream = join(dir, "run.stream");
       const argvFile = join(dir, "argv");
+      const argsFile = join(dir, "al_run.args");
       // The script's own definitions: its run function, and the top-level model
       // and Goose extension assignments that function reads.
       const defs = [scriptLine(source, "model"), "mcp_server=/srv/mcp.py",
         scriptLine(source, "goose_ext_args").trim(), body].join("\n");
       const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh
 eval "$(declare -f al_run | sed '1s/^al_run/al_run_real/')"
-al_run() { local id="$1" p="$2" s="$3"; shift 3; al_run_real "$id" "$p" "$s" --mock-harness "$id" "$@"; }
+al_run() { printf '%s\\0' "$@" >"$AL_RUN_ARGS"; local id="$1" p="$2" s="$3"; shift 3; al_run_real "$id" "$p" "$s" --mock-harness "$id" "$@"; }
 ${defs}
 ${fn} 'run it' "$STREAM" ${callMode}`], {
         cwd: repo,
         encoding: "utf8",
         env: {
-          ...process.env,
-          HOME: join(dir, "home"),
-          XDG_CONFIG_HOME: join(dir, "home/.config"),
+          ...env,
           ALLOWLISTER_E2E_MODEL: "",
           OPENAI_MODEL: "",
           STREAM: stream,
+          AL_RUN_ARGS: argsFile,
           proj,
           sandbox: dir,
           mcp_config: mcpConfig,
@@ -198,21 +230,32 @@ ${fn} 'run it' "$STREAM" ${callMode}`], {
           mcp_token: "TOKEN",
           mcp_log: "/tmp/l",
           MOCK_ARGV_FILE: argvFile,
-          MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
+          MOCK_STDOUT: PROVIDER.MOCK_STDOUT,
           MOCK_EXIT: "0",
         },
       });
-      const label = `${script} ${callMode || "bypass"}`;
       assert.equal(out.status, 0, `${label}: ${out.stderr}`);
-      const err = readFileSync(`${stream}.err`, "utf8");
-      assert.match(err, /oneharness-report: "status":"ok"/, `${label}: ${err}`);
-      assert.match(readFileSync(stream, "utf8"), /"result":"allowlister: denied"/, label);
-      const argv = readFileSync(argvFile, "utf8").trimEnd().split("\n");
-      assert.deepEqual(argv, wants.map((a) => (a === "MCP_CONFIG" ? mcpConfig : a)), label);
+      assert.deepEqual(json(readFileSync(stream, "utf8")), json(PROVIDER.MOCK_STDOUT), label);
+      const [id, prompt, , ...args] = readFileSync(argsFile, "utf8").split("\0").slice(0, -1);
+      assert.deepEqual([id, prompt], [harness, "run it"], label);
+      const argv = lines(argvFile);
+      // The same arguments given straight to the release, under the bypass
+      // default al_run applies (the first test holds that default to the
+      // release's own --mode bypass), render the identical harness argv.
+      const wants = direct(join(dir, "direct"), harness, args, { ONEHARNESS_MODE: "bypass", MOCK_EXIT: "0" });
+      assert.deepEqual(argv, wants.argv, label);
+      // Every verbatim harness argument the script passes after `--` (Claude's
+      // MCP flags, Goose's --with-extension, Qwen's --auth-type) arrives as given.
+      const sep = args.indexOf("--");
+      const verbatim = sep < 0 ? [] : args.slice(sep + 1);
+      if (verbatim.length) assert.deepEqual(argv.slice(-verbatim.length), verbatim, label);
+      rendered[label] = argv.join(" ");
     }
+    assert.match(rendered["goose bypass"], /--with-extension python3 \/srv\/mcp\.py \/tmp\/s TOKEN \/tmp\/l/);
+    // Cursor's trust case drops the bypass its other cases run under.
+    assert.notEqual(rendered["cursor trust"], rendered["cursor bypass"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 // llmlint: ignore-end[e2e_not_mocked, tests_mirror_real_usage]
-// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
