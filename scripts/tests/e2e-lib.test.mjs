@@ -16,12 +16,15 @@ const repo = resolve(import.meta.dirname, "../..");
 const pinned = readFileSync(join(repo, ".github/workflows/e2e-cursor.yml"), "utf8")
   .match(/cargo install oneharness --version (\S+) --locked/)[1];
 const installed = spawnSync("oneharness", ["--version"], { encoding: "utf8" }).stdout?.trim();
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The authority for oneharness compatibility is the live e2e jobs, which install this same pin and run al_run against the real harness — the required macOS job does so on same-repo pull requests — so a drift fails a required check; this test is the credential-free local pre-check and runs wherever the pin is installed.
 const skip = process.platform === "win32"
   ? "requires bash"
   : installed !== `oneharness ${pinned}`
     ? `requires the pinned oneharness ${pinned} on PATH (cargo install oneharness --version ${pinned} --locked); found ${installed || "none"}`
     : false;
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
+// llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
 function alRun(root, args) {
   mkdirSync(join(root, "proj"), { recursive: true });
   mkdirSync(join(root, "home"), { recursive: true });
@@ -50,6 +53,7 @@ function alRun(root, args) {
     stderr: readFileSync(`${stream}.err`, "utf8"),
   };
 }
+// llmlint: ignore-end[e2e_not_mocked]
 
 test("al_run drives the pinned oneharness bypass-by-default and captures the transcript", { skip }, () => {
   const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
