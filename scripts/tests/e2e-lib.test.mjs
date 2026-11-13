@@ -20,6 +20,9 @@ const repo = resolve(import.meta.dirname, "../..");
 const pinned = readFileSync(join(repo, ".github/workflows/e2e-cursor.yml"), "utf8")
   .match(/cargo install oneharness --version (\S+) --locked/)[1];
 const installed = spawnSync("oneharness", ["--version"], { encoding: "utf8" }).stdout?.trim();
+// Where the pin is absent these checks skip, and nothing goes stale meanwhile:
+// every expectation below is computed from that binary at run time, never
+// written down here.
 const skip = process.platform === "win32"
   ? "requires bash"
   : installed !== `oneharness ${pinned}`
@@ -60,6 +63,7 @@ function project(dir) {
   return join(dir, "proj");
 }
 
+// llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, in both the al_run run and the direct run it is compared with, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
 // The pinned release called directly, with no al_run in between: what it hands
 // the harness, and its own JSON report.
 function direct(root, harness, args, extraEnv = {}) {
@@ -73,7 +77,6 @@ function direct(root, harness, args, extraEnv = {}) {
   return { argv: lines(argvFile), report: out.stdout };
 }
 
-// llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
 function alRun(root, harness, args, mock = {}) {
   const env = sandbox(root);
   const stream = join(root, "run.stream");
