@@ -70,7 +70,6 @@ test("al_run drives the pinned oneharness bypass-by-default and captures the tra
     assert.match(plain.stderr, /oneharness-report: "exit_code":3/);
     assert.match(plain.stderr, /oneharness-report: "status":"nonzero"/);
 
-    // A successful provider run reaches the same files with a clean report.
     const ok = alRun(join(root, "ok"), [], "cursor",
       { MOCK_STDOUT: '{"type":"result","result":"all done"}', MOCK_STDERR: "harness note", MOCK_EXIT: "0" });
     assert.ok(ok.argv.includes("--force"), ok.argv.join(" "));
