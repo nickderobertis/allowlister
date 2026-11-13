@@ -25,7 +25,7 @@ const skip = process.platform === "win32"
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 // llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
-function alRun(root, args, harness = "cursor") {
+function alRun(root, args, harness = "cursor", mock = {}) {
   mkdirSync(join(root, "proj"), { recursive: true });
   mkdirSync(join(root, "home"), { recursive: true });
   const stream = join(root, "run.stream");
@@ -45,6 +45,7 @@ function alRun(root, args, harness = "cursor") {
       MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
       MOCK_STDERR: "harness stderr",
       MOCK_EXIT: "3",
+      ...mock,
     },
   });
   assert.equal(out.status, 0, out.stderr);
@@ -67,6 +68,17 @@ test("al_run drives the pinned oneharness bypass-by-default and captures the tra
     assert.match(plain.stdout, /"result":"allowlister: denied"/);
     assert.match(plain.stderr, /harness stderr/);
     assert.match(plain.stderr, /oneharness-report: "exit_code":3/);
+    assert.match(plain.stderr, /oneharness-report: "status":"nonzero"/);
+
+    // A successful provider run reaches the same files with a clean report.
+    const ok = alRun(join(root, "ok"), [], "cursor",
+      { MOCK_STDOUT: '{"type":"result","result":"all done"}', MOCK_STDERR: "harness note", MOCK_EXIT: "0" });
+    assert.ok(ok.argv.includes("--force"), ok.argv.join(" "));
+    assert.match(ok.stdout, /"result":"all done"/);
+    assert.match(ok.stderr, /^harness note/);
+    assert.match(ok.stderr, /oneharness-report: "status":"ok"/);
+    assert.match(ok.stderr, /oneharness-report: "exit_code":0/);
+    assert.match(ok.stderr, /oneharness-report: "error":null/);
 
     // A caller's mode choice replaces the default (oneharness refuses --bypass
     // beside --no-bypass, so a doubled flag would fail the run outright).
