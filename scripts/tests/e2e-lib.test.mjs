@@ -25,13 +25,13 @@ const skip = process.platform === "win32"
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 // llmlint: ignore-block[e2e_not_mocked] Only the paid model provider is replaced, by the pinned release's own --mock-harness responder, because this test holds no harness credential; al_run and the oneharness binary under test run for real. The unmocked journey is the live e2e scripts, which drive the real harness CLIs in CI.
-function alRun(root, args) {
+function alRun(root, args, harness = "cursor") {
   mkdirSync(join(root, "proj"), { recursive: true });
   mkdirSync(join(root, "home"), { recursive: true });
   const stream = join(root, "run.stream");
   const argvFile = join(root, "argv");
-  const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh && al_run cursor 'run it' "$STREAM" "$@"`, "al_run",
-    "--mock-harness", "cursor", "--cwd", join(root, "proj"), "--timeout", "60", ...args], {
+  const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh && al_run "$HARNESS" 'run it' "$STREAM" "$@"`, "al_run",
+    "--mock-harness", harness, "--cwd", join(root, "proj"), "--timeout", "60", ...args], {
     cwd: repo,
     encoding: "utf8",
     env: {
@@ -39,6 +39,7 @@ function alRun(root, args) {
       // No ambient user config: CI runners have none.
       HOME: join(root, "home"),
       XDG_CONFIG_HOME: join(root, "home/.config"),
+      HARNESS: harness,
       STREAM: stream,
       MOCK_ARGV_FILE: argvFile,
       MOCK_STDOUT: '{"type":"result","result":"allowlister: denied"}',
@@ -84,6 +85,33 @@ test("al_run drives the pinned oneharness bypass-by-default and captures the tra
     const verbatim = alRun(join(root, "verbatim"), ["--", "--no-bypass"]);
     assert.ok(verbatim.argv.includes("--force"), verbatim.argv.join(" "));
     assert.equal(verbatim.argv.at(-1), "--no-bypass");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Every harness a scripts/e2e-*.sh drives through al_run, with the approval argv
+// the pinned release renders for the bypass default. Crush and Goose render no
+// approval flag in any mode, so for them the run itself is what is checked.
+const BYPASS = {
+  "claude-code": ["--permission-mode", "bypassPermissions"],
+  copilot: ["--allow-all-tools"],
+  crush: [],
+  cursor: ["--force"],
+  goose: [],
+  opencode: ["--dangerously-skip-permissions"],
+  qwen: ["--yolo"],
+};
+
+test("al_run's bypass default reaches every harness the live scripts drive", { skip }, () => {
+  const root = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR ?? tmpdir(), "e2e-lib-"));
+  try {
+    for (const [harness, flags] of Object.entries(BYPASS)) {
+      const run = alRun(join(root, harness), [], harness);
+      for (const flag of flags) assert.ok(run.argv.includes(flag), `${harness}: ${run.argv.join(" ")}`);
+      assert.match(run.stdout, /"result":"allowlister: denied"/, harness);
+      assert.match(run.stderr, /oneharness-report: "exit_code":3/, harness);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
