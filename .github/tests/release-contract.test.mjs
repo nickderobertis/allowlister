@@ -56,8 +56,14 @@ test('release graph preserves every platform and archive; one compiled target in
 });
 test('all former Mac harness commands keep credentials, installation paths, and strict failures',()=>{
   const mac=workflows['ci.yml'].jobs.macos;
-  const sourcePins=new Set(Object.entries(workflows).filter(([file])=>file.startsWith('e2e-')).flatMap(([,wf])=>wf.jobs.live.steps.map(s=>s.run?.match(/cargo install --git https:\/\/github.com\/nickderobertis\/oneharness --tag (\S+) --locked/)?.[1]).filter(Boolean)));
+  const sourcePins=new Set(Object.entries(workflows).filter(([file])=>file.startsWith('e2e-')).flatMap(([,wf])=>wf.jobs.live.steps.map(s=>s.run?.match(/cargo install oneharness --version (\d+\.\d+\.\d+) --locked/)?.[1]).filter(Boolean)));
   assert.equal(sourcePins.size,1,'sequential Mac installation requires one reconciled harness driver pin');
+  // A git tag can be deleted upstream; only a published crates.io release stays installable.
+  for(const [file,wf] of Object.entries(workflows)) for(const job of Object.values(wf.jobs ?? {})) for(const step of job.steps ?? []) {
+    if(!step.run?.includes('oneharness')) continue;
+    assert.doesNotMatch(step.run,/cargo install[^\n]*--git/,`${file}: install oneharness from a published release, not a git source`);
+    for(const install of step.run.match(/cargo install oneharness[^\n]*/g) ?? []) assert.ok(install.includes(`--version ${[...sourcePins][0]} --locked`),`${file}: ${install}`);
+  }
   const context={github:{repository:'nickderobertis/allowlister',event_name:'pull_request',event:{pull_request:{head:{repo:{full_name:'nickderobertis/allowlister'}}}}},inputs:{harness:'all'}};
   for(const harness of ['codex','claude','copilot','crush','cursor','goose','opencode','qwen']) {
     const old=workflows[`e2e-${harness}.yml`].jobs.live;

@@ -163,9 +163,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'pull_request' || inputs.harness == 'all' || inputs.harness == 'claude')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - name: Install Claude Code CLI
@@ -194,9 +192,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'copilot')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - name: Set up Node for the Copilot CLI install
@@ -229,9 +225,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'crush')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - uses: actions/setup-node@v4
@@ -264,9 +258,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'cursor')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - name: Install Cursor CLI
@@ -321,9 +313,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'goose')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - name: Install Goose CLI
@@ -356,9 +346,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'opencode')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - uses: actions/setup-node@v4
@@ -392,9 +380,7 @@ jobs:
       - name: Install oneharness (drives the live check)
         if: github.repository == 'nickderobertis/allowlister' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event_name == 'workflow_dispatch' && (inputs.harness == 'all' || inputs.harness == 'qwen')
         run: |
-          if ! command -v oneharness >/dev/null; then
-            cargo install --git https://github.com/nickderobertis/oneharness --tag v0.2.44 --locked
-          fi
+          cargo install oneharness --version 0.26.1 --locked
           oneharness --version
 
       - uses: actions/setup-node@v4

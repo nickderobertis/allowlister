@@ -50,7 +50,7 @@ fi
 # The agent is driven through the `oneharness` CLI (see run_claude / al_run), so a
 # missing `oneharness` is a skip too — the same way a missing harness binary is.
 if ! command -v oneharness >/dev/null 2>&1; then
-    note "SKIP: \`oneharness\` not found on PATH (install: \`cargo install --git https://github.com/nickderobertis/oneharness\`)."
+    note "SKIP: \`oneharness\` not found on PATH (install a published release: \`cargo install oneharness --locked\`)."
     exit 0
 fi
 
