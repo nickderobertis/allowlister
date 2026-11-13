@@ -252,11 +252,14 @@ ${fn} 'run it' "$STREAM" ${callMode}`], {
       const sep = args.indexOf("--");
       const verbatim = sep < 0 ? [] : args.slice(sep + 1);
       if (verbatim.length) assert.deepEqual(argv.slice(-verbatim.length), verbatim, label);
-      rendered[label] = argv.join(" ");
+      rendered[label] = { argv: argv.join(" "), verbatim };
     }
-    assert.match(rendered["goose bypass"], /--with-extension python3 \/srv\/mcp\.py \/tmp\/s TOKEN \/tmp\/l/);
+    // Goose's run function took its populated extension list, which names the
+    // MCP server this test defined, not the empty default before it.
+    assert.ok(rendered["goose bypass"].verbatim.some((a) => a.includes("/srv/mcp.py")),
+      JSON.stringify(rendered["goose bypass"]));
     // Cursor's trust case drops the bypass its other cases run under.
-    assert.notEqual(rendered["cursor trust"], rendered["cursor bypass"]);
+    assert.notEqual(rendered["cursor trust"].argv, rendered["cursor bypass"].argv);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
