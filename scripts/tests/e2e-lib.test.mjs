@@ -29,7 +29,6 @@ const skip = process.platform === "win32"
     ? `requires the pinned oneharness ${pinned} on PATH (cargo install oneharness --version ${pinned} --locked); found ${installed || "none"}`
     : false;
 
-// Each live script's source, and the harness id its run function hands al_run.
 const SOURCES = Object.fromEntries(readdirSync(join(repo, "scripts"))
   .filter((f) => /^e2e-.+\.sh$/.test(f) && f !== "e2e-lib.sh")
   .map((f) => [f.slice(4, -3), readFileSync(join(repo, "scripts", f), "utf8")]));
@@ -207,8 +206,6 @@ test("each live script's run function reaches the pinned oneharness with its exa
       const stream = join(dir, "run.stream");
       const argvFile = join(dir, "argv");
       const argsFile = join(dir, "al_run.args");
-      // The script's own definitions: its run function, and the top-level model
-      // and Goose extension assignments that function reads.
       const defs = [scriptLine(source, "model"), "mcp_server=/srv/mcp.py",
         scriptLine(source, "goose_ext_args").trim(), body].join("\n");
       const out = spawnSync("bash", ["-c", `. scripts/e2e-lib.sh
@@ -258,7 +255,6 @@ ${fn} 'run it' "$STREAM" ${callMode}`], {
     // MCP server this test defined, not the empty default before it.
     assert.ok(rendered["goose bypass"].verbatim.some((a) => a.includes("/srv/mcp.py")),
       JSON.stringify(rendered["goose bypass"]));
-    // Cursor's trust case drops the bypass its other cases run under.
     assert.notEqual(rendered["cursor trust"].argv, rendered["cursor bypass"].argv);
   } finally {
     rmSync(root, { recursive: true, force: true });
