@@ -2,9 +2,18 @@
 # publication checkout's base branch and runs the command in idle slot worktrees.
 # The recipe removes superseded Cargo builds, keeping each unit's newest build
 # and every build modified within two days.
-schema_version = 1
+schema_version = 2
 
 [pool.maintain]
 # llmlint: ignore[changed_behavior_has_e2e] This is logic-free declaration data, validated by released onevcs 0.51.3; execution behavior is proven by the onevcs repository's own tests.
 command = ["just", "pool-maintenance"]
 timeout = "30m"
+
+# The publication policy this repository's work lands under wherever the host's
+# rules file carries no rule for it; a matching host rule overrides it per field.
+[policy]
+publication = "change-auto"
+approvals = "none"
+
+[policy.checks]
+wait_seconds = 9572 # recorded max 7657 s (run 43401286117) + 25% margin
