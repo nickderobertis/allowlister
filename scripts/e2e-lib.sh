@@ -340,13 +340,18 @@ al_mcp_conclude() {
 al_run() {
     local id="$1" prompt="$2" stream="$3"
     shift 3
+    # Every run is bypass-by-default (no human approver exists headless; the hook
+    # stays the sole decider) unless the caller picks a mode itself. oneharness's
+    # own default is `--mode default`; its ONEHARNESS_MODE environment default is
+    # overridden by any mode flag the caller passes, so al_run never has to know
+    # which flags those are.
     local od
     od="$(mktemp -d)"
     # The JSON report on stdout is discarded (the assertions read the stream
     # files); --output-dir gives us the raw transcript without needing a JSON
     # parser. A non-zero harness exit is not fatal here — the outcome is judged by
     # the stream and the command's side effects, exactly as before.
-    oneharness run --harness "$id" --prompt "$prompt" \
+    ONEHARNESS_MODE=bypass oneharness run --harness "$id" --prompt "$prompt" \
         --output-dir "$od" --compact "$@" >"$od/report.json" 2>"$od/oneharness.err" || true
     cp -f "$od/$id.stdout" "$stream" 2>/dev/null || : >"$stream"
     cp -f "$od/$id.stderr" "$stream.err" 2>/dev/null || : >"$stream.err"

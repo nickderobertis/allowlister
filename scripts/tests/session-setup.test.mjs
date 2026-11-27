@@ -127,9 +127,14 @@ test("without setsid the hand-off falls back to nohup and still detaches", { ski
   const dir = stage(OUTCOMES.hangs);
   const bin = join(dir, "no-setsid");
   mkdirSync(bin);
+  // Track linked names rather than probing `bin`: existsSync follows the link, so a
+  // dangling system symlink (seen in /usr/bin on merged-/usr runner images, where
+  // /bin lists the same names again) would read as absent and be linked twice.
+  const linked = new Set(["setsid"]);
   for (const sys of ["/usr/bin", "/bin"]) {
     for (const name of readdirSync(sys)) {
-      if (name === "setsid" || existsSync(join(bin, name))) continue;
+      if (linked.has(name)) continue;
+      linked.add(name);
       symlinkSync(join(sys, name), join(bin, name));
     }
   }
